@@ -1,0 +1,393 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Text;
+using System.Text.RegularExpressions;
+
+namespace FileConverter
+{
+    public enum MediaKind { Video, Gif, Image, Audio }
+
+    /// Handles links that yt-dlp doesn't (or handles poorly): direct files, GIF sites and Pinterest pins.
+    public static class Resolver
+    {
+        const string UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
+        static readonly string[] VideoExt = { "mp4", "webm", "mov", "m4v", "mkv" };
+        static readonly string[] ImgExt = { "jpg", "jpeg", "png", "webp", "avif", "bmp" };
+
+        public static string Site(string url)
+        {
+            string u = url.ToLowerInvariant();
+            if (u.Contains("youtube.com") || u.Contains("youtu.be")) return "YouTube";
+            if (u.Contains("pinterest.") || u.Contains("pin.it")) return "Pinterest";
+            if (u.Contains("giphy.com")) return "GIPHY";
+            if (u.Contains("tenor.com")) return "Tenor";
+            if (u.Contains("twitter.com") || u.Contains("x.com/")) return "X";
+            if (u.Contains("reddit.com") || u.Contains("redd.it")) return "Reddit";
+            if (u.Contains("imgur.com")) return "Imgur";
+            if (u.Contains("tiktok.com")) return "TikTok";
+            if (u.Contains("instagram.com")) return "Instagram";
+            if (u.Contains("facebook.com") || u.Contains("fb.watch")) return "Facebook";
+            if (u.Contains("vimeo.com")) return "Vimeo";
+            try { return new Uri(url).Host.Replace("www.", ""); } catch { return ""; }
+        }
+
+        static string ExtOf(string url)
+        {
+            try { return Path.GetExtension(new Uri(url).AbsolutePath).TrimStart('.').ToLowerInvariant(); } catch { return ""; }
+        }
+
+        public static bool IsDirectMedia(string url)
+        {
+            string e = ExtOf(url);
+            return e == "gif" || Array.IndexOf(VideoExt, e) >= 0 || Array.IndexOf(ImgExt, e) >= 0;
+        }
+
+        /// Returns info for links we handle ourselves, or null to let yt-dlp try.
+        public static YtInfo TryResolve(string url, Func<bool> cancelled)
+        {
+            string site = Site(url);
+            if (site == "GIPHY") return Giphy(url);
+            if (IsDirectMedia(url)) return Direct(url, null, null);
+            if (site == "Tenor") return Tenor(url);
+            if (site == "Pinterest") return Pinterest(url);
+            return null;
+        }
+
+        /// Used when yt-dlp can't handle a page: looks for og:video / og:image.
+        public static YtInfo FromPage(string url)
+        {
+            string html = Get(url);
+            string title = Meta(html, "og:title") ?? Meta(html, "twitter:title") ?? "";
+            string video = Meta(html, "og:video:secure_url") ?? Meta(html, "og:video:url") ?? Meta(html, "og:video");
+            if (video != null && !video.Contains(".swf")) return Direct(video, title, Meta(html, "og:image"));
+            string img = Meta(html, "og:image:secure_url") ?? Meta(html, "og:image");
+            if (img != null) return Direct(img, title, img);
+            return null;
+        }
+
+        // ------------------------------------------------------------------ helpers
+        public static string Get(string url) { return Get(url, null); }
+
+        public static string Get(string url, string[] headers)
+        {
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+            req.UserAgent = UA;
+            if (headers != null)
+                for (int i = 0; i + 1 < headers.Length; i += 2)
+                {
+                    if (headers[i] == "Referer") req.Referer = headers[i + 1];   // a "restricted" header in .NET
+                    else req.Headers[headers[i]] = headers[i + 1];
+                }
+            req.Accept = "text/html,application/json;q=0.9,*/*;q=0.8";
+            req.Headers["Accept-Language"] = "en-US,en;q=0.8";
+            req.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            req.Timeout = 20000;
+            using (HttpWebResponse r = (HttpWebResponse)req.GetResponse())
+            using (StreamReader sr = new StreamReader(r.GetResponseStream(), Encoding.UTF8))
+                return sr.ReadToEnd();
+        }
+
+        static string FinalUrl(string url)
+        {
+            try
+            {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                req.UserAgent = UA; req.Method = "GET"; req.AllowAutoRedirect = true; req.Timeout = 15000;
+                using (HttpWebResponse r = (HttpWebResponse)req.GetResponse()) return r.ResponseUri.ToString();
+            }
+            catch { return url; }
+        }
+
+        public static long Size(string url)
+        {
+            try
+            {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                req.UserAgent = UA; req.Method = "HEAD"; req.Timeout = 15000;
+                using (HttpWebResponse r = (HttpWebResponse)req.GetResponse()) return r.ContentLength;
+            }
+            catch { return -1; }
+        }
+
+        static string Meta(string html, string prop)
+        {
+            Match m = Regex.Match(html, "<meta[^>]+(?:property|name)=[\"']" + Regex.Escape(prop) + "[\"'][^>]*content=[\"']([^\"']+)[\"']", RegexOptions.IgnoreCase);
+            if (!m.Success) m = Regex.Match(html, "<meta[^>]+content=[\"']([^\"']+)[\"'][^>]*(?:property|name)=[\"']" + Regex.Escape(prop) + "[\"']", RegexOptions.IgnoreCase);
+            return m.Success ? WebUtility.HtmlDecode(m.Groups[1].Value) : null;
+        }
+
+        static YtInfo Direct(string mediaUrl, string title, string thumb)
+        {
+            string e = ExtOf(mediaUrl);
+            YtInfo info = new YtInfo();
+            info.Url = mediaUrl;
+            info.DirectUrl = mediaUrl;
+            info.Site = Site(mediaUrl);
+            info.Kind = e == "gif" ? MediaKind.Gif : Array.IndexOf(ImgExt, e) >= 0 ? MediaKind.Image : MediaKind.Video;
+            info.DirectExt = e.Length > 0 ? e : (info.Kind == MediaKind.Gif ? "gif" : "mp4");
+            string name = "";
+            try { name = Uri.UnescapeDataString(Path.GetFileNameWithoutExtension(new Uri(mediaUrl).AbsolutePath)); } catch { }
+            info.Title = !string.IsNullOrEmpty(title) ? title : (name.Length > 0 ? name : "download");
+            info.Thumbnail = thumb ?? (info.Kind != MediaKind.Video ? mediaUrl : "");
+            info.DirectSize = Size(mediaUrl);
+            return info;
+        }
+
+        // ------------------------------------------------------------------ GIPHY
+        static YtInfo Giphy(string url)
+        {
+            // giphy.com/gifs/slug-ID, giphy.com/embed/ID, media*.giphy.com/media/ID/giphy.gif, i.giphy.com/ID.gif
+            Match m = Regex.Match(url, @"giphy\.com/(?:gifs|stickers|clips|embed)/(?:[\w-]*-)?([A-Za-z0-9]+)(?:[/?#]|$)");
+            if (!m.Success) m = Regex.Match(url, @"giphy\.com/media/(?:v1\.[^/]+/)?([A-Za-z0-9]+)/");
+            if (!m.Success) m = Regex.Match(url, @"i\.giphy\.com/(?:media/)?([A-Za-z0-9]+)");
+            if (!m.Success) return FromPage(url);
+            string id = m.Groups[1].Value;
+            string title = "GIPHY " + id;
+            Match slug = Regex.Match(url, @"/(?:gifs|stickers)/([\w-]+)-" + id);
+            if (slug.Success) title = slug.Groups[1].Value.Replace('-', ' ');
+            YtInfo info = Direct("https://i.giphy.com/media/" + id + "/giphy.gif", title, null);
+            info.Site = "GIPHY";
+            info.AltVideoUrl = "https://i.giphy.com/media/" + id + "/giphy.mp4";
+            return info;
+        }
+
+        // ------------------------------------------------------------------ Tenor
+        static YtInfo Tenor(string url)
+        {
+            string html = Get(url);
+            string gif = null;
+            Match m = Regex.Match(html, @"https://media\d*\.tenor\.com/[^""'\s<>]+?\.gif");
+            if (m.Success) gif = m.Value;
+            if (gif == null) gif = Meta(html, "og:image");
+            string title = Meta(html, "og:title") ?? "Tenor GIF";
+            if (gif == null) return FromPage(url);
+            YtInfo info = Direct(gif.Replace("\\u002F", "/"), title, null);
+            info.Site = "Tenor";
+            Match mp4 = Regex.Match(html, @"https://media\d*\.tenor\.com/[^""'\s<>]+?\.mp4");
+            if (mp4.Success) info.AltVideoUrl = mp4.Value;
+            return info;
+        }
+
+        // ------------------------------------------------------------------ Pinterest
+        static YtInfo Pinterest(string url)
+        {
+            if (url.Contains("pin.it/")) url = FinalUrl(url);
+            Match m = Regex.Match(url, @"/pin/(?:[\w-]*--)?([A-Za-z0-9_-]+)");
+            if (!m.Success) return null;   // boards etc. -> yt-dlp
+            string id = m.Groups[1].Value;
+            // 1) Pinterest's own pin API, 2) the media links inside the pin page, 3) whatever the API had (a still image)
+            string json = null, html = null;
+            YtInfo api = null;
+            try
+            {
+                string data = "{\"options\":{\"field_set_key\":\"unauth_react_main_pin\",\"id\":\"" + id + "\"}}";
+                json = Get("https://www.pinterest.com/resource/PinResource/get/?data=" + Uri.EscapeDataString(data),
+                           new[] { "X-Pinterest-PWS-Handler", "www/pin/[id].js", "X-Requested-With", "XMLHttpRequest", "Referer", "https://www.pinterest.com/" });
+                Log("pinterest_api.json", json);
+                api = PinFromApi(json, url, id);
+            }
+            catch (Exception ex) { Log("pinterest_api_error.txt", ex.ToString()); }
+            if (api != null && api.Kind != MediaKind.Image) return api;
+            YtInfo scanned = json != null ? PinFromText(json, url, id, api) : null;
+            if (scanned != null) return scanned;
+            try { html = Get(url); Log("pinterest_page.html", html); }
+            catch (Exception ex) { Log("pinterest_page_error.txt", ex.ToString()); }
+            if (html != null)
+            {
+                scanned = PinFromText(html, url, id, api);
+                if (scanned != null) return scanned;
+            }
+            if (api != null) return api;
+            if (html == null) return null;   // let yt-dlp have a go
+            try { return FromPage(url); } catch { return null; }
+        }
+
+        static void Log(string name, string content)
+        {
+            try
+            {
+                string d = Path.Combine(Paths.AppDir, "logs");
+                Directory.CreateDirectory(d);
+                File.WriteAllText(Path.Combine(d, name), content ?? "");
+            }
+            catch { }
+        }
+
+        /// Looks for the pin's GIF or video links in raw page/API text (used when the structured data has none).
+        static YtInfo PinFromText(string text, string url, string id, YtInfo api)
+        {
+            string t = text.Replace("\\u002F", "/").Replace("\\/", "/").Replace("\u002F", "/");
+            // the pin itself comes first; related pins come later in the page
+            int at = t.IndexOf("\"" + id + "\"", StringComparison.Ordinal);
+            string near = at >= 0 ? t.Substring(at, Math.Min(t.Length - at, 80000)) : t;
+            foreach (string scope in new[] { near, at >= 0 ? t : null })
+            {
+                if (scope == null) continue;
+                string gif = null;
+                foreach (Match g in Regex.Matches(scope, @"https?://i\.pinimg\.com/(?:originals|\d+x(?:\d+)?)/(?:[0-9a-f]{2}/){3}[0-9a-f]+\.gif", RegexOptions.IgnoreCase))
+                {
+                    if (gif == null || (g.Value.Contains("/originals/") && !gif.Contains("/originals/"))) gif = g.Value;
+                    if (gif.Contains("/originals/")) break;
+                }
+                string title = api != null ? api.Title : PinTitle(scope, t, id);
+                if (gif != null)
+                {
+                    YtInfo g2 = Direct(gif, title, null);
+                    g2.Site = "Pinterest"; g2.Url = url;
+                    return g2;
+                }
+                string mp4 = null;
+                foreach (Match v in Regex.Matches(scope, @"https?://v\d*\.pinimg\.com/videos/[^""'\s\\<>]+?\.mp4", RegexOptions.IgnoreCase))
+                {
+                    if (mp4 == null || (v.Value.Contains("720p") && !mp4.Contains("720p"))) mp4 = v.Value;
+                    if (mp4.Contains("720p")) break;
+                }
+                if (mp4 == null)
+                {
+                    Match h = Regex.Match(scope, @"https?://v\d*\.pinimg\.com/videos/[^""'\s\\<>]+?\.m3u8", RegexOptions.IgnoreCase);
+                    if (h.Success) { string c = HlsToMp4(h.Value); if (c != null && Size(c) > 0) mp4 = c; }
+                }
+                if (mp4 != null)
+                {
+                    string thumb = api != null ? api.Thumbnail : null;
+                    if (string.IsNullOrEmpty(thumb))
+                    {
+                        Match th = Regex.Match(scope, @"https?://i\.pinimg\.com/(?:736x|474x|originals)/(?:[0-9a-f]{2}/){3}[0-9a-f]+\.(?:jpg|png|webp)", RegexOptions.IgnoreCase);
+                        thumb = th.Success ? th.Value : Meta(t, "og:image");
+                    }
+                    YtInfo v2 = Direct(mp4, title, thumb);
+                    v2.Kind = MediaKind.Video; v2.DirectExt = "mp4";
+                    v2.Site = "Pinterest"; v2.Url = url;
+                    v2.PreferGif = true;   // a pin with a short clip and no other media is almost always a "GIF"
+                    return v2;
+                }
+            }
+            return null;
+        }
+
+        static string PinTitle(string near, string page, string id)
+        {
+            foreach (string key in new[] { "gridTitle", "grid_title", "title", "seoTitle", "seo_title" })
+            {
+                Match m = Regex.Match(near, "\"" + key + "\":\"([^\"]{2,140})\"");
+                if (m.Success && m.Groups[1].Value.Trim().Length > 1) return Regex.Unescape(m.Groups[1].Value).Trim();
+            }
+            string og = Meta(page, "og:title");
+            return !string.IsNullOrEmpty(og) ? og : "Pinterest " + id;
+        }
+
+        static YtInfo PinFromApi(string json, string url, string id)
+        {
+            {
+                JsonObject root = new JsonParser(json).Parse() as JsonObject;
+                JsonObject pin = JPath(root, "resource_response", "data") as JsonObject;
+                if (pin == null) return null;
+                string title = Str(JPath(pin, "title"));
+                if (title.Length == 0) title = Str(JPath(pin, "grid_title"));
+                if (title.Length == 0) title = Str(JPath(pin, "seo_title"));
+                if (title.Length == 0) title = Str(JPath(pin, "description")).Trim();
+                if (title.Length == 0) title = "Pinterest " + id;
+                if (title.Length > 90) title = title.Substring(0, 90);
+                string thumb = Str(JPath(pin, "images", "474x", "url"));
+                string orig = Str(JPath(pin, "images", "orig", "url"));
+
+                // 1) a real .gif file (classic GIF pins)
+                string embedGif = Str(JPath(pin, "embed", "src"));
+                string gif = embedGif.EndsWith(".gif") ? embedGif : (orig.EndsWith(".gif") ? orig : null);
+                if (gif != null)
+                {
+                    YtInfo g = Direct(gif, title, null);
+                    g.Site = "Pinterest"; g.Url = url;
+                    return g;
+                }
+
+                // 2) video pins and "idea"/story pins (Pinterest stores most GIFs as short videos now)
+                PinVideo best = null;
+                Consider(JPath(pin, "videos", "video_list") as JsonObject, ref best);
+                object pages = JPath(pin, "story_pin_data", "pages");
+                if (pages is List<object>)
+                    foreach (object pg in (List<object>)pages)
+                    {
+                        object blocks = JPath(pg as JsonObject, "blocks");
+                        if (blocks is List<object>)
+                            foreach (object bl in (List<object>)blocks)
+                                Consider(JPath(bl as JsonObject, "video", "video_list") as JsonObject, ref best);
+                    }
+
+                YtInfo info;
+                if (best != null)
+                {
+                    string video = best.Url;
+                    bool hls = video.Contains(".m3u8");
+                    if (hls)
+                    {
+                        // the same clip is usually published as a plain MP4 next to the stream
+                        string mp4 = HlsToMp4(video);
+                        if (mp4 != null && Size(mp4) > 0) { video = mp4; hls = false; }
+                    }
+                    string vthumb = best.Thumb.Length > 0 ? best.Thumb : (thumb.Length > 0 ? thumb : orig);
+                    if (hls)
+                    {
+                        info = new YtInfo { Url = url, DirectUrl = video, DirectExt = "mp4", DirectIsHls = true, Kind = MediaKind.Video, Title = title, Thumbnail = vthumb };
+                    }
+                    else info = Direct(video, title, vthumb);
+                    info.Kind = MediaKind.Video;
+                    info.DirectExt = "mp4";
+                    info.Duration = best.Duration;
+                    if (best.Height > 0) info.Heights.Add(best.Height);
+                    // short looping clips are what people call "GIFs" on Pinterest
+                    bool isVideoPin = JPath(pin, "is_video") is bool && (bool)JPath(pin, "is_video");
+                    info.PreferGif = best.Duration > 0 && best.Duration <= 45 && (!isVideoPin || best.Duration <= 20);
+                }
+                else if (orig.Length > 0) info = Direct(orig, title, orig);
+                else return null;
+                info.Site = "Pinterest";
+                info.Url = url;
+                return info;
+            }
+        }
+
+        class PinVideo { public string Url = "", Thumb = ""; public int Height; public double Duration; public bool Mp4; }
+
+        /// Keeps the best clip: a plain MP4 beats a stream, then the larger size wins.
+        static void Consider(JsonObject list, ref PinVideo best)
+        {
+            if (list == null) return;
+            foreach (KeyValuePair<string, object> kv in list)
+            {
+                JsonObject v = kv.Value as JsonObject; if (v == null) continue;
+                string u = Str(JPath(v, "url"));
+                bool mp4 = u.Contains(".mp4"), hls = u.Contains(".m3u8");
+                if (!mp4 && !hls) continue;
+                PinVideo c = new PinVideo { Url = u, Thumb = Str(JPath(v, "thumbnail")), Height = (int)Num(JPath(v, "height")), Duration = Num(JPath(v, "duration")) / 1000.0, Mp4 = mp4 };
+                if (best == null || (c.Mp4 && !best.Mp4) || (c.Mp4 == best.Mp4 && c.Height > best.Height)) best = c;
+            }
+        }
+
+        /// https://v1.pinimg.com/videos/iht/hls/1a/dd/32/HASH.m3u8 -> https://v1.pinimg.com/videos/mc/720p/1a/dd/32/HASH.mp4
+        static string HlsToMp4(string m3u8)
+        {
+            Match m = Regex.Match(m3u8, @"^(https?://[^/]+/videos/)(?:[^/]+/)*?hls/((?:[0-9a-f]{2}/){3}[0-9a-f]+)(?:_\w+)?\.m3u8", RegexOptions.IgnoreCase);
+            if (!m.Success) return null;
+            return m.Groups[1].Value + "mc/720p/" + m.Groups[2].Value + ".mp4";
+        }
+
+        static object JPath(JsonObject o, params string[] keys)
+        {
+            object cur = o;
+            foreach (string k in keys)
+            {
+                JsonObject jo = cur as JsonObject;
+                if (jo == null) return null;
+                object next = null;
+                foreach (KeyValuePair<string, object> kv in jo) if (kv.Key == k) { next = kv.Value; break; }
+                cur = next;
+            }
+            return cur;
+        }
+        static string Str(object v) { return v == null ? "" : Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture); }
+        static double Num(object v) { if (v is long) return (long)v; if (v is double) return (double)v; return 0; }
+    }
+}

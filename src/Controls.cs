@@ -1,0 +1,1047 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+namespace FileConverter
+{
+    /// Base for all custom-painted controls: double buffered, themed surface, hover animation.
+    public class UiControl : Control, IAnimated
+    {
+        public Surface Surface = Surface.Card;
+        protected float hot;
+        protected bool hovering, pressing;
+
+        public UiControl()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
+                     ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+            SetStyle(ControlStyles.StandardDoubleClick, true);
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hovering = true; Animator.Start(this); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hovering = false; pressing = false; Animator.Start(this); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) { pressing = true; Invalidate(); } base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { pressing = false; Invalidate(); base.OnMouseUp(e); }
+        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+
+        public virtual bool Step()
+        {
+            float target = hovering && Enabled ? 1f : 0f;
+            hot += (target - hot) * 0.3f;
+            if (Math.Abs(target - hot) < 0.03f) hot = target;
+            Invalidate();
+            return hot != target;
+        }
+
+        protected void PaintBg(Graphics g) { Theme.PaintSurface(g, this, Surface); }
+    }
+
+    public enum BtnKind { Primary, Secondary, Ghost, Danger }
+
+    public class Btn : UiControl
+    {
+        public Func<string> Label;
+        public string Glyph;
+        public BtnKind Kind;
+        public float Radius = 8;
+        public float FontSize = 9.75f;
+        public bool Bold;
+        public bool Active;          // for toggle-like ghost buttons
+        public bool AlignStart;      // icon + text at the start (menu-style rows)
+        public Color InkColor = Color.Empty;   // optional text/icon color (e.g. red for "Clear list")
+        public float GlyphSize = 11f;
+
+        public Btn(Func<string> label, string glyph, BtnKind kind)
+        {
+            Label = label; Glyph = glyph; Kind = kind;
+            Cursor = Cursors.Hand;
+            Bold = kind == BtnKind.Primary;
+            if (kind == BtnKind.Primary) FontSize = 10f;
+        }
+
+        public string Caption { get { return Label == null ? "" : Label(); } }
+
+        public int PreferredWidth
+        {
+            get
+            {
+                string t = Caption;
+                int w = Theme.S(18) * 2;
+                if (!string.IsNullOrEmpty(Glyph)) w += Theme.S(18) + (t.Length > 0 ? Theme.S(8) : 0);
+                w += Theme.Measure(t, Theme.F(FontSize, Bold ? FontStyle.Bold : FontStyle.Regular));
+                if (t.Length == 0) w = Height;
+                return w;
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            Theme.Smooth(g);
+            RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+            float rad = Theme.S(Radius);
+            Color fg;
+            bool en = Enabled;
+            switch (Kind)
+            {
+                case BtnKind.Primary:
+                    {
+                        Color bg = Theme.PrimaryTop;
+                        if (!en) bg = Theme.Track;
+                        else
+                        {
+                            bg = Theme.Mix(bg, Theme.Dark ? Color.White : Color.Black, hot * 0.08f);
+                            if (pressing) bg = Theme.Mix(bg, Color.Black, 0.12f);
+                        }
+                        Theme.FillRound(g, r, rad, bg);
+                        fg = en ? Theme.PrimaryInk : Theme.InkFaint;
+                        break;
+                    }
+                case BtnKind.Secondary:
+                    {
+                        Color bg = Theme.Mix(Theme.ChipTop, Theme.Hover, hot);
+                        if (pressing) bg = Theme.Pressed;
+                        Theme.FillRound(g, r, rad, bg);
+                        Theme.StrokeRound(g, r, rad, Theme.Mix(Theme.ChipBorder, Theme.FieldBorder, hot));
+                        fg = en ? Theme.Ink : Theme.InkFaint;
+                        break;
+                    }
+                case BtnKind.Danger:
+                    {
+                        Color bg = Theme.Mix(Theme.ErrorBg, Theme.Error, hot * 0.12f);
+                        Theme.FillRound(g, r, rad, bg);
+                        fg = Theme.Error;
+                        break;
+                    }
+                default:
+                    {
+                        if (Active) Theme.FillRound(g, r, rad, Theme.Selected);
+                        if (hot > 0 && en) Theme.FillRound(g, r, rad, Color.FromArgb((int)(255 * hot), pressing ? Theme.Pressed : Theme.Hover));
+                        fg = en ? (Active ? Theme.Ink : Theme.Mix(Theme.InkSoft, Theme.Ink, hot)) : Theme.InkFaint;
+                        break;
+                    }
+            }
+
+            string text = Caption;
+            Font f = Theme.F(FontSize, Bold ? FontStyle.Bold : FontStyle.Regular);
+            int tw = Theme.Measure(text, f);
+            bool hasG = !string.IsNullOrEmpty(Glyph);
+            int gw = hasG ? Theme.S(18) : 0;
+            int gap = hasG && tw > 0 ? Theme.S(8) : 0;
+            int total = gw + gap + tw;
+            int x0 = AlignStart ? Theme.S(12) : (Width - total) / 2;
+            if (x0 < Theme.S(8)) x0 = Theme.S(8);
+            if (!InkColor.IsEmpty && en) fg = InkColor;
+            bool rtl = Theme.RTL;
+            Rectangle gr, tr;
+            if (!rtl) { gr = new Rectangle(x0, 0, gw, Height); tr = new Rectangle(x0 + gw + gap, 0, Width - (x0 + gw + gap) - Theme.S(6), Height); }
+            else { tr = new Rectangle(Theme.S(6), 0, Width - x0 - gw - gap - Theme.S(6), Height); gr = new Rectangle(Width - x0 - gw, 0, gw, Height); tr.X = Width - x0 - gw - gap - tw; tr.Width = tw + 2; if (tr.X < Theme.S(6)) { tr.Width -= Theme.S(6) - tr.X; tr.X = Theme.S(6); } }
+            if (hasG) Theme.Glyph(g, Glyph, GlyphSize, fg, gr);
+            if (tw > 0)
+            {
+                TextFormatFlags fl = TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.Left;
+                if (rtl) fl |= TextFormatFlags.RightToLeft;
+                TextRenderer.DrawText(g, text, f, tr, fg, fl);
+            }
+        }
+    }
+
+    /// Segmented control (e.g. Image | Audio | Video).
+    public class Segments : UiControl
+    {
+        public Func<string>[] Items;
+        public string[] Glyphs;
+        int selected, hoverIndex = -1;
+        public event EventHandler SelectedChanged;
+        public float FontSize = 9.25f;
+
+        public Segments(params Func<string>[] items) { Items = items; Cursor = Cursors.Hand; }
+
+        public int SelectedIndex
+        {
+            get { return selected; }
+            set { if (value != selected && value >= 0 && value < Items.Length) { selected = value; Invalidate(); if (SelectedChanged != null) SelectedChanged(this, EventArgs.Empty); } }
+        }
+        public void SetSilently(int i) { selected = i; Invalidate(); }
+
+        RectangleF Seg(int i)
+        {
+            float pad = Theme.S(3);
+            float w = (Width - pad * 2) / Items.Length;
+            int vis = Theme.RTL ? Items.Length - 1 - i : i;
+            return new RectangleF(pad + vis * w, pad, w, Height - pad * 2);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            int h = -1;
+            for (int i = 0; i < Items.Length; i++) if (Seg(i).Contains(e.Location)) h = i;
+            if (h != hoverIndex) { hoverIndex = h; Invalidate(); }
+            base.OnMouseMove(e);
+        }
+        protected override void OnMouseLeave(EventArgs e) { hoverIndex = -1; base.OnMouseLeave(e); }
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            if (!Enabled) return;
+            int hit = -1;
+            for (int i = 0; i < Items.Length; i++) if (Seg(i).Contains(e.Location)) { hit = i; break; }
+            base.OnMouseClick(e);
+            if (hit >= 0) SelectedIndex = hit;   // after the hit test: changing language can flip the layout
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            Theme.Smooth(g);
+            Color track = Theme.Dark ? Theme.Mix(Theme.Card, Color.Black, 0.28f) : Theme.Mix(Theme.Bg, Theme.Selected, 0.75f);
+            Theme.FillRound(g, new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), Theme.S(9), track);
+            for (int i = 0; i < Items.Length; i++)
+            {
+                RectangleF r = Seg(i);
+                Color fg = Theme.InkSoft;
+                if (i == selected)
+                {
+                    Theme.FillRound(g, r, Theme.S(7), Theme.Dark ? Theme.Mix(Theme.Card, Color.White, 0.06f) : Color.White);
+                    Theme.StrokeRound(g, r, Theme.S(7), Theme.Dark ? Color.FromArgb(18, 255, 255, 255) : Color.FromArgb(26, 60, 50, 30));
+                    fg = Theme.Ink;
+                }
+                else if (i == hoverIndex && Enabled) { Theme.FillRound(g, r, Theme.S(7), Color.FromArgb(Theme.Dark ? 16 : 70, Color.White)); fg = Theme.Ink; }
+                else if (i == hoverIndex && Enabled) fg = Theme.Ink;
+                if (!Enabled) fg = Theme.InkFaint;
+                Font f = Theme.F(FontSize, i == selected ? FontStyle.Bold : FontStyle.Regular);
+                Rectangle rr = Rectangle.Round(r);
+                if (Glyphs != null && i < Glyphs.Length && Glyphs[i] != null)
+                {
+                    string t = Items[i]();
+                    int tw = Theme.Measure(t, f), gw = Theme.S(16), gap = Theme.S(6);
+                    int x0 = rr.X + (rr.Width - tw - gw - gap) / 2;
+                    if (!Theme.RTL)
+                    {
+                        Theme.Glyph(g, Glyphs[i], 10f, fg, new Rectangle(x0, rr.Y, gw, rr.Height));
+                        TextRenderer.DrawText(g, t, f, new Rectangle(x0 + gw + gap, rr.Y, tw + 4, rr.Height), fg, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+                    }
+                    else
+                    {
+                        Theme.Glyph(g, Glyphs[i], 10f, fg, new Rectangle(x0 + tw + gap, rr.Y, gw, rr.Height));
+                        TextRenderer.DrawText(g, t, f, new Rectangle(x0, rr.Y, tw + 4, rr.Height), fg, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.RightToLeft);
+                    }
+                }
+                else Theme.Text(g, Items[i](), f, fg, rr, Align.Center);
+            }
+        }
+    }
+
+    /// Grid of format chips (JPG, PNG, ...).
+    public class ChipGrid : UiControl
+    {
+        List<string> items = new List<string>();
+        string selected;
+        int hoverIndex = -1;
+        public int Columns = 4;
+        public int RowH = 36;
+        public event EventHandler SelectedChanged;
+
+        public ChipGrid() { Cursor = Cursors.Hand; }
+
+        public void SetItems(IEnumerable<string> list, string select)
+        {
+            items = new List<string>(list);
+            selected = items.Contains(select) ? select : (items.Count > 0 ? items[0] : null);
+            Invalidate();
+            if (SelectedChanged != null) SelectedChanged(this, EventArgs.Empty);
+        }
+        public string Selected
+        {
+            get { return selected; }
+            set { if (items.Contains(value) && value != selected) { selected = value; Invalidate(); if (SelectedChanged != null) SelectedChanged(this, EventArgs.Empty); } }
+        }
+        public int RowHeight { get { return Theme.S(RowH); } }
+        public int Gap { get { return Theme.S(8); } }
+        public int NeededHeight(int count) { int rows = (count + Columns - 1) / Columns; return rows * RowHeight + Math.Max(0, rows - 1) * Gap; }
+
+        Rectangle Cell(int i)
+        {
+            int w = (Width - Gap * (Columns - 1)) / Columns;
+            int row = i / Columns, col = i % Columns;
+            if (Theme.RTL) col = Columns - 1 - col;
+            return new Rectangle(col * (w + Gap), row * (RowHeight + Gap), w, RowHeight);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            int h = -1;
+            for (int i = 0; i < items.Count; i++) if (Cell(i).Contains(e.Location)) h = i;
+            if (h != hoverIndex) { hoverIndex = h; Invalidate(); }
+            base.OnMouseMove(e);
+        }
+        protected override void OnMouseLeave(EventArgs e) { hoverIndex = -1; base.OnMouseLeave(e); }
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            if (!Enabled) return;
+            string hit = null;
+            for (int i = 0; i < items.Count; i++) if (Cell(i).Contains(e.Location)) { hit = items[i]; break; }
+            base.OnMouseClick(e);
+            if (hit != null) Selected = hit;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            Theme.Smooth(g);
+            Font f = Theme.F(9.25f, FontStyle.Bold);
+            for (int i = 0; i < items.Count; i++)
+            {
+                Rectangle c = Cell(i);
+                RectangleF r = new RectangleF(c.X + 0.5f, c.Y + 0.5f, c.Width - 1, c.Height - 1);
+                bool sel = items[i] == selected;
+                Color fg;
+                if (sel)
+                {
+                    Theme.FillRound(g, r, Theme.S(8), Enabled ? Theme.PrimaryTop : Theme.InkFaint);
+                    fg = Theme.PrimaryInk;
+                }
+                else
+                {
+                    bool h = i == hoverIndex && Enabled;
+                    Theme.FillRound(g, r, Theme.S(8), h ? Theme.Hover : Theme.ChipTop);
+                    Theme.StrokeRound(g, r, Theme.S(8), h ? Theme.FieldBorder : Theme.ChipBorder);
+                    fg = Enabled ? Theme.Ink : Theme.InkFaint;
+                }
+                Theme.Text(g, items[i].ToUpperInvariant(), f, fg, c, Align.Center, true, false, true);
+            }
+        }
+    }
+
+    /// On/off switch.
+    public class Toggle : UiControl
+    {
+        bool on;
+        float pos;
+        public event EventHandler CheckedChanged;
+        public Toggle() { Cursor = Cursors.Hand; }
+        public bool Checked
+        {
+            get { return on; }
+            set { if (value != on) { on = value; Animator.Start(this); if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty); } }
+        }
+        public void SetSilently(bool v) { on = v; pos = v ? 1 : 0; Invalidate(); }
+        protected override void OnMouseClick(MouseEventArgs e) { if (Enabled) Checked = !Checked; base.OnMouseClick(e); }
+        public override bool Step()
+        {
+            bool more = base.Step();
+            float t = on ? 1 : 0;
+            pos += (t - pos) * 0.3f;
+            if (Math.Abs(t - pos) < 0.02f) pos = t;
+            Invalidate();
+            return more || pos != t;
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            Theme.Smooth(g);
+            int w = Theme.S(42), h = Theme.S(24);
+            RectangleF tr = new RectangleF((Width - w) / 2f, (Height - h) / 2f, w, h);
+            Color off = Theme.Dark ? Theme.Mix(Theme.Track, Color.White, 0.06f) : Theme.Mix(Theme.Track, Color.Black, 0.06f), onc = Theme.AccentColor;
+            Theme.FillRound(g, tr, h / 2f, Theme.Mix(off, onc, pos));
+            float p = Theme.RTL ? 1 - pos : pos;
+            float k = h - Theme.S(6);
+            RectangleF kr = new RectangleF(tr.X + Theme.S(3) + p * (w - k - Theme.S(6)), tr.Y + Theme.S(3), k, k);
+            using (SolidBrush sb = new SolidBrush(Color.FromArgb(40, 0, 0, 0))) g.FillEllipse(sb, kr.X, kr.Y + 1, kr.Width, kr.Height);
+            using (SolidBrush b = new SolidBrush(Color.White)) g.FillEllipse(b, kr);
+        }
+    }
+
+    public class Progress : UiControl, IAnimated
+    {
+        double value;
+        public bool Indeterminate;
+        float phase;
+        public Progress() { }
+        public double Value { get { return value; } set { this.value = Math.Max(0, Math.Min(1, value)); Invalidate(); } }
+        public void SetIndeterminate(bool v) { Indeterminate = v; if (v) Animator.Start(this); Invalidate(); }
+        public override bool Step()
+        {
+            if (!Indeterminate || !Visible) return false;
+            phase += 0.012f; if (phase > 1) phase -= 1;
+            Invalidate();
+            return true;
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            Theme.Smooth(g);
+            RectangleF r = new RectangleF(0, 0, Width - 1, Height - 1);
+            Theme.FillRound(g, r, r.Height / 2, Theme.Track);
+            Color b = Theme.AccentColor;
+            if (Indeterminate)
+            {
+                float w = r.Width * 0.3f, x = -w + (r.Width + w) * phase;
+                RectangleF f = RectangleF.Intersect(new RectangleF(x, 0, w, r.Height), r);
+                if (f.Width > 0) Theme.FillRound(g, f, r.Height / 2, b);
+            }
+            else if (value > 0)
+            {
+                float fw = Math.Max(r.Height, (float)(r.Width * value));
+                RectangleF f = Theme.RTL ? new RectangleF(r.Right - fw, 0, fw, r.Height) : new RectangleF(0, 0, fw, r.Height);
+                Theme.FillRound(g, f, r.Height / 2, b);
+            }
+        }
+    }
+
+    /// Rounded text field wrapping a borderless TextBox.
+    public class TextField : UiControl
+    {
+        public readonly TextBox Box;
+        public Func<string> Placeholder;
+        public string Glyph;
+        public bool ForceLtr;
+        bool focused;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, string l);
+
+        public TextField(Func<string> placeholder, string glyph)
+        {
+            Placeholder = placeholder; Glyph = glyph;
+            Box = new TextBox();
+            Box.BorderStyle = BorderStyle.None;
+            Box.Font = Theme.F(10.5f);
+            Controls.Add(Box);
+            Box.GotFocus += (s, e) => { focused = true; Invalidate(); };
+            Box.LostFocus += (s, e) => { focused = false; Invalidate(); };
+            // the direction is set before Windows creates the box: changing it while the box is being created
+            // makes Windows rebuild it mid-way, which fails ("Error creating window handle") — Arabic search window
+            Box.RightToLeft = Theme.RTL ? RightToLeft.Yes : RightToLeft.No;
+            Box.HandleCreated += (s, e) =>
+            {
+                ApplyCue(); LayoutBox();
+                if (Box.RightToLeft != WantRtl) try { Box.BeginInvoke((Action)Restyle); } catch { }
+            };
+            Box.BackColor = Theme.Field; Box.ForeColor = Theme.Ink;
+            Cursor = Cursors.IBeam;
+            Surface = Surface.Card;
+        }
+
+        RightToLeft WantRtl { get { return (Theme.RTL && !ForceLtr) ? RightToLeft.Yes : RightToLeft.No; } }
+
+        public void ApplyCue()
+        {
+            try { if (Box.IsHandleCreated && Placeholder != null) SendMessage(Box.Handle, 0x1501, (IntPtr)1, Placeholder()); } catch { }
+        }
+
+        public void Restyle()
+        {
+            Box.BackColor = Theme.Field;
+            Box.ForeColor = Theme.Ink;
+            if (Box.RightToLeft != WantRtl) Box.RightToLeft = WantRtl;
+            ApplyCue();
+            LayoutBox();
+            Invalidate();
+        }
+
+        protected override void OnClick(EventArgs e) { Box.Focus(); base.OnClick(e); }
+        protected override void OnResize(EventArgs e) { base.OnResize(e); LayoutBox(); }
+
+        void LayoutBox()
+        {
+            int pad = Theme.S(14), gw = string.IsNullOrEmpty(Glyph) ? 0 : Theme.S(26);
+            int h = Box.PreferredHeight;
+            int x = Theme.RTL && !ForceLtr ? pad : pad + gw;
+            Box.SetBounds(x, (Height - h) / 2, Math.Max(10, Width - pad * 2 - gw), h);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            Theme.Smooth(g);
+            RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+            Theme.FillRound(g, r, Theme.S(10), Theme.Field);
+            Theme.StrokeRound(g, r, Theme.S(10), focused ? Theme.Mix(Theme.FieldBorder, Theme.Ink, 0.45f) : Theme.Mix(Theme.FieldBorder, Theme.InkFaint, hot * 0.4f), 1f);
+            if (!string.IsNullOrEmpty(Glyph))
+            {
+                int gx = Theme.RTL && !ForceLtr ? Width - Theme.S(12) - Theme.S(20) : Theme.S(12);
+                Theme.Glyph(g, Glyph, 11f, Theme.InkFaint, new Rectangle(gx, 0, Theme.S(20), Height));
+            }
+        }
+    }
+
+    /// Big dashed drop area with an icon, title and subtitle.
+    public class DropZone : UiControl
+    {
+        public Func<string> Title, Sub;
+        public string Glyph = Ico.Upload;
+        public bool DragHot;
+
+        public DropZone(Func<string> title, Func<string> sub)
+        {
+            Title = title; Sub = sub; Cursor = Cursors.Hand; AllowDrop = true;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            Theme.Smooth(g);
+            float t = DragHot ? 1 : hot;
+            RectangleF r = new RectangleF(Theme.S(2), Theme.S(2), Width - Theme.S(4) - 1, Height - Theme.S(4) - 1);
+            Theme.FillRound(g, r, Theme.S(14), DragHot ? Theme.AccentSoft : Theme.Mix(Theme.CardInner, Theme.Hover, t * 0.6f));
+            using (GraphicsPath p = Theme.Round(r, Theme.S(14)))
+            using (Pen pen = new Pen(DragHot ? Theme.AccentColor : Theme.Mix(Theme.FieldBorder, Theme.InkFaint, t * 0.6f), Theme.S(1.4f)))
+            {
+                pen.DashPattern = new float[] { 4f, 3f };
+                g.DrawPath(pen, p);
+            }
+            float cx = Width / 2f, cy = Height / 2f - Theme.S(30);
+            float s = Theme.S(56);
+            RectangleF circle = new RectangleF(cx - s / 2, cy - s / 2 - t * Theme.S(3), s, s);
+            Theme.FillRound(g, circle, Theme.S(16), Theme.Mix(Theme.Card, Theme.AccentSoft, t));
+            Theme.StrokeRound(g, circle, Theme.S(16), Theme.CardBorder);
+            Theme.Glyph(g, Glyph, 15f, Theme.Mix(Theme.InkSoft, Theme.AccentColor, t), Rectangle.Round(circle));
+            Rectangle t1 = new Rectangle(Theme.S(10), (int)(cy + s / 2 + Theme.S(16)), Width - Theme.S(20), Theme.S(30));
+            Theme.Text(g, Title(), Theme.Serif(14.5f), Theme.Ink, t1, Align.Center);
+            Rectangle t2 = new Rectangle(Theme.S(10), t1.Bottom + Theme.S(2), Width - Theme.S(20), Theme.S(24));
+            Theme.Text(g, Sub(), Theme.F(9.5f), Theme.InkSoft, t2, Align.Center);
+        }
+    }
+
+    /// Scrollable, virtualized list with a slim custom scrollbar (looks right in dark mode too).
+    public abstract class ScrollList : UiControl
+    {
+        protected int scroll;
+        protected int hoverIndex = -1;
+        public int RowHeight = 60;
+        bool dragThumb; int dragStartY, dragStartScroll;
+        float barHot;
+
+        public abstract int Count { get; }
+        protected abstract void DrawRow(Graphics g, int index, Rectangle r, bool hover);
+        protected virtual void RowClick(int index, Point local, Rectangle row) { }
+        protected virtual void RowDoubleClick(int index) { }
+        protected virtual void RowHover(int index, Point local, Rectangle row) { }
+        protected virtual void PaintEmpty(Graphics g) { }
+
+        protected int RH { get { return Theme.S(RowHeight); } }
+        int ContentH { get { return Count * RH; } }
+        int MaxScroll { get { return Math.Max(0, ContentH - Height); } }
+        protected int BarW { get { return MaxScroll > 0 ? Theme.S(12) : 0; } }
+
+        // smooth scrolling: the wheel moves a target and the view glides to it
+        float scrollF; int target;
+        public void ClampScroll()
+        {
+            scroll = Math.Max(0, Math.Min(MaxScroll, scroll));
+            target = Math.Max(0, Math.Min(MaxScroll, target));
+        }
+        void Jump(int v) { scroll = target = v; ClampScroll(); scrollF = scroll; }
+        public void ScrollTo(int v) { Jump(v); Invalidate(); }
+        public void ScrollToEnd() { Jump(MaxScroll); Invalidate(); }
+        public void EnsureVisible(int i)
+        {
+            int top = i * RH, t = target;
+            if (top < t) t = top;
+            else if (top + RH > t + Height) t = top + RH - Height;
+            target = Math.Max(0, Math.Min(MaxScroll, t));
+            scrollF = scroll;
+            Animator.Start(this);
+        }
+        public override bool Step()
+        {
+            bool more = base.Step();
+            if (scroll != target)
+            {
+                scrollF += (target - scrollF) * 0.32f;
+                if (Math.Abs(target - scrollF) < 0.6f) scrollF = target;
+                scroll = (int)Math.Round(scrollF);
+                Invalidate();
+                return true;
+            }
+            return more;
+        }
+
+        protected Rectangle RowRect(int i)
+        {
+            int x = Theme.RTL ? BarW : 0;
+            return new Rectangle(x, i * RH - scroll, Width - BarW, RH);
+        }
+
+        Rectangle ThumbRect()
+        {
+            if (MaxScroll <= 0) return Rectangle.Empty;
+            int h = Math.Max(Theme.S(36), Height * Height / Math.Max(1, ContentH));
+            int y = (int)((Height - h) * (scroll / (double)MaxScroll));
+            int x = Theme.RTL ? Theme.S(3) : Width - Theme.S(9);
+            return new Rectangle(x, y, Theme.S(6), h);
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            if (scroll == target) scrollF = scroll;
+            target -= e.Delta / 120 * Math.Max(RH, Theme.S(48));
+            target = Math.Max(0, Math.Min(MaxScroll, target));
+            Animator.Start(this);
+            base.OnMouseWheel(e);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            Rectangle th = ThumbRect();
+            if (!th.IsEmpty && new Rectangle(th.X - Theme.S(4), 0, th.Width + Theme.S(8), Height).Contains(e.Location))
+            {
+                dragThumb = true; dragStartY = e.Y; Jump(scroll); dragStartScroll = scroll; if (!th.Contains(e.Location)) { Jump((int)((e.Y / (double)Height) * ContentH - Height / 2)); dragStartScroll = scroll; } Capture = true; Invalidate(); return;
+            }
+            Focus();
+            base.OnMouseDown(e);
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e) { dragThumb = false; Capture = false; base.OnMouseUp(e); }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            if (dragThumb)
+            {
+                Rectangle th = ThumbRect();
+                int track = Height - th.Height;
+                if (track > 0) { Jump(dragStartScroll + (int)((e.Y - dragStartY) * (MaxScroll / (double)track))); Invalidate(); }
+                return;
+            }
+            int i = (e.Y + scroll) / RH;
+            if (i < 0 || i >= Count || (BarW > 0 && (Theme.RTL ? e.X < BarW : e.X > Width - BarW))) i = -1;
+            if (i != hoverIndex) { hoverIndex = i; Invalidate(); }
+            if (i >= 0) RowHover(i, e.Location, RowRect(i));
+            float bh = (BarW > 0 && (Theme.RTL ? e.X < BarW + Theme.S(4) : e.X > Width - BarW - Theme.S(4))) ? 1 : 0;
+            if (bh != barHot) { barHot = bh; Invalidate(); }
+            base.OnMouseMove(e);
+        }
+
+        protected override void OnMouseLeave(EventArgs e) { hoverIndex = -1; barHot = 0; base.OnMouseLeave(e); }
+
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            int i = (e.Y + scroll) / RH;
+            if (i >= 0 && i < Count && e.Button == MouseButtons.Left) RowClick(i, e.Location, RowRect(i));
+            base.OnMouseClick(e);
+        }
+        protected override void OnMouseDoubleClick(MouseEventArgs e)
+        {
+            int i = (e.Y + scroll) / RH;
+            if (i >= 0 && i < Count) RowDoubleClick(i);
+            base.OnMouseDoubleClick(e);
+        }
+        protected override void OnResize(EventArgs e) { ClampScroll(); base.OnResize(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            ClampScroll();
+            if (Count == 0) { PaintEmpty(g); return; }
+            int first = Math.Max(0, scroll / RH), last = Math.Min(Count - 1, (scroll + Height) / RH);
+            for (int i = first; i <= last; i++)
+            {
+                Rectangle r = RowRect(i);
+                GraphicsState st = g.Save();
+                g.SetClip(r);
+                DrawRow(g, i, r, i == hoverIndex);
+                g.Restore(st);
+            }
+            Rectangle th = ThumbRect();
+            if (!th.IsEmpty)
+            {
+                Theme.Smooth(g);
+                if (barHot > 0 || dragThumb) { th.Inflate(Theme.S(1), 0); }
+                Theme.FillRound(g, th, th.Width / 2f, Color.FromArgb(barHot > 0 || dragThumb ? 160 : 90, Theme.InkFaint));
+            }
+        }
+    }
+
+    /// Small notification that slides up from the bottom of the window.
+    public class Toast : UiControl
+    {
+        string message; string glyph; Color glyphColor;
+        Func<string> actionLabel; Action action;
+        Timer hideTimer;
+        float shown; bool wantShown;
+        Rectangle actionRect;
+        public Toast()
+        {
+            Visible = false;
+            hideTimer = new Timer(); hideTimer.Interval = 6000;
+            hideTimer.Tick += (s, e) => { hideTimer.Stop(); wantShown = false; Animator.Start(this); };
+            Surface = Surface.Background;
+        }
+
+        public void Show(string msg, bool ok, Func<string> actLabel, Action act)
+        {
+            message = msg; glyph = ok ? Ico.Check : Ico.Error; glyphColor = ok ? Theme.Success : Theme.Error;
+            actionLabel = actLabel; action = act;
+            Width = Math.Min(Parent != null ? Parent.Width - Theme.S(40) : Theme.S(520), Theme.Measure(msg, Theme.F(10f)) + Theme.S(90) + (actLabel != null ? Theme.Measure(actLabel(), Theme.F(10f, FontStyle.Bold)) + Theme.S(30) : 0));
+            Height = Theme.S(52);
+            wantShown = true;
+            Visible = true; BringToFront();
+            Place();
+            Animator.Start(this);
+            hideTimer.Stop(); hideTimer.Start();
+            Invalidate();
+        }
+
+        public Rectangle Host;
+        void Place()
+        {
+            int bottom = Host.Bottom - Theme.S(24);
+            int y = (int)(bottom - Height * shown + (1 - shown) * Theme.S(30));
+            Location = new Point(Host.X + (Host.Width - Width) / 2, Math.Min(y, bottom - Theme.S(4)));
+        }
+
+        public override bool Step()
+        {
+            float t = wantShown ? 1 : 0;
+            shown += (t - shown) * 0.25f;
+            if (Math.Abs(t - shown) < 0.02f) shown = t;
+            if (shown <= 0) Visible = false;
+            Place();
+            Invalidate();
+            return shown != t;
+        }
+
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            if (action != null && actionRect.Contains(e.Location)) { action(); wantShown = false; Animator.Start(this); }
+            else { wantShown = false; Animator.Start(this); }
+        }
+        protected override void OnMouseMove(MouseEventArgs e) { Cursor = actionRect.Contains(e.Location) ? Cursors.Hand : Cursors.Default; base.OnMouseMove(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            Theme.Smooth(g);
+            RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+            Color bg = Theme.Dark ? Color.FromArgb(240, 238, 230) : Color.FromArgb(38, 38, 36);
+            Color fg = Theme.Dark ? Color.FromArgb(24, 24, 22) : Color.FromArgb(250, 249, 245);
+            Theme.FillRound(g, r, Theme.S(12), bg);
+            int gx = Theme.RTL ? Width - Theme.S(44) : Theme.S(14);
+            Theme.Glyph(g, glyph, 12f, glyphColor, new Rectangle(gx, 0, Theme.S(30), Height));
+            int aw = actionLabel != null ? Theme.Measure(actionLabel(), Theme.F(10f, FontStyle.Bold)) + Theme.S(24) : 0;
+            Rectangle tr = new Rectangle(Theme.S(52), 0, Width - Theme.S(66) - aw, Height);
+            if (Theme.RTL) tr.X = Width - tr.Right;
+            Theme.Text(g, message, Theme.F(10f), fg, tr);
+            if (actionLabel != null)
+            {
+                actionRect = new Rectangle(Theme.RTL ? Theme.S(8) : Width - aw - Theme.S(8), Theme.S(10), aw, Height - Theme.S(20));
+                Theme.FillRound(g, actionRect, Theme.S(8), Color.FromArgb(Theme.Dark ? 30 : 40, Theme.Dark ? 0 : 255, Theme.Dark ? 0 : 255, Theme.Dark ? 0 : 255));
+                Theme.Text(g, actionLabel(), Theme.F(10f, FontStyle.Bold), fg, actionRect, Align.Center);
+            }
+            else actionRect = Rectangle.Empty;
+        }
+    }
+
+    public class NavItem
+    {
+        public string Key; public string Glyph; public float Hot;
+        public NavItem(string key, string glyph) { Key = key; Glyph = glyph; }
+    }
+
+    /// Left (or right, in Arabic) navigation bar with logo, pages and theme/language switches.
+    public class Sidebar : UiControl
+    {
+        public List<NavItem> Items = new List<NavItem>();
+        int selected;
+        float pillY = -1;   // the selection pill glides between items
+        int hoverIndex = -1, hoverFoot = -1; bool hoverSearch;
+        float[] footHot = new float[3]; float searchHot;
+        public event Action<int> Navigate;
+        public event Action ToggleTheme, ToggleLanguage, OpenSearch;
+        public event Action<Rectangle> OpenActivity;
+        /// what the Activity row shows: jobs running, and finished ones not looked at yet
+        public int ActivityRunning, ActivityNew;
+        bool spinOnly;
+
+        public Sidebar() { Surface = Surface.Sidebar; Cursor = Cursors.Hand; }
+
+        public int Selected
+        {
+            get { return selected; }
+            set { selected = value; if (pillY < 0 || !Visible) pillY = ItemRect(value).Y; Animator.Start(this); Invalidate(); }
+        }
+
+        public Rectangle SearchRect { get { return new Rectangle(Theme.S(10), Theme.S(66), Width - Theme.S(20), Theme.S(36)); } }
+        int NavTop { get { return Theme.S(140); } }
+        int FootTop { get { return Height - Theme.S(52) - Theme.S(40); } }
+        int Step0
+        {
+            get
+            {
+                // rows tighten a little on short windows so nothing overlaps the footer
+                int avail = FootTop - Theme.S(16) - NavTop;
+                return Math.Max(Theme.S(32), Math.Min(Theme.S(40), avail / Math.Max(1, Items.Count)));
+            }
+        }
+        Rectangle ItemRect(int i)
+        {
+            int st = Step0;
+            return new Rectangle(Theme.S(10), NavTop + i * st, Width - Theme.S(20), st - Theme.S(4));
+        }
+        /// 0 = Activity (full width), 1 = theme, 2 = language (half width each, side by side)
+        public Rectangle FootRect(int i)
+        {
+            int x = Theme.S(10), w = Width - Theme.S(20), h = Theme.S(36);
+            if (i == 0) return new Rectangle(x, FootTop, w, h);
+            int half = (w - Theme.S(4)) / 2;
+            Rectangle r = new Rectangle(i == 1 ? x : x + half + Theme.S(4), FootTop + Theme.S(40), half, h);
+            return Theme.Mirror(r, Width);
+        }
+
+        public override bool Step()
+        {
+            bool more = false;
+            for (int i = 0; i < Items.Count; i++)
+            {
+                float t = i == hoverIndex ? 1 : 0;
+                Items[i].Hot += (t - Items[i].Hot) * 0.28f;
+                if (Math.Abs(t - Items[i].Hot) < 0.03f) Items[i].Hot = t; else more = true;
+            }
+            for (int i = 0; i < 3; i++)
+            {
+                float t = i == hoverFoot ? 1 : 0;
+                footHot[i] += (t - footHot[i]) * 0.28f;
+                if (Math.Abs(t - footHot[i]) < 0.03f) footHot[i] = t; else more = true;
+            }
+            float ts = hoverSearch ? 1 : 0;
+            searchHot += (ts - searchHot) * 0.28f;
+            if (Math.Abs(ts - searchHot) < 0.03f) searchHot = ts; else more = true;
+            float ty = ItemRect(selected).Y;
+            if (pillY < 0) pillY = ty;
+            pillY += (ty - pillY) * 0.24f;
+            if (Math.Abs(ty - pillY) < 0.5f) pillY = ty; else more = true;
+            if (more || !spinOnly) Invalidate();
+            else if (ActivityRunning > 0) Invalidate(FootRect(0));   // only the little spinner is turning
+            spinOnly = !more;
+            return more || ActivityRunning > 0;
+        }
+
+        protected override void OnResize(EventArgs e) { pillY = -1; base.OnResize(e); }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            int h = -1, f = -1;
+            for (int i = 0; i < Items.Count; i++) if (ItemRect(i).Contains(e.Location)) h = i;
+            for (int i = 0; i < 3; i++) if (FootRect(i).Contains(e.Location)) f = i;
+            bool s = SearchRect.Contains(e.Location);
+            if (h != hoverIndex || f != hoverFoot || s != hoverSearch) { hoverIndex = h; hoverFoot = f; hoverSearch = s; Animator.Start(this); }
+            Cursor = (h >= 0 || f >= 0 || s) ? Cursors.Hand : Cursors.Default;
+            base.OnMouseMove(e);
+        }
+        protected override void OnMouseLeave(EventArgs e) { hoverIndex = -1; hoverFoot = -1; hoverSearch = false; Animator.Start(this); base.OnMouseLeave(e); }
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            int nav = -1;
+            for (int i = 0; i < Items.Count; i++) if (ItemRect(i).Contains(e.Location)) nav = i;
+            bool act = FootRect(0).Contains(e.Location), th = FootRect(1).Contains(e.Location), lg = FootRect(2).Contains(e.Location);
+            bool srch = SearchRect.Contains(e.Location);
+            base.OnMouseClick(e);
+            if (nav >= 0 && Navigate != null) Navigate(nav);
+            else if (srch && OpenSearch != null) OpenSearch();
+            else if (act && OpenActivity != null) OpenActivity(FootRect(0));
+            else if (th && ToggleTheme != null) ToggleTheme();
+            else if (lg && ToggleLanguage != null) ToggleLanguage();
+        }
+
+        /// Icon + label row, Claude-style: quiet until hovered or selected.
+        void Row(Graphics g, Rectangle r, string glyph, string text, Color fg, bool bold, float fontSize = 10f)
+        {
+            Rectangle gr = Theme.RTL ? new Rectangle(r.Right - Theme.S(30), r.Y, Theme.S(20), r.Height) : new Rectangle(r.X + Theme.S(10), r.Y, Theme.S(20), r.Height);
+            Theme.Glyph(g, glyph, 11f, fg, gr);
+            Rectangle tr = Theme.RTL ? new Rectangle(r.X + Theme.S(4), r.Y, r.Width - Theme.S(40), r.Height) : new Rectangle(r.X + Theme.S(38), r.Y, r.Width - Theme.S(42), r.Height);
+            Theme.Text(g, text, Theme.F(fontSize, bold ? FontStyle.Bold : FontStyle.Regular), fg, tr);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            Theme.Smooth(g);
+            using (Pen p = new Pen(Theme.SideBorder))
+            {
+                int x = Theme.RTL ? 0 : Width - 1;
+                g.DrawLine(p, x, 0, x, Height);
+            }
+            // brand: small logo + the name in a book serif, like Claude's wordmark
+            Rectangle logo = Theme.Mirror(new Rectangle(Theme.S(18), Theme.S(18), Theme.S(34), Theme.S(34)), Width);
+            if (Theme.Logo != null)
+            {
+                using (GraphicsPath lp = Theme.Round(logo, Theme.S(9)))
+                {
+                    GraphicsState st = g.Save();
+                    g.SetClip(lp);
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(Theme.Logo, logo);
+                    g.Restore(st);
+                    using (Pen bp = new Pen(Theme.SideBorder)) g.DrawPath(bp, lp);
+                }
+            }
+            Rectangle name = Theme.Mirror(new Rectangle(Theme.S(62), Theme.S(15), Width - Theme.S(70), Theme.S(28)), Width);
+            Theme.Text(g, L.T("app_name"), Theme.Serif(15f), Theme.Ink, name);
+            Rectangle tag = Theme.Mirror(new Rectangle(Theme.S(63), Theme.S(39), Width - Theme.S(70), Theme.S(18)), Width);
+            Theme.Text(g, L.T("app_short"), Theme.F(8.25f), Theme.InkFaint, tag);
+
+            // search: opens the Ctrl+K palette
+            Rectangle sr = SearchRect;
+            RectangleF srf = new RectangleF(sr.X + 0.5f, sr.Y + 0.5f, sr.Width - 1, sr.Height - 1);
+            Theme.FillRound(g, srf, Theme.S(9), Theme.Mix(Theme.Card, Theme.Hover, searchHot));
+            Theme.StrokeRound(g, srf, Theme.S(9), Theme.Mix(Theme.CardBorder, Theme.InkFaint, searchHot * 0.5f));
+            Row(g, sr, Ico.Search, L.T("search_ph"), Theme.Mix(Theme.InkFaint, Theme.InkSoft, searchHot), false, 9.5f);
+            Font kf = Theme.F(7.75f, FontStyle.Bold);
+            string kt = "Ctrl K";
+            int kw = Theme.Measure(kt, kf) + Theme.S(10);
+            Rectangle kr = Theme.Mirror(new Rectangle(sr.Right - kw - Theme.S(8), sr.Y + (sr.Height - Theme.S(20)) / 2, kw, Theme.S(20)), Width);
+            Theme.FillRound(g, kr, Theme.S(5), Theme.Selected);
+            Theme.Text(g, kt, kf, Theme.InkFaint, kr, Align.Center, true, false, true);
+
+            Rectangle sec = Theme.Mirror(new Rectangle(Theme.S(20), NavTop - Theme.S(24), Width - Theme.S(40), Theme.S(18)), Width);
+            Theme.Text(g, L.T("nav_section"), Theme.F(8.25f), Theme.InkFaint, sec);
+
+            // the selection (glides between rows)
+            if (selected >= 0 && selected < Items.Count)
+            {
+                Rectangle r0 = ItemRect(selected);
+                RectangleF pr = new RectangleF(r0.X, pillY < 0 ? r0.Y : pillY, r0.Width, r0.Height);
+                Theme.FillRound(g, pr, Theme.S(8), Theme.Selected);
+            }
+
+            for (int i = 0; i < Items.Count; i++)
+            {
+                Rectangle r = ItemRect(i);
+                bool sel = i == selected;
+                if (!sel && Items[i].Hot > 0)
+                    Theme.FillRound(g, r, Theme.S(8), Color.FromArgb((int)(255 * Items[i].Hot), Theme.Hover));
+                Color fg = sel ? Theme.Ink : Theme.Mix(Theme.InkSoft, Theme.Ink, Items[i].Hot);
+                Row(g, r, Items[i].Glyph, L.T(Items[i].Key), fg, false);
+                if (sel)
+                {
+                    // a small accent mark on the selected row
+                    Rectangle mk = Theme.RTL ? new Rectangle(r.Right - Theme.S(3), r.Y + Theme.S(10), Theme.S(3), r.Height - Theme.S(20)) : new Rectangle(r.X, r.Y + Theme.S(10), Theme.S(3), r.Height - Theme.S(20));
+                    if (Math.Abs(pillY - r.Y) < 2) Theme.FillRound(g, mk, Theme.S(1.5f), Theme.AccentColor);
+                }
+            }
+
+            // footer: Activity, then appearance + language side by side
+            using (Pen p = new Pen(Theme.SideBorder)) g.DrawLine(p, Theme.S(18), FootTop - Theme.S(10), Width - Theme.S(18), FootTop - Theme.S(10));
+            for (int i = 0; i < 3; i++)
+            {
+                Rectangle r = FootRect(i);
+                if (footHot[i] > 0) Theme.FillRound(g, r, Theme.S(8), Color.FromArgb((int)(255 * footHot[i]), Theme.Hover));
+                Color fg = Theme.Mix(Theme.InkSoft, Theme.Ink, footHot[i]);
+                if (i == 0)
+                {
+                    Row(g, r, "", L.T("act_title"), ActivityRunning > 0 ? Theme.Ink : fg, false);
+                    Rectangle badge = Theme.Mirror(new Rectangle(r.Right - Theme.S(34), r.Y + (r.Height - Theme.S(22)) / 2, Theme.S(24), Theme.S(22)), Width);
+                    if (ActivityRunning > 0)
+                    {
+                        // a turning ring + how many are running
+                        float ang = (Environment.TickCount % 1000) / 1000f * 360f;
+                        RectangleF ring = new RectangleF(badge.X + Theme.S(3), badge.Y + Theme.S(2), Theme.S(18), Theme.S(18));
+                        using (Pen tp = new Pen(Theme.Mix(Theme.Side, Theme.AccentColor, 0.25f), Theme.S(2f))) g.DrawEllipse(tp, ring);
+                        using (Pen ap = new Pen(Theme.AccentColor, Theme.S(2f)) { StartCap = LineCap.Round, EndCap = LineCap.Round }) g.DrawArc(ap, ring, ang, 100);
+                        Theme.Text(g, ActivityRunning.ToString(), Theme.F(7.25f, FontStyle.Bold), Theme.AccentColor, Rectangle.Round(ring), Align.Center, true, false, true);
+                    }
+                    else if (ActivityNew > 0)
+                    {
+                        Rectangle dot = new Rectangle(badge.X + badge.Width / 2 - Theme.S(4), badge.Y + badge.Height / 2 - Theme.S(4), Theme.S(8), Theme.S(8));
+                        using (SolidBrush b = new SolidBrush(Theme.Success)) g.FillEllipse(b, dot);
+                    }
+                    continue;
+                }
+                string glyph = i == 1 ? (Theme.Dark ? Ico.Sun : Ico.Moon) : Ico.Globe;
+                string text = i == 1 ? (Theme.Dark ? L.T("th_light") : L.T("th_dark")) : (Theme.RTL ? "English" : "العربية");
+                Row(g, r, glyph, text, fg, false, 9.25f);
+            }
+        }
+    }
+
+    /// Base for a page: themed background, page title, cards, and RTL-aware placement helpers.
+    public abstract class Page : UiControl
+    {
+        public string TitleKey, SubKey;
+        public string Glyph;          // icon shown next to the page title
+        protected List<Rectangle> cards = new List<Rectangle>();
+        public Toast Toast;   // set by the main window
+        public Form Owner;
+
+        protected Page(string titleKey, string subKey)
+        {
+            TitleKey = titleKey; SubKey = subKey;
+            Surface = Surface.Background;
+            AllowDrop = true;
+        }
+
+        /// Top of the content area below the title.
+        protected int Top0 { get { return Theme.S(96); } }
+        protected int Pad { get { return Theme.S(28); } }
+
+        public abstract void DoLayout();
+        public virtual void Restyle() { }
+        public virtual void OnShown() { }
+
+        /// Run on the UI thread from a worker. Waits (briefly) for the window to exist first,
+        /// so results that arrive while the app is still opening aren't lost.
+        protected void Post(Action a)
+        {
+            if (System.Threading.Thread.CurrentThread.IsBackground)
+                for (int i = 0; i < 200 && !IsHandleCreated && !IsDisposed; i++) System.Threading.Thread.Sleep(50);
+            try { if (!IsDisposed && IsHandleCreated) BeginInvoke(a); } catch { }
+        }
+        public virtual bool Busy { get { return false; } }
+        public virtual void AcceptFiles(string[] paths) { }
+
+        protected Rectangle M(Rectangle r) { return Theme.Mirror(r, Width); }
+        protected void Place(Control c, Rectangle ltr) { c.Bounds = M(ltr); }
+
+        protected void Label(Graphics g, string text, Font f, Color c, Rectangle ltr, Align a = Align.Start, bool vcenter = true, bool wrap = false)
+        {
+            Theme.Text(g, text, f, c, M(ltr), a, vcenter, wrap);
+        }
+
+        protected override void OnResize(EventArgs e) { base.OnResize(e); if (Width > 0 && Height > 0) DoLayout(); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            Theme.Smooth(g);
+            int tx = Pad;
+            Label(g, L.T(TitleKey), Theme.Serif(20f), Theme.Ink, new Rectangle(tx, Theme.S(18), Width - Pad - tx, Theme.S(40)), Align.Start, false);
+            Label(g, L.T(SubKey), Theme.F(9.75f), Theme.InkSoft, new Rectangle(tx, Theme.S(58), Width - Pad - tx, Theme.S(24)), Align.Start, false);
+            foreach (Rectangle c in cards) Theme.PaintCard(g, M(c));
+            PaintContent(g);
+        }
+
+        protected virtual void PaintContent(Graphics g) { }
+
+        protected void ShowToast(string msg, bool ok, Func<string> act, Action a)
+        {
+            if (Toast != null) Toast.Show(msg, ok, act, a);
+        }
+
+        /// Hooks drag & drop for this page and the given child controls.
+        protected void EnableDrop(params Control[] extra)
+        {
+            List<Control> all = new List<Control>(extra); all.Add(this);
+            foreach (Control c in all)
+            {
+                c.AllowDrop = true;
+                c.DragEnter += (s, e) => { e.Effect = !Busy && e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; DragHighlight(true); };
+                c.DragLeave += (s, e) => DragHighlight(false);
+                c.DragDrop += (s, e) => { DragHighlight(false); string[] p = e.Data.GetData(DataFormats.FileDrop) as string[]; if (p != null && !Busy) AcceptFiles(p); };
+            }
+        }
+        protected virtual void DragHighlight(bool on) { }
+    }
+}
