@@ -23,9 +23,9 @@ namespace FileConverter
 
         public static readonly string[][] Targets =
         {
-            new[] { "jpg", "jpeg", "png", "webp", "heic", "avif", "bmp", "tiff", "gif", "ico", "pdf" },
+            new[] { "jpg", "jpeg", "png", "webp", "heic", "avif", "bmp", "tiff", "gif", "ico", "pdf", "sticker" },
             new[] { "mp3", "wav", "ogg", "flac", "m4a", "aac", "opus", "wma", "aiff", "ac3" },
-            new[] { "mp4", "mov", "mkv", "avi", "webm", "wmv", "m4v", "mpg", "3gp", "gif" },
+            new[] { "mp4", "mov", "mkv", "avi", "webm", "wmv", "m4v", "mpg", "3gp", "gif", "sticker" },
             new[] { "pdf", "docx", "odt", "rtf", "txt", "html", "md", "epub", "pptx", "odp" },
             new[] { "xlsx", "ods", "csv", "tsv", "json", "xml" },
         };

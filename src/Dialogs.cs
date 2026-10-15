@@ -22,7 +22,52 @@ namespace FileConverter
             Show(owner, title, message, L.T("ok"), null, kind);
         }
 
+        /// Asks for one line of text (null = cancelled). linkText/linkUrl add a "where do I get this" link.
+        public static string Input(IWin32Window owner, string title, string message, string value, string placeholder, string yes, string no, string linkText, string linkUrl)
+        {
+            string result = null;
+            Show(owner, title, message, yes, no, AskKind.Info, f =>
+            {
+                f.AddInput(value ?? "", placeholder, linkText, linkUrl);
+                f.FormClosed += (s, e) => { if (f.DialogResult == DialogResult.Yes) result = f.InputText; };
+            });
+            return result;
+        }
+
         static bool Show(IWin32Window owner, string title, string message, string yes, string no, AskKind kind)
+        {
+            return Show(owner, title, message, yes, no, kind, null);
+        }
+
+        /// Shows any of the app's dialogs over a darkened window.
+        public static DialogResult ShowDimmed(Form dialog, IWin32Window owner)
+        {
+            Form ownerForm = owner as Form;
+            if (ownerForm == null && owner is Control) ownerForm = ((Control)owner).FindForm();
+            Form dim = null;
+            try
+            {
+                if (ownerForm != null && ownerForm.Visible && ownerForm.WindowState != FormWindowState.Minimized)
+                {
+                    dim = new Form
+                    {
+                        FormBorderStyle = FormBorderStyle.None, ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+                        BackColor = Color.Black, Opacity = Theme.Dark ? 0.45 : 0.32, Bounds = ownerForm.RectangleToScreen(ownerForm.ClientRectangle)
+                    };
+                    dim.Show(ownerForm);
+                }
+                IWin32Window o = (IWin32Window)dim ?? ownerForm;
+                if (o != null) dialog.StartPosition = FormStartPosition.CenterParent;
+                return o != null ? dialog.ShowDialog(o) : dialog.ShowDialog();
+            }
+            finally
+            {
+                if (dim != null) { dim.Close(); dim.Dispose(); }
+                if (ownerForm != null) try { ownerForm.Activate(); } catch { }
+            }
+        }
+
+        static bool Show(IWin32Window owner, string title, string message, string yes, string no, AskKind kind, Action<AskForm> setup)
         {
             Form ownerForm = owner as Form;
             if (ownerForm == null && owner is Control) ownerForm = ((Control)owner).FindForm();
@@ -41,6 +86,7 @@ namespace FileConverter
                 }
                 using (AskForm f = new AskForm(title, message, yes, no, kind))
                 {
+                    if (setup != null) setup(f);
                     IWin32Window o = (IWin32Window)dim ?? ownerForm;
                     if (o != null) f.StartPosition = FormStartPosition.CenterParent;
                     return (o != null ? f.ShowDialog(o) : f.ShowDialog()) == DialogResult.Yes;
@@ -59,6 +105,8 @@ namespace FileConverter
         readonly string title, message; readonly AskKind kind;
         readonly Btn bYes, bNo;
         Rectangle iconR, titleR, msgR;
+        TextField input; Btn link;
+        public string InputText { get { return input != null ? input.Box.Text.Trim() : null; } }
 
         [DllImport("gdi32.dll")] static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
 
@@ -108,6 +156,30 @@ namespace FileConverter
         }
 
         Rectangle Mirror(Rectangle r) { return Theme.Mirror(r, ClientSize.Width); }
+
+        /// Adds a text box under the message (the window grows to fit) and an optional link at the bottom.
+        public void AddInput(string value, string placeholder, string linkText, string linkUrl)
+        {
+            int extra = Theme.S(54);
+            int W = ClientSize.Width, pad = Theme.S(28);
+            ClientSize = new Size(W, ClientSize.Height + extra);
+            foreach (Control c in new Control[] { bYes, bNo }) if (c != null) c.Top += extra;
+            input = new TextField(() => placeholder ?? "", null) { ForceLtr = true, Surface = Surface.Card };
+            input.Box.Text = value;
+            input.Bounds = Mirror(new Rectangle(msgR.X, msgR.Bottom + Theme.S(12), msgR.Width, Theme.S(40)));
+            Controls.Add(input);
+            if (!string.IsNullOrEmpty(linkText))
+            {
+                link = new Btn(() => linkText, Ico.Open, BtnKind.Ghost) { FontSize = 9f, Surface = Surface.Card };
+                int lw = link.PreferredWidth;
+                link.Bounds = Mirror(new Rectangle(pad - Theme.S(8), bYes.Top + (bYes.Height - Theme.S(34)) / 2, lw, Theme.S(34)));
+                link.Click += (s, e) => { try { System.Diagnostics.Process.Start(linkUrl); } catch { } };
+                Controls.Add(link);
+            }
+            Shown += (s, e) => { input.Box.Focus(); input.Box.SelectAll(); };
+            AcceptButton = null;
+            input.Box.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; DialogResult = DialogResult.Yes; Close(); } };
+        }
 
         protected override CreateParams CreateParams
         {

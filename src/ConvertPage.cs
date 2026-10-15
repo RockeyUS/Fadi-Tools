@@ -14,7 +14,9 @@ namespace FileConverter
         Btn btnAdd, btnClear, btnConvert, btnOpen, btnDocs, btnView;
         FileList list;
         DropZone drop;
-        Segments tabs, quality;
+        Segments tabs, quality, stickerFor;
+        static readonly string[] StickerKeys = { "wa", "tg", "dc", "emoji" };
+        bool Sticker { get { return chips.Selected == "sticker"; } }
         ChipGrid chips;
         FolderButton folder;
         Progress progress;
@@ -39,17 +41,20 @@ namespace FileConverter
             list.Changed += () => UpdateState();
             list.Opened += OpenItem;
 
-            drop = new DropZone(() => L.T("drop_title"), () => L.T("drop_sub"));
+            drop = new DropZone(() => L.T("drop_title"), () => L.T("drop_sub")) { Tips = new[] { "tip_menu", "tip_drag_out", "tip_palette" } };
             drop.Click += (s, e) => Browse();
 
             List<Func<string>> tabLabels = new List<Func<string>>();
             foreach (string k in Formats.TabKeys) { string key = k; tabLabels.Add(() => L.T(key)); }
             tabs = new Segments(tabLabels.ToArray());
             tabs.FontSize = 9f;
+            tabs.FadeTarget = this;
+            tabs.FadeArea = () => new Rectangle(0, tabs.Bottom + Theme.S(2), Width, Math.Max(0, Height - tabs.Bottom - Theme.S(2)));
             tabs.SelectedChanged += (s, e) => { chips.SetItems(Formats.Targets[tabs.SelectedIndex], chips.Selected); DoLayout(); UpdateState(); };
             tabs.MouseClick += (s, e) => userPicked = true;
 
             chips = new ChipGrid();
+            chips.LabelOf = k => k == "sticker" ? L.T("st_chip") : k.ToUpperInvariant();
             chips.SetItems(Formats.Targets[0], "jpg");
             chips.MouseClick += (s, e) => userPicked = true;
             chips.SelectedChanged += (s, e) => UpdateState();
@@ -59,6 +64,10 @@ namespace FileConverter
             int q; int.TryParse(Settings.Get("Quality", "1"), out q);
             quality.SetSilently(Math.Max(0, Math.Min(2, q)));
             quality.SelectedChanged += (s, e) => Settings.Set("Quality", quality.SelectedIndex.ToString());
+            stickerFor = new Segments(() => "WhatsApp", () => "Telegram", () => "Discord", () => L.T("st_emoji")) { FontSize = 8.75f };
+            int sf; int.TryParse(Settings.Get("StickerFor", "0"), out sf);
+            stickerFor.SetSilently(Math.Max(0, Math.Min(3, sf)));
+            stickerFor.SelectedChanged += (s, e) => { Settings.Set("StickerFor", stickerFor.SelectedIndex.ToString()); Invalidate(); };
 
             btnDocs = new Btn(() => L.T("enable_docs"), Ico.Download, BtnKind.Secondary);
             btnDocs.Click += (s, e) => LibreOffice.Enable(this, ok => { UpdateState(); if (ok) ShowToast(L.T("docs_ready"), true, null, null); });
@@ -67,13 +76,13 @@ namespace FileConverter
             folder.Picked += (s, e) => UpdateState();
 
             progress = new Progress();
-            btnConvert = new Btn(() => running ? L.T("cancel") : (list.Items.Count == 0 ? L.T("convert") : L.T("convert_btn", (chips.Selected ?? "").ToUpperInvariant())), Ico.Sync, BtnKind.Primary);
+            btnConvert = new Btn(() => running ? L.T("cancel") : (list.Items.Count == 0 ? L.T("convert") : Sticker ? L.T("st_make") : L.T("convert_btn", (chips.Selected ?? "").ToUpperInvariant())), Ico.Sync, BtnKind.Primary);
             btnConvert.Click += (s, e) => { if (running) { cancel = true; SetStatus(L.T("cancelling"), Theme.InkSoft); } else Start(); };
             btnOpen = new Btn(() => doneCount == 1 ? L.T("show_file") : L.T("open_folder"), Ico.FolderOpen, BtnKind.Secondary);
             btnOpen.Visible = false;
             btnOpen.Click += (s, e) => OpenOutput();
 
-            Controls.AddRange(new Control[] { btnAdd, btnClear, btnView, list, drop, tabs, chips, quality, btnDocs, folder, progress, btnConvert, btnOpen });
+            Controls.AddRange(new Control[] { btnAdd, btnClear, btnView, list, drop, tabs, chips, quality, stickerFor, btnDocs, folder, progress, btnConvert, btnOpen });
             EnableDrop(list, drop);
             UpdateState();
         }
@@ -115,6 +124,7 @@ namespace FileConverter
             y += chips.NeededHeight(10) + Theme.S(compact ? 14 : 20);
             qualityR = new Rectangle(x, y, w, Theme.S(24));
             Place(quality, new Rectangle(x, y + Theme.S(28), w, Theme.S(34)));
+            Place(stickerFor, new Rectangle(x, y + Theme.S(28), w, Theme.S(34)));
             Place(btnDocs, new Rectangle(x, y + Theme.S(28), w, Theme.S(36)));
             y += Theme.S(28) + Theme.S(34) + Theme.S(compact ? 14 : 22);
             saveToR = new Rectangle(x, y, w, Theme.S(24)); y += Theme.S(28);
@@ -141,7 +151,8 @@ namespace FileConverter
             Label(g, CountText(), Theme.F(9f), Theme.InkFaint, cr);
             using (Pen lp = new Pen(Theme.Line)) { Rectangle l = M(new Rectangle(left.X + Theme.S(20), left.Y + Theme.S(60), left.Width - Theme.S(40), 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
             Label(g, L.T("convert_to"), Theme.F(12.5f, FontStyle.Bold), Theme.Ink, convToR);
-            Label(g, IsMediaTab ? L.T("quality") : L.T("documents_engine"), Theme.F(10f, FontStyle.Bold), Theme.Ink, qualityR);
+            Label(g, Sticker ? L.T("st_for") : IsMediaTab ? L.T("quality") : L.T("documents_engine"), Theme.F(10f, FontStyle.Bold), Theme.Ink, qualityR);
+            if (Sticker && string.IsNullOrEmpty(statusText)) Label(g, L.T("st_note_" + StickerKeys[stickerFor.SelectedIndex]), Theme.F(9f), Theme.InkFaint, statusR, Align.Start, false, true);
             if (!IsMediaTab && !btnDocs.Visible) Label(g, L.T("docs_ok"), Theme.F(9f), Theme.Success, new Rectangle(qualityR.X, qualityR.Y + Theme.S(28), qualityR.Width, Theme.S(34)), Align.Start, true, true);
             Label(g, L.T("save_to"), Theme.F(10f, FontStyle.Bold), Theme.Ink, saveToR);
             Label(g, statusText, Theme.F(9.25f), statusColor, statusR, Align.Start, false, true);
@@ -165,8 +176,9 @@ namespace FileConverter
             btnClear.Visible = !empty;
             DoLayout();
             btnClear.Enabled = !running; btnAdd.Enabled = !running;
-            tabs.Enabled = chips.Enabled = quality.Enabled = folder.Enabled = !running;
-            quality.Visible = IsMediaTab;
+            tabs.Enabled = chips.Enabled = quality.Enabled = stickerFor.Enabled = folder.Enabled = !running;
+            quality.Visible = IsMediaTab && !Sticker;
+            stickerFor.Visible = Sticker;
             btnDocs.Visible = !IsMediaTab && Tools.Soffice == null;
             btnConvert.Enabled = running || !empty;
             btnConvert.Kind = running ? BtnKind.Secondary : BtnKind.Primary;
@@ -190,7 +202,7 @@ namespace FileConverter
                 d.Multiselect = true;
                 d.Title = L.T("choose_files");
                 d.Filter = L.T("all_files") + " (*.*)|*.*";
-                if (d.ShowDialog(FindForm()) == DialogResult.OK) AcceptFiles(d.FileNames);
+                if (LastDir.Show(d, FindForm(), "convert") == DialogResult.OK) AcceptFiles(d.FileNames);
             }
         }
 
@@ -257,10 +269,12 @@ namespace FileConverter
         {
             if (list.Items.Count == 0 || chips.Selected == null) return;
             string target = chips.Selected;
+            if (target == "sticker") target = "sticker-" + StickerKeys[stickerFor.SelectedIndex];
             string outDir, single = null;
             if (list.Items.Count == 1 && SaveAsk.Enabled)
             {
-                single = SaveAsk.File(FindForm(), Path.GetFileNameWithoutExtension(list.Items[0].Path) + "." + target, target);
+                string sx = target.StartsWith("sticker-") ? Stickers.ExtFor(target.Substring(8), list.Items[0].Path) : target;
+                single = SaveAsk.File(FindForm(), Path.GetFileNameWithoutExtension(list.Items[0].Path) + "." + sx, sx);
                 if (single == null) return;
                 outDir = SaveAsk.Scratch();
             }
@@ -278,7 +292,7 @@ namespace FileConverter
             btnOpen.Visible = false; progress.Value = 0;
             DoLayout(); UpdateState();
             SetStatus(L.T("starting"), Theme.InkSoft);
-            act = Activity.Begin(this, L.T("act_k_convert", target.ToUpperInvariant()), items.Count == 1 ? items[0].Name : L.T("n_files", items.Count), () => cancel = true);
+            act = Activity.Begin(this, target.StartsWith("sticker-") ? L.T("st_make") : L.T("act_k_convert", target.ToUpperInvariant()), items.Count == 1 ? items[0].Name : L.T("n_files", items.Count), () => cancel = true);
             Thread t = new Thread(() => Worker(items, target, outDir, q, single));
             t.IsBackground = true;
             t.Start();

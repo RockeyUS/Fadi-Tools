@@ -516,6 +516,8 @@ namespace FileConverter
             bIcon = new Btn(() => L.T("re_save_icon"), Ico.Photo, BtnKind.Secondary) { Visible = false };
             bIcon.Click += (s, e) => SaveIcon();
             path.Box.TextChanged += (s, e) => RefreshChoices();
+            view.FadeTarget = this;
+            view.FadeArea = () => output.Bounds;
             view.SelectedChanged += (s, e) => ShowOutput();
             view.Visible = false;
             output.Font = Theme.Mono(9.5f);
@@ -552,7 +554,7 @@ namespace FileConverter
             {
                 d.Title = L.T("re_pick_file");
                 d.Filter = L.T("re_filter") + "|*.exe;*.dll;*.asar;*.har;*.apk;*.sys;*.ocx|" + L.T("all_files") + "|*.*";
-                if (d.ShowDialog(FindForm()) == DialogResult.OK) SetTarget(d.FileName);
+                if (LastDir.Show(d, FindForm(), "re") == DialogResult.OK) SetTarget(d.FileName);
             }
         }
 

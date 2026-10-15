@@ -448,7 +448,7 @@ namespace FileConverter
 
         public TrimPage() : base("studio_title", "studio_sub")
         {
-            drop = new DropZone(() => L.T("studio_drop"), () => L.T("studio_drop_sub"));
+            drop = new DropZone(() => L.T("studio_drop"), () => L.T("studio_drop_sub")) { Tips = new[] { "tip_studio_layer", "tip_studio_pdf", "tip_ocr", "tip_ctrl_tab" } };
             drop.Glyph = Ico.Video;
             drop.Click += (s, e) => Browse(false);
             view = new ImageCanvas { Dark = true };
@@ -614,7 +614,7 @@ namespace FileConverter
             EnableDrop(drop, view, timeline);
             ShowEmpty(true);
             InitProjects();
-            InitTimedText();
+            InitTimedText(); InitVideoBg();
             InitCaptions();
         }
 
@@ -703,6 +703,7 @@ namespace FileConverter
             return y;
         }
 
+        Rectangle fxBgLblR;
         int EffectsLayout(int y, int w)
         {
             int x = editor.Pad, lw = Theme.S(78), rh = Theme.S(34);
@@ -771,7 +772,12 @@ namespace FileConverter
                 fxSaveAsR = new Rectangle(x, y, w, Theme.S(20)); y += Theme.S(26);
                 saveAs.Visible = true;
                 editor.BodyPlace(saveAs, new Rectangle(x, y, w, rh)); y += Theme.S(48);
+                // the background, taken out frame by frame
+                fxBgLblR = new Rectangle(x, y, w, Theme.S(20)); y += Theme.S(26);
+                btnVbg.Visible = true; btnVbg.Enabled = !running;
+                editor.BodyPlace(btnVbg, new Rectangle(x, y, w, Theme.S(38))); y += Theme.S(48);
             }
+            else fxBgLblR = Rectangle.Empty;
             editor.BodyPlace(btnFxPreview, new Rectangle(x, y, w, Theme.S(40))); y += Theme.S(48);
             return y;
         }
@@ -797,6 +803,7 @@ namespace FileConverter
             if (!fxSubsNameR.IsEmpty) NameChip(g, m(fxSubsNameR), subsAuto ? "\uE8BE" : Ico.Text, subsAuto ? L.T("cap_chip") : Path.GetFileName(subsFile));
             if (!fxSubsHintR.IsEmpty) Theme.Text(g, L.T("fx_subs_hint", editor.TextFont), Theme.F(8.5f), Theme.InkFaint, m(fxSubsHintR), Align.Start, false, true);
             if (!fxSaveAsR.IsEmpty) Theme.Text(g, L.T("fx_save_as"), lf, Theme.InkSoft, m(fxSaveAsR), Align.Start);
+            if (!fxBgLblR.IsEmpty) Theme.Text(g, L.T("vbg_lbl"), lf, Theme.InkSoft, m(fxBgLblR), Align.Start);
         }
 
         static void NameChip(Graphics g, Rectangle r, string glyph, string name)
@@ -829,7 +836,7 @@ namespace FileConverter
             {
                 d.Title = L.T("fx_add_music");
                 d.Filter = L.T("media_files") + "|*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.opus;*.flac;*.wma;*.aiff;*.mp4;*.mkv;*.mov;*.webm|" + L.T("all_files") + "|*.*";
-                if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
+                if (LastDir.Show(d, FindForm(), "video") != DialogResult.OK) return;
                 musicFile = d.FileName;
             }
             FxChanged(); editor.DoLayout();
@@ -841,7 +848,7 @@ namespace FileConverter
             {
                 d.Title = L.T("fx_add_subs");
                 d.Filter = L.T("fx_subs_files") + "|*.srt;*.ass;*.ssa;*.vtt|" + L.T("all_files") + "|*.*";
-                if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
+                if (LastDir.Show(d, FindForm(), "video") != DialogResult.OK) return;
                 subsFile = d.FileName;
             }
             FxChanged(); editor.DoLayout();
@@ -908,7 +915,7 @@ namespace FileConverter
                 string media = "*.mp4;*.mov;*.mkv;*.avi;*.webm;*.wmv;*.m4v;*.mpg;*.mpeg;*.3gp;*.flv;*.ts;*.mts;*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.opus;*.flac;*.wma;*.aiff";
                 d.Filter = L.T("media_files") + "|" + media + (append ? "" : "|" + L.T("images") + "|" + string.Join(";", img.ToArray())) + "|" + L.T("all_files") + "|*.*";
                 d.Multiselect = append;
-                if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
+                if (LastDir.Show(d, FindForm(), "video") != DialogResult.OK) return;
                 if (append) foreach (string f in d.FileNames) Load(f, true);
                 else AcceptFiles(new[] { d.FileName });
             }

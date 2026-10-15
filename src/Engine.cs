@@ -88,6 +88,18 @@ namespace FileConverter
 
             Job job = new Job();
 
+            // ---------- stickers (WhatsApp, Telegram, Discord, emoji)
+            if (target.StartsWith("sticker-"))
+            {
+                if (cat != Category.Image && cat != Category.Video) throw Err("st_only_media");
+                string key = target.Substring(8);
+                string sx = Stickers.ExtFor(key, input);
+                job.Output = Paths.UniquePath(outDir, baseName + " " + L.T("st_suffix_" + key), sx);
+                string outp = job.Output;
+                job.Steps.Add(new JobStep { Native = () => Stickers.Make(input, key, outp, null) });
+                return job;
+            }
+
             // ---------- audio output
             if (In(AudioT, target))
             {

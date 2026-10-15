@@ -76,6 +76,11 @@ namespace FileConverter
         bool previews;
         void Repaint() { try { if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)Invalidate); } catch { } }
         public override int Count { get { return Items.Count; } }
+        protected override string[] DragFiles(int i)
+        {
+            FileItem it = Items[i];
+            return new[] { it.State == ItemState.Done && !string.IsNullOrEmpty(it.Output) && System.IO.File.Exists(it.Output) ? it.Output : it.Path };
+        }
 
         /// Column layout shared with the header row (left-to-right coordinates inside a given width).
         public static void Cols(int w, out Rectangle name, out Rectangle size, out Rectangle type, out Rectangle status, out Rectangle act)
@@ -341,7 +346,7 @@ namespace FileConverter
             btnClear.Click += (s, e) => ClearList();
             list.Changed += () => UpdateState();
             list.Opened += it => { try { Process.Start("explorer.exe", "/select,\"" + (it.Output != null && File.Exists(it.Output) ? it.Output : it.Path) + "\""); } catch { } };
-            drop = new DropZone(() => L.T("cmp_drop"), () => L.T("cmp_drop_sub"));
+            drop = new DropZone(() => L.T("cmp_drop"), () => L.T("cmp_drop_sub")) { Tips = new[] { "tip_discord", "tip_grow", "tip_drag_out", "tip_paste" } };
             drop.Glyph = "";
             drop.Click += (s, e) => Browse();
             level = new Segments(() => L.T("cmp_light"), () => L.T("cmp_balanced"), () => L.T("cmp_strong"));
@@ -584,7 +589,7 @@ namespace FileConverter
         {
             if (running) return;
             using (OpenFileDialog d = new OpenFileDialog { Multiselect = true, Title = L.T("choose_files"), Filter = L.T("all_files") + " (*.*)|*.*" })
-                if (d.ShowDialog(FindForm()) == DialogResult.OK) AcceptFiles(d.FileNames);
+                if (LastDir.Show(d, FindForm(), "compress") == DialogResult.OK) AcceptFiles(d.FileNames);
         }
 
         public override void AcceptFiles(string[] paths)

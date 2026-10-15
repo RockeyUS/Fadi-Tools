@@ -20,6 +20,8 @@ namespace FileConverter
         public static bool Dark;
         public static bool RTL;
         public static event Action Changed;
+        /// Raised just before the look (theme, language, accent) changes — the window takes a picture to fade from.
+        public static event Action Changing;
         public static void RaiseChanged() { if (Changed != null) Changed(); }
 
         static Color C(int r, int g, int b) { return Color.FromArgb(r, g, b); }
@@ -176,6 +178,7 @@ namespace FileConverter
         /// Reads theme + language from settings.
         public static void ApplySettings()
         {
+            if (Changing != null) { try { Changing(); } catch { } }
             string t = Settings.Get("Theme", "system");
             Dark = t == "dark" || (t == "system" && SystemPrefersDark());
             RTL = Settings.Get("Language", "en") == "ar";

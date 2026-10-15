@@ -11,7 +11,7 @@ namespace FileConverter
     {
         Sidebar sidebar;
         List<Page> pages = new List<Page>();
-        ConvertPage convert; StudioPage studio; DownloadPage youtube; InspectPage inspect; RePage re; CompressPage compress; PdfPage pdf; SettingsPage settings;
+        ConvertPage convert; StudioPage studio; DownloadPage youtube; InspectPage inspect; RePage re; CompressPage compress; PdfPage pdf; RenamePage rename; SettingsPage settings;
         Toast toast;
         int current = -1;
 
@@ -38,23 +38,26 @@ namespace FileConverter
             sidebar.Items.Add(new NavItem("nav_studio", Ico.Photo));
             sidebar.Items.Add(new NavItem("nav_compress", "\uE73F"));
             sidebar.Items.Add(new NavItem("nav_pdf", "\uEA90"));
+            sidebar.Items.Add(new NavItem("nav_rename", "\uE8AC"));
             sidebar.Items.Add(new NavItem("nav_download", Ico.Download));
             sidebar.Items.Add(new NavItem("nav_inspect", Ico.Search));
             sidebar.Items.Add(new NavItem("nav_re", Ico.Code));
-            sidebar.Items.Add(new NavItem("nav_settings", Ico.Settings));
+            nav.AddRange(sidebar.Items);
+            nav.Add(new NavItem("nav_settings", Ico.Settings));   // at the bottom of the side list, under Activity
             sidebar.Navigate += Go;
-            Action flipTheme = () =>
+            Bar.ThemeClicked += () =>
             {
+                // the new look grows out of the sun/moon button
+                revealAt = Bar.ThemeCenter;
                 Settings.Set("Theme", Theme.Dark ? "light" : "dark");
                 Theme.ApplySettings(); Theme.RaiseChanged();
             };
-            sidebar.ToggleTheme += flipTheme;
-            Bar.ThemeClicked += flipTheme;
-            sidebar.ToggleLanguage += () =>
+            Bar.LangClicked += () =>
             {
                 Settings.Set("Language", Theme.RTL ? "en" : "ar");
                 Theme.ApplySettings(); Theme.RaiseChanged();
             };
+            Theme.Changing += BeginLookChange;
             sidebar.OpenActivity += ShowActivity;
             sidebar.OpenSearch += ShowPalette;
             actTimer.Tick += (s, e) => PollActivity();
@@ -62,9 +65,9 @@ namespace FileConverter
 
             toast = new Toast();
             convert = new ConvertPage(); studio = new StudioPage(); youtube = new DownloadPage();
-            inspect = new InspectPage(); re = new RePage(); compress = new CompressPage(); pdf = new PdfPage(); settings = new SettingsPage();
-            pages.AddRange(new Page[] { convert, studio, compress, pdf, youtube, inspect, re, settings });
-            for (int i = 0; i < pages.Count; i++) pages[i].Glyph = sidebar.Items[i].Glyph;
+            inspect = new InspectPage(); re = new RePage(); compress = new CompressPage(); pdf = new PdfPage(); rename = new RenamePage(); settings = new SettingsPage();
+            pages.AddRange(new Page[] { convert, studio, compress, pdf, rename, youtube, inspect, re, settings });
+            for (int i = 0; i < pages.Count; i++) pages[i].Glyph = nav[i].Glyph;
             inspect.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
             inspect.SendToRe += f => { Go(pages.IndexOf(re)); re.AcceptFiles(new[] { f }); };
             studio.Photos.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
@@ -80,7 +83,9 @@ namespace FileConverter
             {
                 BeginInvoke((Action)(() =>
                 {
-                    if (Settings.Get("TourDone", "") != TourForm.Version && Environment.GetEnvironmentVariable("FADI_NO_TOUR") == null) TourForm.ShowTour(this);
+                    bool tour = false;
+                    if (Settings.Get("TourDone", "") != TourForm.Version && Environment.GetEnvironmentVariable("FADI_NO_TOUR") == null) { TourForm.ShowTour(this); tour = true; }
+                    WhatsNew.ShowIfUpdated(this, tour);
                     OfferRestore();
                     Updater.CheckInBackground(toast, this);
                 }));
@@ -90,7 +95,7 @@ namespace FileConverter
 
             int start = 0;
             int.TryParse(Settings.Get("LastPage", "0"), out start);
-            if (Settings.Get("PagesV", "") != "6") { start = 0; Settings.Set("PagesV", "6"); }   // page order changed in 5.3 (PDF tools)
+            if (Settings.Get("PagesV", "") != "7") { start = 0; Settings.Set("PagesV", "7"); }   // page order changed in 1.3 (Rename)
             if (start < 0 || start >= pages.Count || start == SettingsIndex) start = 0;
             bool hasFiles = files != null && files.Length > 0;
             if (!hasFiles) Go(start);
@@ -107,6 +112,31 @@ namespace FileConverter
         }
 
         int SettingsIndex { get { return pages.Count - 1; } }
+        readonly List<NavItem> nav = new List<NavItem>();
+
+        // ------------------------------------------------------------------ light/dark and language changes, animated
+        PageFader lookFader;
+        Point? revealAt;
+
+        /// Called just before the theme or language changes: holds a picture of the window as it looks now,
+        /// then (once everything has been redrawn the new way) fades — or, for the light/dark button, grows — into the new look.
+        void BeginLookChange()
+        {
+            Point? from = revealAt; revealAt = null;
+            if (!Visible || WindowState == FormWindowState.Minimized || !IsHandleCreated || (lookFader != null && lookFader.Visible)) return;
+            Bitmap before = Fx.SnapWindow(this);
+            if (before == null) return;
+            if (lookFader == null) { lookFader = new PageFader(); Controls.Add(lookFader); }
+            lookFader.Bounds = ClientRectangle;
+            lookFader.RevealFrom = from;
+            lookFader.Frames = from.HasValue ? 30 : 18;
+            lookFader.Hold(before);
+            BeginInvoke((Action)(() =>
+            {
+                lookFader.Bounds = ClientRectangle;
+                lookFader.Run(before, Fx.SnapWindow(this), 0);
+            }));
+        }
 
         /// The app closed before some Studio work was saved (crash, power cut): offer to bring it back.
         void OfferRestore()
@@ -224,7 +254,7 @@ namespace FileConverter
             for (int i = 0; i < pages.Count; i++)
             {
                 int k = i;
-                l.Add(new PaletteItem { Group = gp, Title = L.T(sidebar.Items[i].Key), Sub = L.T(pages[i].SubKey), Glyph = sidebar.Items[i].Glyph, Words = L.Both(sidebar.Items[i].Key) + " " + L.Both(pages[i].SubKey), Run = () => Go(k) });
+                l.Add(new PaletteItem { Group = gp, Title = L.T(nav[i].Key), Sub = L.T(pages[i].SubKey), Glyph = nav[i].Glyph, Words = L.Both(nav[i].Key) + " " + L.Both(pages[i].SubKey), Run = () => Go(k) });
             }
             Action<string, string, string, Action> add = (key, glyph, words, run) => l.Add(new PaletteItem { Group = ga, Title = L.T(key), Glyph = glyph, Words = L.Both(key) + " " + (words ?? ""), Run = run });
             add("pal_convert", Ico.Sync, "convert change format mp3 mp4 pdf jpg png تحويل صيغة", () => { Go(pages.IndexOf(convert)); convert.Browse(); });
@@ -250,6 +280,11 @@ namespace FileConverter
             add("pal_pdf_split", "\uE8C9", "split pdf extract pages separate تقسيم استخراج صفحات", () => { Go(pages.IndexOf(pdf)); pdf.StartMode(1, true); });
             add("pal_pdf_images", Ico.Photo, "pdf to jpg png images pictures export صور", () => { Go(pages.IndexOf(pdf)); pdf.StartMode(1, true); });
             add("pal_ocr", "\uE8EF", "ocr copy text from picture image screenshot read scan نسخ نص من صورة لقطة شاشة", () => { Go(pages.IndexOf(studio)); studio.Show(studio.Photos); studio.Photos.CopyText(); });
+            add("pal_rename", "\uE8AC", "rename batch many files names numbers numbered replace إعادة تسمية ملفات أسماء ترقيم", () => { Go(pages.IndexOf(rename)); rename.Browse(); });
+            add("pal_vbg", "\uE77B", "remove video background green screen cut out person transparent إزالة خلفية الفيديو شاشة خضراء", () => { Go(pages.IndexOf(studio)); studio.Show(studio.Videos); if (studio.Videos.HasFile) studio.Videos.RemoveVideoBg(); else studio.Videos.Browse(false); });
+            add("pal_sticker", "\uE899", "sticker whatsapp telegram discord emoji ملصق واتساب تيليجرام ديسكورد", () => { Go(pages.IndexOf(convert)); convert.Browse(); });
+            add("pal_pdf_sign", "\uEC87", "sign pdf signature watermark page numbers password lock unlock توقيع علامة مائية ترقيم كلمة مرور قفل", () => { Go(pages.IndexOf(pdf)); pdf.StartMode(1, true); });
+            add("pal_whatsnew", "\uE789", "what's new changes update version changelog الجديد التغييرات تحديث", () => WhatsNew.Show(this));
             add("pal_download", Ico.Download, "download youtube tiktok instagram link url video تنزيل يوتيوب رابط", () => { Go(pages.IndexOf(youtube)); youtube.FocusLink(); });
             add("pal_inspect", Ico.Search, "inspect file type hex checksum فحص ملف", () => { Go(pages.IndexOf(inspect)); inspect.Browse(); });
             add("pal_re", Ico.Code, "reverse engineer exe dll analyse program هندسة عكسية برنامج", () => Go(pages.IndexOf(re)));
@@ -354,6 +389,19 @@ namespace FileConverter
                         pages[current].AcceptFiles(a);
                         return true;
                     }
+                    else if (Clipboard.ContainsText() && !Clipboard.ContainsImage())
+                    {
+                        string t = Clipboard.GetText().Trim();
+                        // a copied link on the Download page; "Copy as path" from Explorer anywhere else
+                        if (pages[current] == youtube) { youtube.FocusLink(); return true; }
+                        List<string> found = new List<string>();
+                        foreach (string line in t.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            string f = line.Trim().Trim('"');
+                            try { if (f.Length > 3 && f.Length < 400 && System.IO.File.Exists(f)) found.Add(f); } catch { }
+                        }
+                        if (found.Count > 0) { pages[current].AcceptFiles(found.ToArray()); return true; }
+                    }
                     else if (Clipboard.ContainsImage())
                     {
                         // a copied picture (screenshot, image from a browser...): save it and open it here
@@ -395,6 +443,7 @@ namespace FileConverter
             Notifier.Dispose();
             if (busy) { Tools.ShuttingDown = true; Thread.Sleep(600); }
             Theme.Changed -= OnThemeChanged;
+            Theme.Changing -= BeginLookChange;
             base.OnFormClosing(e);
         }
     }

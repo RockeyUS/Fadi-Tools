@@ -35,6 +35,11 @@ namespace FileConverter
         bool previews;
         void Repaint() { try { if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)Invalidate); } catch { } }
         public override int Count { get { return Items.Count; } }
+        protected override string[] DragFiles(int i)
+        {
+            FileItem it = Items[i];
+            return new[] { it.State == ItemState.Done && !string.IsNullOrEmpty(it.Output) && System.IO.File.Exists(it.Output) ? it.Output : it.Path };
+        }
 
         Rectangle XRect(Rectangle r)
         {

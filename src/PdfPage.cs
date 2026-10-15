@@ -76,6 +76,39 @@ namespace FileConverter
             return Tools.LastLines(o ?? "", 2);
         }
 
+        /// 0 = needs a password to open, 3 = locked against changes only (opens without one), 2 = not locked.
+        public static int Lock(string pdf)
+        {
+            string exe = Exe;
+            if (exe == null) return 2;
+            string o;
+            try { return Tools.RunHidden(exe, "--requires-password " + Tools.Quote(pdf), 60000, out o); } catch { return 2; }
+        }
+
+        /// A quick look for "/Encrypt" near the start and the end of the file (where PDFs say they're locked).
+        public static bool LooksLocked(string pdf)
+        {
+            try
+            {
+                using (FileStream fs = new FileStream(pdf, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    int n = (int)Math.Min(fs.Length, 256 * 1024);
+                    byte[] a = new byte[n];
+                    fs.Read(a, 0, n);
+                    string head = Encoding.GetEncoding(28591).GetString(a);
+                    if (head.Contains("/Encrypt")) return true;
+                    if (fs.Length > n)
+                    {
+                        fs.Seek(-n, SeekOrigin.End);
+                        fs.Read(a, 0, n);
+                        return Encoding.GetEncoding(28591).GetString(a).Contains("/Encrypt");
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
         /// Page count (qpdf when available, otherwise a quick look inside the file). -1 = unknown.
         public static int Pages(string pdf)
         {
@@ -500,6 +533,11 @@ namespace FileConverter
         readonly PageGrid grid = new PageGrid();
         readonly DropZone dropC, dropP;
         readonly Btn bAdd, bClear, bOpen, bGo, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bShow;
+        readonly Btn bLock, bNums, bMark, bSign;
+        readonly ToolTip tips = new ToolTip();
+        Rectangle stampCard, stampLblR;
+        string shownPath;      // the file as it's called (pdfPath can be an unlocked copy of it)
+        bool pdfLocked;        // it had a password: saving makes a copy without one
         readonly Segments pageSize, imgFmt;
         readonly Progress progress = new Progress { Visible = false };
         Rectangle left, opts, more, headR, modeR, optLblR, optHintR, selLblR, moreLblR, fmtLblR, statusR, infoR;
@@ -515,11 +553,13 @@ namespace FileConverter
             mode.FontSize = 9.25f;
             int m0; int.TryParse(Settings.Get("PdfMode", "0"), out m0);
             mode.SetSilently(Math.Max(0, Math.Min(1, m0)));
+            mode.FadeTarget = this;
+            mode.FadeArea = () => new Rectangle(0, mode.Bottom + Theme.S(4), Width, Math.Max(0, Height - mode.Bottom - Theme.S(4)));
             mode.SelectedChanged += (s, e) => { Settings.Set("PdfMode", mode.SelectedIndex.ToString()); SetStatus("", Theme.InkSoft); UpdateState(); };
 
-            dropC = new DropZone(() => L.T("pdf_drop_c"), () => L.T("pdf_drop_c_sub")) { Glyph = "" };
+            dropC = new DropZone(() => L.T("pdf_drop_c"), () => L.T("pdf_drop_c_sub")) { Glyph = "", Tips = new[] { "tip_pdf_order", "tip_pdf_sign", "tip_paste" } };
             dropC.Click += (s, e) => BrowseCombine();
-            dropP = new DropZone(() => L.T("pdf_drop_p"), () => L.T("pdf_drop_p_sub")) { Glyph = "" };
+            dropP = new DropZone(() => L.T("pdf_drop_p"), () => L.T("pdf_drop_p_sub")) { Glyph = "", Tips = new[] { "tip_pdf_sign", "tip_palette" } };
             dropP.Click += (s, e) => BrowsePdf();
             list.Changed += () => UpdateState();
             grid.Changed += () => UpdateState();
@@ -542,6 +582,12 @@ namespace FileConverter
             bExtract = Tool("pdf_extract", "", () => Export(1));
             bSplit = Tool("pdf_split", "", () => Export(2));
             bImages = Tool("pdf_images", Ico.Photo, () => Export(3));
+            bLock = Tool("pdf_lock", "\uE72E", LockOrUnlock);
+            bLock.Label = () => L.T(pdfLocked ? "pdf_unlock" : "pdf_lock");
+            bNums = Tool("pdf_nums", "\uE8EF", AddNumbers);
+            bMark = Tool("pdf_mark", "\uE790", AddWatermark);
+            bSign = Tool("pdf_sign", "\uEC87", SignIt);
+            foreach (Btn b in new[] { bLock, bNums, bMark, bSign }) { Btn k = b; k.MouseEnter += (s, e) => tips.SetToolTip(k, k.Caption); }
             bShow = new Btn(() => L.T("show_file"), Ico.FolderOpen, BtnKind.Ghost) { AlignStart = true, Visible = false };
             bShow.Click += (s, e) => ActivityRows.ShowOutput(lastOutput);
             pageSize = new Segments(() => "A4", () => "Letter", () => L.T("pdf_size_photo"));
@@ -554,7 +600,7 @@ namespace FileConverter
             imgFmt.SetSilently(Settings.Get("PdfImgFmt", "jpg") == "png" ? 1 : 0);
             imgFmt.SelectedChanged += (s, e) => Settings.Set("PdfImgFmt", imgFmt.SelectedIndex == 1 ? "png" : "jpg");
 
-            Controls.AddRange(new Control[] { mode, list, grid, dropC, dropP, bAdd, bClear, bOpen, bGo, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bShow, pageSize, imgFmt, progress });
+            Controls.AddRange(new Control[] { mode, list, grid, dropC, dropP, bAdd, bClear, bOpen, bGo, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bShow, pageSize, imgFmt, progress, bLock, bNums, bMark, bSign });
             EnableDrop(list, grid, dropC, dropP);
             UpdateState();
         }
@@ -609,7 +655,7 @@ namespace FileConverter
             loadToken++;
             foreach (PdfPageItem p in grid.Pages) if (p.Thumb != null) p.Thumb.Dispose();
             grid.Pages.Clear(); grid.Invalidate();
-            pdfPath = null; pdfPages = 0; created = 0;
+            pdfPath = null; shownPath = null; pdfLocked = false; pdfPages = 0; created = 0;
             if (thumbsDir != null) { string d = thumbsDir; ThreadPool.QueueUserWorkItem(_ => { try { Directory.Delete(d, true); } catch { } }); thumbsDir = null; }
         }
 
@@ -648,7 +694,8 @@ namespace FileConverter
             }
             else statusR = Rectangle.Empty;
             int oy = y + Theme.S(16);
-            foreach (Control k in new Control[] { pageSize, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, imgFmt }) k.Visible = false;
+            foreach (Control k in new Control[] { pageSize, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, imgFmt, bLock, bNums, bMark, bSign }) k.Visible = false;
+            stampCard = Rectangle.Empty;
             if (c)
             {
                 optLblR = new Rectangle(x, oy, cw, Theme.S(18)); oy += Theme.S(24);
@@ -685,6 +732,29 @@ namespace FileConverter
                     imgFmt.Visible = true; Place(imgFmt, new Rectangle(x + cw / 2, by + Theme.S(4), cw / 2, Theme.S(32))); by += Theme.S(44);
                     more = new Rectangle(rx, my, w, by - my);
                     if (more.Bottom < H - p) cards.Add(more);
+                    // protect & stamp: 2 × 2 with words when there's room, one row of icons when the window is short
+                    int sy = more.Bottom + gap;
+                    Btn[] st = { bLock, bNums, bMark, bSign };
+                    bool roomy = sy + Theme.S(42) + Theme.S(38) * 2 + Theme.S(10) <= H - p;
+                    stampLblR = new Rectangle(x, sy + Theme.S(16), cw, Theme.S(18));
+                    int half = (w - Theme.S(16) - Theme.S(4)) / 2, qw = (w - Theme.S(16) - Theme.S(12)) / 4;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        Btn b = st[i]; b.Visible = true;
+                        if (roomy)
+                        {
+                            b.Label = i == 0 ? (Func<string>)(() => L.T(pdfLocked ? "pdf_unlock" : "pdf_lock")) : i == 1 ? (Func<string>)(() => L.T("pdf_nums")) : i == 2 ? (Func<string>)(() => L.T("pdf_mark")) : () => L.T("pdf_sign");
+                            b.AlignStart = true;
+                            Place(b, new Rectangle(rx + Theme.S(8) + (i % 2) * (half + Theme.S(4)), sy + Theme.S(42) + (i / 2) * Theme.S(38), half, Theme.S(36)));
+                        }
+                        else
+                        {
+                            b.Label = () => ""; b.AlignStart = false;
+                            Place(b, new Rectangle(rx + Theme.S(8) + i * (qw + Theme.S(4)), sy + Theme.S(42), qw, Theme.S(36)));
+                        }
+                    }
+                    stampCard = new Rectangle(rx, sy, w, Theme.S(42) + (roomy ? Theme.S(76) : Theme.S(38)) + Theme.S(8));
+                    if (stampCard.Bottom <= H - p + Theme.S(4)) cards.Add(stampCard);
                 }
                 else more = Rectangle.Empty;
             }
@@ -714,7 +784,7 @@ namespace FileConverter
             }
             else if (!c && pdfPath != null)
             {
-                info = Path.GetFileName(pdfPath) + "  ·  " + (grid.Pages.Count == 1 ? L.T("pdf_one_page") : L.T("pdf_n_pages", grid.Pages.Count)) + (Edited ? "  ·  " + L.T("pdf_edited") : "") + "  ·  " + L.T("pdf_grid_hint");
+                info = Path.GetFileName(shownPath ?? pdfPath) + (pdfLocked ? "  ·  " + L.T("pdf_unlocked_note") : "") + "  ·  " + (grid.Pages.Count == 1 ? L.T("pdf_one_page") : L.T("pdf_n_pages", grid.Pages.Count)) + (Edited ? "  ·  " + L.T("pdf_edited") : "") + "  ·  " + L.T("pdf_grid_hint");
             }
             if (info.Length > 0) Label(g, info, Theme.F(8.75f), Theme.InkSoft, infoR, Align.Start, true, false);
             if (c)
@@ -732,6 +802,7 @@ namespace FileConverter
                     Caps(g, this, L.T("pdf_more_lbl"), moreLblR, m);
                     Label(g, L.T("pdf_pics_as"), Theme.F(8.75f), Theme.InkSoft, fmtLblR);
                 }
+                if (!stampCard.IsEmpty) Caps(g, this, L.T("pdf_stamp_lbl"), stampLblR, m);
             }
             if (!statusR.IsEmpty) Label(g, statusText, Theme.F(9f), statusColor, statusR, Align.Start, false, true);
         }
@@ -752,7 +823,7 @@ namespace FileConverter
             bDel.Enabled = sel > 0 && sel < grid.Pages.Count && !running;
             bExtract.Enabled = sel > 0 && !running;
             bAll.Label = () => grid.SelectedCount == grid.Pages.Count && grid.Pages.Count > 0 ? L.T("pdf_select_none") : L.T("pdf_select_all");
-            foreach (Btn b in new[] { bAll, bReset, bSplit, bImages, bAdd, bOpen, bClear }) b.Enabled = !running;
+            foreach (Btn b in new[] { bAll, bReset, bSplit, bImages, bAdd, bOpen, bClear, bLock, bNums, bMark, bSign }) b.Enabled = !running;
             pageSize.Enabled = imgFmt.Enabled = !running;
             DoLayout();
             foreach (Control k in Controls) k.Invalidate();
@@ -776,7 +847,7 @@ namespace FileConverter
                 List<string> pats = new List<string> { "*.pdf" };
                 foreach (string e in Formats.ImageExt) if (e != "pdf") pats.Add("*." + e);
                 d.Filter = L.T("pdf_and_photos") + "|" + string.Join(";", pats.ToArray()) + "|" + L.T("all_files") + "|*.*";
-                if (d.ShowDialog(FindForm()) == DialogResult.OK) AddCombine(d.FileNames);
+                if (LastDir.Show(d, FindForm(), "pdf") == DialogResult.OK) AddCombine(d.FileNames);
             }
         }
 
@@ -784,7 +855,7 @@ namespace FileConverter
         {
             if (running) return;
             using (OpenFileDialog d = new OpenFileDialog { Title = L.T("pdf_drop_p"), Filter = "PDF|*.pdf|" + L.T("all_files") + "|*.*" })
-                if (d.ShowDialog(FindForm()) == DialogResult.OK) OpenPdf(d.FileName);
+                if (LastDir.Show(d, FindForm(), "pdf") == DialogResult.OK) OpenPdf(d.FileName);
         }
 
         public override void AcceptFiles(string[] paths)
@@ -834,9 +905,12 @@ namespace FileConverter
         public void OpenPdf(string path)
         {
             if (running || !File.Exists(path)) return;
+            bool locked = Qpdf.LooksLocked(path);
+            if (locked && !Qpdf.Ready && !Ask.Confirm(FindForm(), L.T("pdf_need_title"), L.T("pdf_need_unlock"), L.T("install"), L.T("not_now"), AskKind.Info)) return;
             if (Combine) mode.SetSilently(1);
             ClosePdf();
             pdfPath = Path.GetFullPath(path);
+            shownPath = pdfPath;
             lastOutput = null; bShow.Visible = false;
             int token = ++loadToken;
             thumbsDir = Path.Combine(Path.GetTempPath(), "FadiPdf_" + Guid.NewGuid().ToString("N").Substring(0, 10));
@@ -848,6 +922,15 @@ namespace FileConverter
                 string err = null;
                 try
                 {
+                    if (locked)
+                    {
+                        // a locked PDF: open an unlocked copy (asks for the password when it needs one)
+                        Directory.CreateDirectory(dir);
+                        EnsureQpdfInWorker(null);
+                        string open = Unlock(pdf, Path.Combine(dir, "unlocked.pdf"), token);
+                        if (open == null) { Post(() => { if (token == loadToken) { ClosePdf(); SetStatus(L.T("pdf_unlock_cancel"), Theme.InkSoft); UpdateState(); } }); return; }
+                        if (open != pdf) { pdf = open; Post(() => { if (token == loadToken) { pdfPath = open; pdfLocked = true; UpdateState(); } }); }
+                    }
                     int known = Qpdf.Ready ? Qpdf.Pages(pdf) : -1;
                     if (known > 0) Post(() => { if (token == loadToken) { EnsurePages(known); pdfPages = known; UpdateState(); } });
                     DocPages.RenderTo(pdf, dir, 240, (done, total) =>
@@ -1018,6 +1101,247 @@ namespace FileConverter
             t.IsBackground = true; t.Start();
         }
 
+        /// Makes an unlocked copy of a locked PDF. Returns the file to open (the same one when it isn't really locked),
+        /// or null when the person gave up on the password.
+        string Unlock(string pdf, string outp, int token)
+        {
+            int lk = Qpdf.Lock(pdf);
+            if (lk == 2) return pdf;
+            if (lk == 3)
+            {
+                string e = Qpdf.Run("--decrypt " + Tools.Quote(pdf) + " " + Tools.Quote(outp));
+                if (e != null) throw new UserError(e);
+                return outp;
+            }
+            string msg = L.T("pdf_pw_msg", Path.GetFileName(pdf));
+            for (int tries = 0; tries < 6; tries++)
+            {
+                string pw = null;
+                try { Invoke((Action)(() => { if (token == loadToken) pw = Ask.Input(FindForm(), L.T("pdf_pw_title"), msg, "", L.T("pdf_pw_ph"), L.T("pdf_pw_open"), L.T("cancel"), null, null); })); }
+                catch { return null; }
+                if (pw == null || token != loadToken) return null;
+                if (pw.IndexOf('"') >= 0) { msg = L.T("pdf_pw_wrong"); continue; }
+                string e = Qpdf.Run("--decrypt " + Tools.Quote("--password=" + pw) + " " + Tools.Quote(pdf) + " " + Tools.Quote(outp));
+                if (e == null && File.Exists(outp)) return outp;
+                msg = L.T("pdf_pw_wrong");
+            }
+            return null;
+        }
+
+        /// The pages in their new order and turns, as one PDF in tmp (or the original when nothing changed).
+        string MakeWork(string src, List<PdfPageItem> pages, bool edited, string tmp)
+        {
+            if (!edited) return src;
+            string work = Path.Combine(tmp, "edited.pdf");
+            List<int> order = new List<int>(); foreach (PdfPageItem p in pages) order.Add(p.Src);
+            StringBuilder a = new StringBuilder();
+            a.Append(Tools.Quote(src)).Append(" --pages ").Append(Tools.Quote(src)).Append(' ').Append(Qpdf.Ranges(order)).Append(" --");
+            foreach (int rot in new[] { 90, 180, 270 })
+            {
+                List<int> at = new List<int>();
+                for (int i = 0; i < pages.Count; i++) if (pages[i].Rot == rot) at.Add(i + 1);
+                if (at.Count > 0) a.Append(" --rotate=+").Append(rot).Append(':').Append(Qpdf.Ranges(at));
+            }
+            a.Append(' ').Append(Tools.Quote(work));
+            string e = Qpdf.Run(a.ToString());
+            if (e != null) throw new UserError(e);
+            return work;
+        }
+
+        /// The size of each page as it will look (from its picture), for laying things over it.
+        List<PdfStamp.PageSpec> Specs(List<PdfPageItem> pages)
+        {
+            List<PdfStamp.PageSpec> l = new List<PdfStamp.PageSpec>();
+            foreach (PdfPageItem p in pages)
+            {
+                float w = 612, h = 792;
+                try { if (p.Thumb != null) { w = p.Thumb.Width; h = p.Thumb.Height; } } catch { }
+                if (p.Rot % 180 == 90) { float t = w; w = h; h = t; }
+                l.Add(new PdfStamp.PageSpec { W = 612, H = 612f * h / Math.Max(1, w) });
+            }
+            return l;
+        }
+
+        /// Saves the PDF (with its page changes) after doing something to it: work → result. Runs in the background.
+        void SaveWith(string suffixKey, string kindKey, Func<string, string, List<PdfPageItem>, string> transform, Func<List<PdfPageItem>, string> doneText)
+        {
+            if (running || pdfPath == null || grid.Pages.Count == 0) return;
+            if (!NeedQpdf()) return;
+            List<PdfPageItem> pages = new List<PdfPageItem>(grid.Pages);
+            bool edited = Edited;
+            string stem = Path.GetFileNameWithoutExtension(shownPath ?? pdfPath);
+            string outp = SaveAsk.File(FindForm(), stem + " " + L.T(suffixKey) + ".pdf", "pdf");
+            if (outp == null) return;
+            string src = pdfPath;
+            BeginWork("", "");
+            ActJob act = Activity.Begin(this, L.T(kindKey), Path.GetFileName(shownPath ?? src), () => cancel = true);
+            Thread t = new Thread(() =>
+            {
+                string err = null, done = null;
+                string tmp = Path.Combine(Path.GetTempPath(), "FadiPdfOut_" + Guid.NewGuid().ToString("N").Substring(0, 10));
+                try
+                {
+                    Directory.CreateDirectory(tmp);
+                    EnsureQpdfInWorker(act);
+                    Post(() => SetStatus(L.T("pdf_working"), Theme.InkSoft));
+                    string work = MakeWork(src, pages, edited, tmp);
+                    if (cancel) throw new OperationCanceledException();
+                    string res = Path.Combine(tmp, "result.pdf");
+                    string e = transform(work, res, pages);
+                    if (e != null) throw new UserError(e);
+                    if (cancel) throw new OperationCanceledException();
+                    if (File.Exists(outp)) File.Delete(outp);
+                    File.Copy(File.Exists(res) ? res : work, outp);
+                    done = doneText(pages);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { err = ex.Message; }
+                try { Directory.Delete(tmp, true); } catch { }
+                Post(() => EndWork(act, err, outp, done ?? ""));
+            });
+            t.IsBackground = true; t.Start();
+        }
+
+        void LockOrUnlock()
+        {
+            if (pdfPath == null || running) return;
+            if (pdfLocked)
+            {
+                // the open copy is already unlocked: saving it is all it takes
+                SaveWith("pdf_unlocked_suffix", "act_k_pdf_unlock", (w, r, pg) => null, pg => L.T("pdf_done_unlock"));
+                return;
+            }
+            TextField a = new TextField(() => L.T("pdf_pw_ph"), "\uE72E") { ForceLtr = true };
+            TextField b = new TextField(() => L.T("pdf_pw_again_ph"), "\uE72E") { ForceLtr = true };
+            using (FormDialog d = new FormDialog(L.T("pdf_lock_title"), L.T("pdf_lock_msg"), L.T("pdf_lock_ok")))
+            {
+                d.Add(() => L.T("pdf_pw"), a, 40);
+                d.Add(() => L.T("pdf_pw_again"), b, 40);
+                d.Validate2 = () =>
+                {
+                    string p1 = a.Box.Text, p2 = b.Box.Text;
+                    string why = p1.Length == 0 ? L.T("pdf_pw_empty") : p1 != p2 ? L.T("pdf_pw_differ") : p1.IndexOf('"') >= 0 ? L.T("pdf_pw_quote") : null;
+                    if (why != null) Ask.Info(d, L.T("pdf_lock_title"), why, AskKind.Warning);
+                    return why == null;
+                };
+                if (Ask.ShowDimmed(d, FindForm()) != DialogResult.OK) return;
+            }
+            string pw = a.Box.Text;
+            SaveWith("pdf_locked_suffix", "act_k_pdf_lock", (w, r, pg) =>
+                Qpdf.Run(Tools.Quote(w) + " --encrypt " + Tools.Quote(pw) + " " + Tools.Quote(pw) + " 256 -- " + Tools.Quote(r)),
+                pg => L.T("pdf_done_lock"));
+        }
+
+        void AddNumbers()
+        {
+            if (pdfPath == null || running) return;
+            Segments style = new Segments(() => "3", () => "3 / 12", () => L.T("pdf_num_text", 3, 12)) { FontSize = 9f };
+            Segments where = new Segments(() => L.T("pdf_num_bottom"), () => L.T("pdf_num_corner"), () => L.T("pdf_num_top")) { FontSize = 9f };
+            Toggle skip = new Toggle();
+            int s0, w0; int.TryParse(Settings.Get("PdfNumStyle", "1"), out s0); int.TryParse(Settings.Get("PdfNumWhere", "0"), out w0);
+            style.SetSilently(Math.Max(0, Math.Min(2, s0))); where.SetSilently(Math.Max(0, Math.Min(2, w0)));
+            skip.SetSilently(Settings.Get("PdfNumSkip", "0") == "1");
+            using (FormDialog d = new FormDialog(L.T("pdf_nums_title"), L.T("pdf_nums_msg"), L.T("pdf_nums_ok")))
+            {
+                d.Add(() => L.T("pdf_num_style"), style, 36);
+                d.Add(() => L.T("pdf_num_where"), where, 36);
+                d.Add(() => L.T("pdf_num_skip"), skip, 34);
+                if (Ask.ShowDimmed(d, FindForm()) != DialogResult.OK) return;
+            }
+            int st = style.SelectedIndex, wh = where.SelectedIndex; bool sk = skip.Checked;
+            Settings.Set("PdfNumStyle", st.ToString()); Settings.Set("PdfNumWhere", wh.ToString()); Settings.Set("PdfNumSkip", sk ? "1" : "0");
+            SaveWith("pdf_nums_suffix", "act_k_pdf_nums", (w, r, pg) =>
+            {
+                List<PdfStamp.PageSpec> specs = Specs(pg);
+                for (int i = 0; i < specs.Count; i++)
+                    if (!(sk && i == 0)) specs[i].Items.Add(PdfStamp.PageNumber(specs[i], i + 1, specs.Count, st, wh));
+                return PdfStamp.Apply(w, r, specs);
+            }, pg => L.T("pdf_done_nums", pg.Count));
+        }
+
+        static readonly Color[] MarkColors = { Color.FromArgb(120, 120, 128), Color.FromArgb(220, 38, 38), Color.FromArgb(37, 99, 235), Color.Black };
+
+        void AddWatermark()
+        {
+            if (pdfPath == null || running) return;
+            TextField text = new TextField(() => L.T("pdf_mark_ph"), null);
+            text.Box.Text = Settings.Get("PdfMarkText", L.T("pdf_mark_default"));
+            Segments where = new Segments(() => L.T("pdf_mark_across"), () => L.T("pdf_mark_middle"), () => L.T("pdf_mark_top")) { FontSize = 9f };
+            Segments strength = new Segments(() => L.T("pdf_mark_light"), () => L.T("pdf_mark_medium"), () => L.T("pdf_mark_strong")) { FontSize = 9f };
+            Swatches color = new Swatches { Palette = MarkColors, LivePreview = false };
+            int w0, s0, c0; int.TryParse(Settings.Get("PdfMarkWhere", "0"), out w0); int.TryParse(Settings.Get("PdfMarkStrength", "1"), out s0); int.TryParse(Settings.Get("PdfMarkColor", "0"), out c0);
+            where.SetSilently(Math.Max(0, Math.Min(2, w0))); strength.SetSilently(Math.Max(0, Math.Min(2, s0)));
+            color.Selected = MarkColors[Math.Max(0, Math.Min(MarkColors.Length - 1, c0))];
+            using (FormDialog d = new FormDialog(L.T("pdf_mark_title"), L.T("pdf_mark_msg"), L.T("pdf_mark_ok")))
+            {
+                d.Add(() => L.T("pdf_mark_text"), text, 40);
+                d.Add(() => L.T("pdf_mark_where"), where, 36);
+                d.Add(() => L.T("pdf_mark_strength"), strength, 36);
+                d.Add(() => L.T("pdf_mark_color"), color, 34);
+                d.Validate2 = () => text.Box.Text.Trim().Length > 0;
+                if (Ask.ShowDimmed(d, FindForm()) != DialogResult.OK) return;
+            }
+            string t = text.Box.Text.Trim(); int wh = where.SelectedIndex, sg = strength.SelectedIndex;
+            Color col = color.Selected;
+            int ci = Array.FindIndex(MarkColors, c => c.ToArgb() == col.ToArgb());
+            Settings.Set("PdfMarkText", t); Settings.Set("PdfMarkWhere", wh.ToString()); Settings.Set("PdfMarkStrength", sg.ToString()); Settings.Set("PdfMarkColor", Math.Max(0, ci).ToString());
+            SaveWith("pdf_mark_suffix", "act_k_pdf_mark", (w, r, pg) =>
+            {
+                List<PdfStamp.PageSpec> specs = Specs(pg);
+                // pages of the same shape share one picture (keeps the file small)
+                Dictionary<string, Bitmap> made = new Dictionary<string, Bitmap>();
+                foreach (PdfStamp.PageSpec sp in specs)
+                {
+                    string key = Math.Round(sp.H).ToString();
+                    PdfStamp.Item it;
+                    Bitmap have;
+                    if (made.TryGetValue(key, out have)) it = new PdfStamp.Item { Image = have, Box = wh == 2 ? new RectangleF(0.06f, 0.02f, 0.88f, 0.05f) : new RectangleF(0, 0, 1, 1) };
+                    else { it = PdfStamp.Watermark(sp, t, col, wh, sg); made[key] = it.Image; }
+                    sp.Items.Add(it);
+                }
+                return PdfStamp.Apply(w, r, specs);
+            }, pg => L.T("pdf_done_mark"));
+        }
+
+        void SignIt()
+        {
+            if (pdfPath == null || running || grid.Pages.Count == 0) return;
+            List<int> sel = new List<int>();
+            for (int i = 0; i < grid.Pages.Count; i++) if (grid.Pages[i].Sel) sel.Add(i);
+            bool hasSel = sel.Count > 0;
+            int previewAt = hasSel ? sel[0] : grid.Pages.Count - 1;
+            Image pv = grid.Pages[previewAt].Thumb;
+            Bitmap shown = null;
+            if (pv != null)
+            {
+                // the page as it will look (turned like in the grid)
+                shown = new Bitmap(pv);
+                int rot = grid.Pages[previewAt].Rot;
+                if (rot == 90) shown.RotateFlip(RotateFlipType.Rotate90FlipNone);
+                else if (rot == 180) shown.RotateFlip(RotateFlipType.Rotate180FlipNone);
+                else if (rot == 270) shown.RotateFlip(RotateFlipType.Rotate270FlipNone);
+            }
+            Bitmap sign; RectangleF box; int on;
+            using (SignDialog d = new SignDialog(shown, hasSel))
+            {
+                if (Ask.ShowDimmed(d, FindForm()) != DialogResult.OK) { if (shown != null) shown.Dispose(); return; }
+                sign = d.Pad.Export(); box = d.Place.Box; on = d.Where.SelectedIndex;
+            }
+            if (shown != null) shown.Dispose();
+            if (sign == null) return;
+            int count = grid.Pages.Count;
+            HashSet<int> targets = new HashSet<int>();
+            if (hasSel) { if (on == 0) foreach (int i in sel) targets.Add(i); else if (on == 1) targets.Add(count - 1); else for (int i = 0; i < count; i++) targets.Add(i); }
+            else { if (on == 0) targets.Add(count - 1); else if (on == 1) targets.Add(0); else for (int i = 0; i < count; i++) targets.Add(i); }
+            SaveWith("pdf_sign_suffix", "act_k_pdf_sign", (w, r, pg) =>
+            {
+                List<PdfStamp.PageSpec> specs = Specs(pg);
+                for (int i = 0; i < specs.Count; i++)
+                    if (targets.Contains(i)) specs[i].Items.Add(new PdfStamp.Item { Image = sign, Box = box });
+                return PdfStamp.Apply(w, r, specs);
+            }, pg => L.T("pdf_done_sign", targets.Count));
+        }
+
         /// 0 = save the edited PDF, 1 = selected pages as a new PDF, 2 = every page as its own PDF, 3 = pages as pictures.
         void Export(int what)
         {
@@ -1027,7 +1351,7 @@ namespace FileConverter
             bool edited = what == 1 || Edited;
             bool needQ = what <= 2 || edited;
             if (needQ && !NeedQpdf()) return;
-            string stem = Path.GetFileNameWithoutExtension(pdfPath);
+            string stem = Path.GetFileNameWithoutExtension(shownPath ?? pdfPath);
             string outp, outDir = null;
             if (what <= 1)
             {

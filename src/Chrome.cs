@@ -91,11 +91,26 @@ namespace FileConverter
         public bool CanMaximize = true, CanMinimize = true;
         public Func<string> Title;                 // optional text on the left
         public int SideWidth; public bool SideRight;   // part painted like the sidebar
-        /// Light/dark switch at the far side from the window buttons.
-        public event Action ThemeClicked;
+        /// Light/dark switch and language switch at the far side from the window buttons.
+        public event Action ThemeClicked, LangClicked;
         public bool ShowThemeButton { get { return ThemeClicked != null; } }
-        const int ThemeSlot = 99;
+        public bool ShowLangButton { get { return LangClicked != null; } }
+        const int ThemeSlot = 99, LangSlot = 98;
         Rectangle ThemeCell { get { return Theme.Mirror(new Rectangle(Theme.S(6), 0, Theme.S(42), Height - 1), Width); } }
+        string LangText { get { return Theme.RTL ? "English" : "العربية"; } }
+        Font LangFont { get { return Theme.F(8.75f, FontStyle.Bold); } }
+        Rectangle LangCell
+        {
+            get
+            {
+                int w = Theme.S(16) + Theme.S(6) + Theme.Measure(LangText, LangFont) + Theme.S(26);
+                return Theme.Mirror(new Rectangle(Theme.S(6) + (ShowThemeButton ? Theme.S(42) : 0), 0, w, Height - 1), Width);
+            }
+        }
+        /// Middle of the light/dark button (where the new look grows from).
+        public Point ThemeCenter { get { Rectangle c = ThemeCell; return new Point(c.X + c.Width / 2, c.Y + c.Height / 2); } }
+        readonly float[] hotv = new float[5];   // 0-2 window buttons, 3 theme, 4 language: hover fades in and out
+        int HotIndex(int slot) { return slot == ThemeSlot ? 3 : slot == LangSlot ? 4 : slot; }
         Point dragFrom; bool dragging;             // (only used where Windows can't drag for us)
 
         const int WM_NCHITTEST = 0x84, HTTRANSPARENT = -1;
@@ -120,6 +135,7 @@ namespace FileConverter
         {
             for (int i = 0; i < Count; i++) if (Cell(i).Contains(p)) return i;
             if (ShowThemeButton && ThemeCell.Contains(p)) return ThemeSlot;
+            if (ShowLangButton && LangCell.Contains(p)) return LangSlot;
             return -1;
         }
 
@@ -140,10 +156,22 @@ namespace FileConverter
             base.OnMouseMove(e);
             if (dragging) { f.Location = new Point(f.Location.X + e.X - dragFrom.X, f.Location.Y + e.Y - dragFrom.Y); return; }
             int h = ButtonAt(e.Location);
-            if (h != hover) { hover = h; Invalidate(); }
+            if (h != hover) { hover = h; Animator.Start(this); Invalidate(); }
             Cursor = h >= 0 ? Cursors.Hand : Cursors.Default;
         }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (hover >= 0) { hover = -1; Invalidate(); } }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (hover >= 0) { hover = -1; Animator.Start(this); Invalidate(); } }
+
+        public override bool Step()
+        {
+            bool more = false;
+            for (int i = 0; i < hotv.Length; i++)
+            {
+                float t = hover >= 0 && HotIndex(hover) == i ? 1 : 0;
+                if (Fx.Ease(ref hotv[i], t, 0.3f)) more = true;
+            }
+            Invalidate();
+            return more;
+        }
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
@@ -159,6 +187,7 @@ namespace FileConverter
             int was = press; press = -1; Invalidate();
             if (was < 0 || ButtonAt(e.Location) != was) return;
             if (was == ThemeSlot) { if (ThemeClicked != null) ThemeClicked(); return; }
+            if (was == LangSlot) { if (LangClicked != null) LangClicked(); return; }
             switch (Kind(was))
             {
                 case 0: f.Close(); break;
@@ -194,14 +223,28 @@ namespace FileConverter
                 Rectangle c = ThemeCell;
                 Rectangle pill = new Rectangle(c.X + Theme.S(5), c.Y + Theme.S(5), c.Width - Theme.S(10), c.Height - Theme.S(10));
                 bool hot = hover == ThemeSlot;
-                if (hot) Theme.FillRound(g, pill, Theme.S(8), press == ThemeSlot ? Theme.Pressed : Theme.Hover);
+                if (hotv[3] > 0) Theme.FillRound(g, pill, Theme.S(8), Color.FromArgb((int)(255 * hotv[3]), press == ThemeSlot && hot ? Theme.Pressed : Theme.Hover));
                 // the moon in light mode (switch to dark), the sun in dark mode
                 Theme.Glyph(g, Theme.Dark ? "\uE706" : "\uE708", 9f, active || hot ? Theme.Ink : Theme.InkFaint, pill);
+            }
+            if (ShowLangButton)
+            {
+                Rectangle c = LangCell;
+                Rectangle pill = new Rectangle(c.X + Theme.S(2), c.Y + Theme.S(5), c.Width - Theme.S(4), c.Height - Theme.S(10));
+                bool hot = hover == LangSlot;
+                if (hotv[4] > 0) Theme.FillRound(g, pill, Theme.S(8), Color.FromArgb((int)(255 * hotv[4]), press == LangSlot && hot ? Theme.Pressed : Theme.Hover));
+                Color ink = active || hot ? Theme.Ink : Theme.InkFaint;
+                int gw = Theme.S(16), gap = Theme.S(6), tw = Theme.Measure(LangText, LangFont);
+                int x0 = pill.X + (pill.Width - gw - gap - tw) / 2;
+                Rectangle gr = Theme.RTL ? new Rectangle(x0 + tw + gap, pill.Y, gw, pill.Height) : new Rectangle(x0, pill.Y, gw, pill.Height);
+                Rectangle tr = Theme.RTL ? new Rectangle(x0, pill.Y, tw + 2, pill.Height) : new Rectangle(x0 + gw + gap, pill.Y, tw + 2, pill.Height);
+                Theme.Glyph(g, Ico.Globe, 8.5f, ink, gr);
+                Theme.Text(g, LangText, LangFont, ink, tr, Align.Center, true, false, true);
             }
             if (Title != null)
             {
                 string t = Title();
-                int x0 = SideWidth > 0 && !SideRight ? SideWidth : (ShowThemeButton ? Theme.S(48) : 0);
+                int x0 = SideWidth > 0 && !SideRight ? SideWidth : (ShowLangButton ? Theme.Mirror(LangCell, Width).Right : ShowThemeButton ? Theme.S(48) : 0);
                 Rectangle tr = new Rectangle(x0 + Theme.S(16), 0, Width - x0 - Count * Theme.S(46) - Theme.S(32), Height);
                 Theme.Text(g, t, Theme.F(9f, FontStyle.Bold), active ? Theme.InkSoft : Theme.InkFaint, Theme.Mirror(tr, Width), Align.Start);
             }
@@ -212,10 +255,12 @@ namespace FileConverter
                 Rectangle pill = new Rectangle(c.X + Theme.S(5), c.Y + Theme.S(5), c.Width - Theme.S(10), c.Height - Theme.S(10));
                 bool hot = hover == i, down = press == i && hot;
                 Color ink = active ? Theme.Ink : Theme.InkFaint;
-                if (hot)
+                float hv = hotv[i];
+                if (hv > 0)
                 {
-                    if (kind == 0) { Theme.FillRound(g, pill, Theme.S(8), down ? Color.FromArgb(200, 30, 40) : Color.FromArgb(232, 17, 35)); ink = Color.White; }
-                    else Theme.FillRound(g, pill, Theme.S(8), down ? Theme.Pressed : Theme.Hover);
+                    int a = (int)(255 * hv);
+                    if (kind == 0) { Theme.FillRound(g, pill, Theme.S(8), Color.FromArgb(a, down ? Color.FromArgb(200, 30, 40) : Color.FromArgb(232, 17, 35))); ink = Theme.Mix(ink, Color.White, hv); }
+                    else Theme.FillRound(g, pill, Theme.S(8), Color.FromArgb(a, down ? Theme.Pressed : Theme.Hover));
                 }
                 string glyph = kind == 0 ? "" : kind == 2 ? "" : (f.WindowState == FormWindowState.Maximized ? "" : "");
                 Theme.Glyph(g, glyph, kind == 0 ? 8f : 8.5f, ink, pill);

@@ -335,7 +335,11 @@ namespace FileConverter
                 }
             }
             if (Image != null && Zoom > 0) { dragging = true; dragFrom = e.Location; panFrom = pan; Cursor = Cursors.SizeAll; }
+            else if (Image != null && DragFile != null && e.Button == MouseButtons.Left && !CropMode && !Brushing)
+                DragOut.Arm(this, e.Location, () => { string f = DragFile(); return f != null ? new[] { f } : null; });   // drag the picture out of the app
         }
+        /// The file the picture on screen can be dragged out as (null = it can't, e.g. while editing).
+        public Func<string> DragFile;
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
@@ -614,7 +618,7 @@ namespace FileConverter
     public class ViewerPage : Page
     {
         Rectangle bar, nameR, infoR;
-        Btn bPrev, bNext, bRotL, bRotR, bOpen, bSave, bConvert, bFolder, bEdit;
+        Btn bPrev, bNext, bRotL, bRotR, bOpen, bSave, bConvert, bFolder, bEdit, bUndoH, bRedoH;
         ImageCanvas canvas;
         EditorPanel editor;
         bool editing, preparing;
@@ -653,11 +657,18 @@ namespace FileConverter
             bText.MouseEnter += (s, e) => tips.SetToolTip(bText, L.T("ocr_tip"));
             bText.Click += (s, e) => CopyText();
             canvas = new ImageCanvas();
+            canvas.DragFile = () => editing || Current == null ? null : (Doc && pageRender.ContainsKey(index) ? pageRender[index] : Current);
             canvas.Message = DropText;
             canvas.Clicked += PickFile;
             canvas.Navigate += d => Go(d);
             canvas.AreaPicked += ReadText;
-            editor = new EditorPanel { Canvas = canvas, Visible = false };
+            editor = new EditorPanel { Canvas = canvas, Visible = false, ShowUndo = false };
+            // undo / redo live in the top bar while editing (the panel's tabs need the room)
+            bUndoH = IconBtn("\uE7A7", "undo_tip", () => editor.Undo());
+            bRedoH = IconBtn("\uE7A6", "redo_tip", () => editor.Redo());
+            bUndoH.Enabled = bRedoH.Enabled = false;
+            editor.HistoryChanged += (u, r) => { bUndoH.Enabled = u; bRedoH.Enabled = r; bUndoH.Invalidate(); bRedoH.Invalidate(); };
+            Controls.Add(bUndoH); Controls.Add(bRedoH);
             editor.SaveAllPages = () => { if (!Doc) return false; SaveDoc(); return true; };
             editor.Notify = (msg, ok, file) =>
             {
@@ -677,7 +688,10 @@ namespace FileConverter
             canvas.LayerPicked += i => editor.Select(i);
             canvas.LayerEdit += () => editor.FocusText();
             canvas.LayerMoved += () => editor.S.Dirty = true;
-            Controls.AddRange(new Control[] { bPrev, bNext, bRotL, bRotR, bOpen, bEdit, bText, bSave, bConvert, bFolder, canvas, editor });
+            Controls.AddRange(new Control[] { bPrev, bNext, bRotL, bRotR, bOpen, bEdit, bText, bSave, bConvert, bFolder, canvas, editor, strip });
+            strip.PathOf = i => pageRender.ContainsKey(i) ? pageRender[i] : (i < files.Count ? files[i] : null);
+            strip.Edited = i => pageState.ContainsKey(i);
+            strip.PagePicked += GoTo;
             recents.Visible = false;
             recents.Open += f => { if (OpenProjectFile != null) OpenProjectFile(f); };
             recents.Browse += () => { if (BrowseProjects != null) BrowseProjects(); };
@@ -701,6 +715,7 @@ namespace FileConverter
         }
 
         string Current { get { return files.Count > 0 ? files[index] : null; } }
+        int StripH { get { return Theme.S(112); } }
 
         // ------------------------------------------------------------------ documents (PDF / Word): every page can be edited
         // Moving to another page keeps the edits of this one (they can be changed again later);
@@ -710,6 +725,35 @@ namespace FileConverter
         readonly Dictionary<int, string> pageState = new Dictionary<int, string>();   // page → its edit (texts, photos, size…)
         readonly Dictionary<int, string> pageRender = new Dictionary<int, string>();  // page → the edited page as a picture
         bool Doc { get { return docSource != null; } }
+        readonly PageStrip strip = new PageStrip();
+        bool ShowStrip { get { return Doc && files.Count > 1; } }
+
+        /// Goes to a page. While editing, the editor stays open: this page is kept and the other one swapped in.
+        void GoTo(int i)
+        {
+            if (!Doc || files.Count == 0 || preparing) return;
+            i = Math.Max(0, Math.Min(files.Count - 1, i));
+            if (i == index) return;
+            if (!editing) { index = i; strip.Reveal(i); Show(i); return; }
+            CommitPage();
+            Bitmap full;
+            try { using (Image img = Decode(files[i], 12000)) full = new Bitmap(img); }
+            catch (Exception ex) { ShowToast(ex.Message, false, null, null); return; }
+            Fx.Crossfade(canvas, 160);
+            index = i;
+            editor.Begin(full, files[i], false);
+            editor.UsePdf();
+            if (pageState.ContainsKey(i))
+            {
+                try { pendingRestore = new JsonParser(pageState[i]).Parse(); quietRestore = true; ApplyPendingRestore(); } catch { }
+            }
+            editor.Deselect();         // nothing picked: the arrow keys keep turning pages
+            editor.S.Dirty = false;    // bringing back earlier edits isn't a new change
+            canvas.Reset();
+            UpdateEditInfo();
+            strip.Reveal(i);
+            Invalidate();
+        }
         bool DocChanged { get { return Doc && !docSaved && pageState.Count > 0; } }
 
         void ResetDoc()
@@ -724,6 +768,14 @@ namespace FileConverter
         {
             if (!editing || !Doc || !editor.S.Active || editor.S.Video) return;
             if (!editor.S.Dirty && !pageState.ContainsKey(index)) return;
+            EditSession es = editor.S;
+            if (es.Layers.Count == 0 && es.W == es.BaseW && es.H == es.BaseH && es.Crop.IsEmpty && es.Mask == null && es.BgMode == 0 && es.Adj.None)
+            {
+                // nothing left on this page (everything removed): it's the original page again
+                if (pageState.Remove(index)) { pageRender.Remove(index); docSaved = false; }
+                es.Dirty = false; strip.Invalidate();
+                return;
+            }
             pageState[index] = EditJson();
             if (docEditDir == null) { docEditDir = Path.Combine(Path.GetTempPath(), "FadiDocEdit_" + Guid.NewGuid().ToString("N").Substring(0, 10)); Directory.CreateDirectory(docEditDir); }
             string f = Path.Combine(docEditDir, "page" + (index + 1).ToString("D4") + "_" + DateTime.Now.Ticks + ".png");
@@ -731,6 +783,7 @@ namespace FileConverter
             pageRender[index] = f;
             docSaved = false;
             editor.S.Dirty = false;
+            strip.Invalidate();
         }
 
         /// All pages into one PDF (the edited ones as edited).
@@ -773,6 +826,12 @@ namespace FileConverter
             cards.Add(bar);
             int y = bar.Y + Theme.S(16), h = Theme.S(36), x = bar.Right - Theme.S(16);
             foreach (Control c in new Control[] { bPrev, bNext, bRotL, bRotR, bOpen, bEdit, bText, bSave, bConvert, bFolder }) c.Visible = !editing;
+            bUndoH.Visible = bRedoH.Visible = editing && !editor.S.Video;
+            if (editing && !editor.S.Video)
+            {
+                x -= h; Place(bRedoH, new Rectangle(x, y, h, h)); x -= Theme.S(6);
+                x -= h; Place(bUndoH, new Rectangle(x, y, h, h)); x -= Theme.S(14);
+            }
             if (editing && Doc && files.Count > 1)
             {
                 // editing a document: ‹ › go to the other pages (this page's edits are kept)
@@ -811,9 +870,18 @@ namespace FileConverter
                 panelCard = new Rectangle(W - p - pw, bar.Bottom + Theme.S(14), pw, H - bar.Bottom - Theme.S(14) - Theme.S(20));
                 cards.Add(panelCard);
                 Place(editor, Rectangle.Inflate(panelCard, -Theme.S(4), -Theme.S(6)));
-                Place(canvas, new Rectangle(0, top, panelCard.X - Theme.S(6), H - top));
+                int ch = H - top - (ShowStrip ? StripH : 0);
+                Place(canvas, new Rectangle(0, top, panelCard.X - Theme.S(6), ch));
+                if (ShowStrip) Place(strip, new Rectangle(0, top + ch, panelCard.X - Theme.S(6), StripH));
             }
-            else Place(canvas, new Rectangle(0, top, W, H - top));
+            else
+            {
+                int ch = H - top - (ShowStrip ? StripH : 0);
+                Place(canvas, new Rectangle(0, top, W, ch));
+                if (ShowStrip) Place(strip, new Rectangle(0, top + ch, W, StripH));
+            }
+            strip.Visible = ShowStrip;
+            if (ShowStrip) { strip.Count = files.Count; strip.Current = index; }
             editor.Visible = editing;
             // the empty Studio: recent video projects along the bottom
             if (InStudio)
@@ -919,6 +987,9 @@ namespace FileConverter
                     using (System.IO.Compression.GZipStream gz = new System.IO.Compression.GZipStream(ms, System.IO.Compression.CompressionMode.Compress, true)) gz.Write(s.Mask, 0, s.Mask.Length);
                     mask = Convert.ToBase64String(ms.ToArray());
                 }
+            Adjust a = s.Adj;
+            b.Append(", \"adjust\": [").Append(Js.N(a.Bright)).Append(',').Append(Js.N(a.Contrast)).Append(',').Append(Js.N(a.Sat)).Append(',').Append(Js.N(a.Warmth))
+             .Append(',').Append(Js.N(a.Blur)).Append(',').Append(Js.N(a.Sharpen)).Append(',').Append(a.Filter).Append(']');
             b.Append(", \"mask\": ").Append(Js.Q(mask)).Append(", \"texts\": [");
             for (int i = 0; i < s.Layers.Count; i++) b.Append(i > 0 ? "," : "").Append(Js.Layer(s.Layers[i]));
             b.Append("]}");
@@ -957,6 +1028,12 @@ namespace FileConverter
             List<TextLayer> layers = new List<TextLayer>();
             foreach (object o in Js.A(root, "texts")) { TextLayer tl = Js.Layer(o); if (tl != null) layers.Add(tl); }
             editor.ApplyState(Js.I(root, "w"), Js.I(root, "h"), crop, mask, Js.I(root, "bgMode"), Color.FromArgb(Js.I(root, "bgColor", -1)), (float)Js.D(root, "bgBlur", 40), layers);
+            List<object> adj = Js.A(root, "adjust");
+            if (adj.Count >= 7)
+            {
+                Func<object, float> f = o => o is long ? (long)o : o is double ? (float)(double)o : 0f;
+                editor.SetAdjust(new Adjust { Bright = f(adj[0]), Contrast = f(adj[1]), Sat = f(adj[2]), Warmth = f(adj[3]), Blur = f(adj[4]), Sharpen = f(adj[5]), Filter = (int)f(adj[6]) });
+            }
             UpdateEditInfo();
             if (!quietRestore) ShowToast(L.T("proj_restored"), true, null, null);
             quietRestore = false;
@@ -1002,7 +1079,7 @@ namespace FileConverter
                     viewImage = canvas.Image;
                     canvas.Rotation = 0; canvas.Zoom = 0;
                     editing = true;
-                    editor.Begin(full, path);
+                    editor.Begin(full, path, !Doc);
                     if (Doc) editor.UsePdf();
                     canvas.Reset();
                     UpdateEditInfo();
@@ -1017,7 +1094,18 @@ namespace FileConverter
         void ExitEdit(bool ask)
         {
             if (!editing) return;
-            if (Doc) { CommitPage(); ask = false; }
+            if (Doc)
+            {
+                CommitPage(); ask = false;
+                try
+                {
+                    string shown = pageRender.ContainsKey(index) ? pageRender[index] : files[index];
+                    Image fresh = Decode(shown, 3840);
+                    if (viewImage != null && viewImage != fresh) viewImage.Dispose();
+                    viewImage = fresh;
+                }
+                catch { }
+            }
             if (ask && !ConfirmDiscard()) return;
             if (InStudio) Recovery.Clear(Recovery.PhotoFile);
             editing = false;
@@ -1048,7 +1136,7 @@ namespace FileConverter
                 if (InStudio)
                     d.Filter = L.T("photos_videos") + "|" + string.Join(";", pats.ToArray()) + ";*.mp4;*.mov;*.mkv;*.avi;*.webm;*.wmv;*.m4v;*.mpg;*.3gp;*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.opus;*.flac;*.pdf;*.doc;*.docx;*.odt;*.rtf;*.ppt;*.pptx;*.odp|" +
                                L.T("documents") + "|*.pdf;*.doc;*.docx;*.odt;*.rtf;*.ppt;*.pptx;*.odp|" + d.Filter;
-                if (d.ShowDialog(FindForm()) == DialogResult.OK) LoadFiles(new[] { d.FileName });
+                if (LastDir.Show(d, FindForm(), "studio") == DialogResult.OK) LoadFiles(new[] { d.FileName });
             }
         }
 
@@ -1161,15 +1249,9 @@ namespace FileConverter
         {
             if (canvas.AreaMode) canvas.EndArea();
             if (files.Count < 2 || preparing) return;
-            bool keepEditing = false;
-            if (editing)
-            {
-                if (!Doc) return;
-                ExitEdit(false);        // (a document page is kept, not thrown away)
-                keepEditing = true;
-            }
+            if (Doc) { GoTo(Math.Max(0, Math.Min(files.Count - 1, index + d))); return; }
+            if (editing) return;
             index = (index + d + files.Count) % files.Count;
-            if (keepEditing) afterLoad = EnterEdit;
             Show(index);
         }
 
@@ -1186,6 +1268,8 @@ namespace FileConverter
         {
             string path = files[i];
             bool edited = Doc && pageRender.ContainsKey(i);
+            strip.Count = files.Count; strip.Reveal(i);
+            if (strip.Visible != ShowStrip) DoLayout();   // a document just opened: make room for its pages
             string shown = edited ? pageRender[i] : path;
             int token = ++loadToken;
             title = Doc ? Path.GetFileName(docSource) : Path.GetFileName(path); info = L.T("v_loading");
@@ -1275,8 +1359,10 @@ namespace FileConverter
                     case Keys.Control | Keys.Y: case Keys.Control | Keys.Shift | Keys.Z: if (typing) return false; editor.Redo(); return true;
                     case Keys.Escape: if (!typing && editor.Deselect()) return true; ExitEdit(true); return true;
                     case Keys.Delete: return !typing && editor.DeleteKey();
-                    case Keys.Left: if (typing) return false; editor.Nudge(-1, 0); return true;
-                    case Keys.Right: if (typing) return false; editor.Nudge(1, 0); return true;
+                    case Keys.Left: if (typing) return false; if (Doc && editor.S.Current == null) { Go(Theme.RTL ? 1 : -1); return true; } editor.Nudge(-1, 0); return true;
+                    case Keys.Right: if (typing) return false; if (Doc && editor.S.Current == null) { Go(Theme.RTL ? -1 : 1); return true; } editor.Nudge(1, 0); return true;
+                    case Keys.PageUp: if (!Doc) return false; Go(-1); return true;
+                    case Keys.PageDown: if (!Doc) return false; Go(1); return true;
                     case Keys.Up: if (typing) return false; editor.Nudge(0, -1); return true;
                     case Keys.Down: if (typing) return false; editor.Nudge(0, 1); return true;
                     case Keys.Control | Keys.D0: canvas.Zoom = 0; canvas.Invalidate(); return true;

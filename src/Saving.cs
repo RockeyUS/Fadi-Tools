@@ -199,4 +199,17 @@ namespace FileConverter
             }
         }
     }
+
+    /// Open dialogs start in the folder last used on the same page (Convert, Compress, Studio...).
+    public static class LastDir
+    {
+        public static DialogResult Show(FileDialog d, IWin32Window owner, string key)
+        {
+            string dir = Settings.Get("Dir_" + key, "");
+            try { if (dir.Length > 0 && Directory.Exists(dir)) d.InitialDirectory = dir; } catch { }
+            DialogResult r = owner != null ? d.ShowDialog(owner) : d.ShowDialog();
+            if (r == DialogResult.OK) try { Settings.Set("Dir_" + key, Path.GetDirectoryName(d.FileName)); } catch { }
+            return r;
+        }
+    }
 }

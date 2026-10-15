@@ -11,7 +11,7 @@ using System.Windows.Forms;
 namespace FileConverter
 {
     public enum EditorMode { Photo, Video, Audio }
-    enum EdTab { Trim, Text, Resize, Background, Effects }
+    enum EdTab { Trim, Text, Resize, Background, Effects, Adjust }
 
     /// Side panel with the editing tools. Photos: Text, Resize, Background. Videos: Trim, Text, Resize.
     public class EditorPanel : UiControl
@@ -109,9 +109,11 @@ namespace FileConverter
         public EditorPanel()
         {
             Surface = Surface.Card;
-            tabs = new Segments(() => L.T("ed_layers"), () => L.T("ed_resize"), () => L.T("ed_bg"));
-            tabs.Glyphs = tabGlyphs = new[] { Ico.FontGlyph, Ico.Resize, Ico.Photo };
+            tabs = new Segments(() => L.T("ed_layers"), () => L.T("ed_adjust"), () => L.T("ed_resize"), () => L.T("ed_bg"));
+            tabs.Glyphs = tabGlyphs = new[] { Ico.FontGlyph, "\uE706", Ico.Resize, Ico.Photo };
             tabs.FontSize = 9f;
+            tabs.FadeTarget = body;
+            tabs.FadeArea = () => new Rectangle(0, tabs.Bottom + Theme.S(4), body.Width, Math.Max(0, body.Height - tabs.Bottom - Theme.S(4)));
             tabs.SelectedChanged += (s, e) => { if (CurrentTab != EdTab.Resize) CancelCrop(); SyncBrush(); body.ResetScroll(); DoLayout(); body.Invalidate(); if (TabChanged != null) TabChanged(); };
             bUndo = new Btn(() => "", "\uE7A7", BtnKind.Secondary) { Enabled = false };
             bUndo.Click += (s, e) => Undo();
@@ -242,6 +244,8 @@ namespace FileConverter
             brush.ValueChanged += (s, e) => { if (Canvas != null) { Canvas.BrushPx = Theme.S(brush.Value); Canvas.Invalidate(); } };
             tolerance.Format = v => ((int)Math.Round(v)) + "%";
 
+            InitAdjust();
+
             fmt = new Segments(() => "JPG", () => "JPEG", () => "PNG", () => "WEBP", () => "PDF");
             fmt.FontSize = 8.75f;
             int fi = Array.IndexOf(SaveExts, Settings.Get("EditFormat", "jpg"));
@@ -303,9 +307,9 @@ namespace FileConverter
             Mode = m;
             if (m == EditorMode.Photo)
             {
-                tabList = new[] { EdTab.Text, EdTab.Resize, EdTab.Background };
-                tabs.Items = new Func<string>[] { () => L.T("ed_layers"), () => L.T("ed_resize"), () => L.T("ed_bg") };
-                tabs.Glyphs = tabGlyphs = new[] { Ico.FontGlyph, Ico.Resize, Ico.Photo };
+                tabList = new[] { EdTab.Text, EdTab.Adjust, EdTab.Resize, EdTab.Background };
+                tabs.Items = new Func<string>[] { () => L.T("ed_layers"), () => L.T("ed_adjust"), () => L.T("ed_resize"), () => L.T("ed_bg") };
+                tabs.Glyphs = tabGlyphs = new[] { Ico.FontGlyph, "\uE706", Ico.Resize, Ico.Photo };
             }
             else if (m == EditorMode.Video)
             {
@@ -334,13 +338,17 @@ namespace FileConverter
             if (i >= 0 && i != tabs.SelectedIndex) tabs.SelectedIndex = i;
         }
 
-        public void Begin(Bitmap original, string path)
+        public void Begin(Bitmap original, string path) { Begin(original, path, true); }
+
+        /// addText: start with a text box ready to type (not for document pages: each would get one).
+        public void Begin(Bitmap original, string path, bool addText)
         {
             SetMode(EditorMode.Photo);
             S.BeginPhoto(original, path);
             bgMode.SetSilently(0); bgStatus = "";
             bgTool.SetSilently(0); SyncBrush(); aiMask = false;
-            AfterBegin(true);
+            LoadAdjust();
+            AfterBegin(addText);
         }
 
         public void BeginVideo(int w, int h, string path, bool audioOnly)
@@ -380,7 +388,7 @@ namespace FileConverter
         public void SyncCanvas()
         {
             if (Canvas == null) return;
-            Canvas.Image = S.Preview;
+            Canvas.Image = S.Video ? S.Preview : S.Shown;
             Canvas.Logical = new SizeF(S.W, S.H);
             Canvas.Layers = S.Layers;
             Canvas.SelectedLayer = S.Selected;
@@ -425,7 +433,7 @@ namespace FileConverter
             string path;
             using (OpenFileDialog d = new OpenFileDialog { Title = L.T("ed_add_photo"), Filter = L.T("ed_photo_files") + "|*.jpg;*.jpeg;*.jfif;*.png;*.webp;*.heic;*.heif;*.avif;*.bmp;*.gif;*.tif;*.tiff|" + L.T("all_files") + "|*.*" })
             {
-                if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
+                if (LastDir.Show(d, FindForm(), "photo") != DialogResult.OK) return;
                 path = d.FileName;
             }
             AddPicture(path);
@@ -589,7 +597,7 @@ namespace FileConverter
         class Snap
         {
             public List<TextLayer> Layers; public int Selected, W, H; public Rectangle Crop;
-            public byte[] Mask; public int BgMode; public Color BgColor; public float BgBlur;
+            public byte[] Mask; public int BgMode; public Color BgColor; public float BgBlur; public Adjust Adj;
             public object Extra; public string Key;
         }
         readonly List<Snap> undo = new List<Snap>(), redo = new List<Snap>();
@@ -632,14 +640,14 @@ namespace FileConverter
                  .Append(Math.Round(l.Opacity, 2)).Append((int)l.Align).Append('|').Append(Math.Round(l.Pos.X)).Append(',').Append(Math.Round(l.Pos.Y))
                  .Append('@').Append(Math.Round(l.From, 2)).Append('-').Append(Math.Round(l.To, 2)).Append(';');
             k.Append('#').Append(S.W).Append('x').Append(S.H).Append(S.Crop).Append(S.Mask == null ? 0 : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(S.Mask))
-             .Append(S.BgMode).Append(S.BgColor.ToArgb()).Append(Math.Round(S.BgBlur));
+             .Append(S.BgMode).Append(S.BgColor.ToArgb()).Append(Math.Round(S.BgBlur)).Append('#').Append(S.Adj.Key());
             if (ExtraKey != null) k.Append('#').Append(ExtraKey());
             return k.ToString();
         }
 
         Snap Capture(string key)
         {
-            Snap n = new Snap { Layers = new List<TextLayer>(), Selected = S.Selected, W = S.W, H = S.H, Crop = S.Crop, Mask = S.Mask, BgMode = S.BgMode, BgColor = S.BgColor, BgBlur = S.BgBlur, Key = key };
+            Snap n = new Snap { Layers = new List<TextLayer>(), Selected = S.Selected, W = S.W, H = S.H, Crop = S.Crop, Mask = S.Mask, BgMode = S.BgMode, BgColor = S.BgColor, BgBlur = S.BgBlur, Adj = S.Adj.Clone(), Key = key };
             foreach (TextLayer l in S.Layers) n.Layers.Add(l.CloneStyle());
             if (CaptureExtra != null) n.Extra = CaptureExtra();
             return n;
@@ -696,6 +704,7 @@ namespace FileConverter
             }
             catch (Exception ex) { if (Notify != null) Notify(ex is OutOfMemoryException ? L.T("ed_too_big") : ex.Message, false, null); }
             if (RestoreExtra != null) RestoreExtra(n.Extra);
+            if (n.Adj != null && !n.Adj.Same(S.Adj)) { S.Adj = n.Adj.Clone(); LoadAdjust(); }
             bgMode.SetSilently(S.BgMode);
             bgColors.Selected = S.BgColor; blur.SetValue(S.BgBlur, false);
             S.Dirty = true;
@@ -1134,6 +1143,7 @@ namespace FileConverter
             foreach (Control c in trimCtl) c.Visible = false;
             foreach (Control c in fxCtl) c.Visible = false;
             foreach (Control c in timingCtl) c.Visible = false;
+            if (adjCtl != null) foreach (Control c in adjCtl) c.Visible = false;
             foreach (Control c in new Control[] { boxColors, cropPresets, bCropApply, bCropCancel, bCropReset, bFonts, outColors, outWidth, picStyles }) c.Visible = false;
             if (tab == EdTab.Trim && TrimLayout != null) y = TrimLayout(y, cw);
             else if (tab == EdTab.Effects && EffectsLayout != null) y = EffectsLayout(y, cw);
@@ -1187,6 +1197,24 @@ namespace FileConverter
                 Row("ed_position", position, ref y);
                 Row("ed_opacity", opacity, ref y);
             textDone:;
+            }
+            else if (tab == EdTab.Adjust)
+            {
+                foreach (Control c in adjCtl) c.Visible = true;
+                AddLabel(() => L.T("adj_look"), new Rectangle(p, y, cw, Theme.S(20))); y += Theme.S(24);
+                int fh2 = filters.NeededHeight(Adjust.FilterKeys.Length);
+                BodyPlace(filters, new Rectangle(p, y, cw, fh2)); y += fh2 + gap + Theme.S(6);
+                Row("adj_bright", aBright, ref y);
+                Row("adj_contrast", aContrast, ref y);
+                Row("adj_sat", aSat, ref y);
+                Row("adj_warm", aWarm, ref y);
+                Row("adj_blur", aBlur, ref y);
+                Row("adj_sharp", aSharp, ref y);
+                int half = (cw - gap) / 2;
+                BodyPlace(bCompare, new Rectangle(p, y, half, Theme.S(36)));
+                BodyPlace(bAdjReset, new Rectangle(p + half + gap, y, cw - half - gap, Theme.S(36)));
+                bAdjReset.Enabled = !S.Adj.None;
+                y += Theme.S(36) + gap;
             }
             else if (tab == EdTab.Resize)
             {
@@ -1258,6 +1286,89 @@ namespace FileConverter
             if (body.Offset > body.MaxOffset) { body.ClampTo(body.MaxOffset); DoLayout(); return; }
             body.Invalidate();
             Invalidate();
+        }
+
+        // ------------------------------------------------------------------ adjust (light, color, looks, blur, sharpness)
+        ChipGrid filters;
+        Slider aBright, aContrast, aSat, aWarm, aBlur, aSharp;
+        Btn bCompare, bAdjReset;
+        System.Windows.Forms.Timer adjTimer;
+        bool comparing;
+        Control[] adjCtl;
+
+        void InitAdjust()
+        {
+            filters = new ChipGrid { Columns = 3, RowH = 32 };
+            List<string> fk = new List<string>(Adjust.FilterKeys);
+            filters.LabelOf = k => L.T(k);
+            filters.SetItems(fk, "fl_none");
+            filters.SelectedChanged += (s, e) => { if (loadingAdj) return; S.Adj.Filter = Math.Max(0, Array.IndexOf(Adjust.FilterKeys, filters.Selected)); AdjChanged(); };
+            Func<float, string> signed = v => { int i = (int)Math.Round(v); return i > 0 ? "+" + i : i.ToString(); };
+            aBright = new Slider { Min = -100, Max = 100, Value = 0, Format = signed };
+            aContrast = new Slider { Min = -100, Max = 100, Value = 0, Format = signed };
+            aSat = new Slider { Min = -100, Max = 100, Value = 0, Format = signed };
+            aWarm = new Slider { Min = -100, Max = 100, Value = 0, Format = signed };
+            aBlur = new Slider { Min = 0, Max = 100, Value = 0 };
+            aSharp = new Slider { Min = 0, Max = 100, Value = 0 };
+            foreach (Slider sl in new[] { aBright, aContrast, aSat, aWarm, aBlur, aSharp })
+            {
+                Slider k = sl;
+                k.ValueChanged += (s, e) =>
+                {
+                    if (loadingAdj) return;
+                    S.Adj.Bright = aBright.Value; S.Adj.Contrast = aContrast.Value; S.Adj.Sat = aSat.Value; S.Adj.Warmth = aWarm.Value;
+                    S.Adj.Blur = aBlur.Value; S.Adj.Sharpen = aSharp.Value;
+                    AdjChanged();
+                };
+            }
+            bCompare = new Btn(() => L.T("adj_compare"), "\uE7B3", BtnKind.Secondary) { FontSize = 9f };
+            bCompare.MouseDown += (s, e) => { if (Canvas == null || S.Preview == null) return; comparing = true; Canvas.Image = S.Preview; Canvas.Invalidate(); };
+            bCompare.MouseUp += (s, e) => { comparing = false; ShowAdjusted(); };
+            bCompare.MouseLeave += (s, e) => { if (comparing) { comparing = false; ShowAdjusted(); } };
+            bAdjReset = new Btn(() => L.T("adj_reset"), Ico.Refresh, BtnKind.Ghost) { FontSize = 9f };
+            bAdjReset.Click += (s, e) => { S.Adj = new Adjust(); LoadAdjust(); AdjChanged(); };
+            adjCtl = new Control[] { filters, aBright, aContrast, aSat, aWarm, aBlur, aSharp, bCompare, bAdjReset };
+            body.Controls.AddRange(adjCtl);
+            adjTimer = new System.Windows.Forms.Timer { Interval = 35 };
+            adjTimer.Tick += (s, e) => { adjTimer.Stop(); ShowAdjusted(); };
+        }
+
+        bool loadingAdj;
+
+        /// Puts the session's adjustments into the controls (new photo, undo, page change).
+        void LoadAdjust()
+        {
+            if (filters == null) return;
+            loadingAdj = true;
+            Adjust a = S.Adj;
+            filters.Selected = Adjust.FilterKeys[Math.Max(0, Math.Min(Adjust.FilterKeys.Length - 1, a.Filter))];
+            aBright.SetValue(a.Bright, false); aContrast.SetValue(a.Contrast, false); aSat.SetValue(a.Sat, false); aWarm.SetValue(a.Warmth, false);
+            aBlur.SetValue(a.Blur, false); aSharp.SetValue(a.Sharpen, false);
+            loadingAdj = false;
+        }
+
+        /// Sets the adjustments (restoring an edit).
+        public void SetAdjust(Adjust a)
+        {
+            S.Adj = a ?? new Adjust();
+            LoadAdjust();
+            ShowAdjusted();
+        }
+
+        void AdjChanged()
+        {
+            S.Dirty = true;
+            adjTimer.Stop(); adjTimer.Start();
+            if (bAdjReset != null) bAdjReset.Enabled = !S.Adj.None;
+        }
+
+        void ShowAdjusted()
+        {
+            if (Canvas == null || !S.Active || S.Video || comparing) return;
+            Cursor was = Cursor.Current;
+            try { Canvas.Image = S.Shown; } catch (Exception ex) { if (Notify != null) Notify(ex is OutOfMemoryException ? L.T("ed_too_big") : ex.Message, false, null); }
+            Canvas.Invalidate();
+            if (Changed != null) Changed();
         }
 
         void Row(string key, Control c, ref int y)

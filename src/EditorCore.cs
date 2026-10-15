@@ -373,6 +373,23 @@ namespace FileConverter
         public int BgMode;               // 0 original, 1 transparent, 2 color, 3 blur
         public Color BgColor = Color.White;
         public float BgBlur = 40;        // 0..100
+        /// Light, color, look, blur and sharpness (photos).
+        public Adjust Adj = new Adjust();
+        Bitmap adjPreview, adjBase; Adjust adjFor;
+
+        /// What the canvas shows: the preview with the adjustments.
+        public Bitmap Shown
+        {
+            get
+            {
+                if (Video || Adj.None || Preview == null) return Preview;
+                if (adjPreview != null && adjBase == Preview && Adj.Same(adjFor)) return adjPreview;
+                Bitmap old = adjPreview;
+                adjPreview = Adj.Apply(Preview); adjBase = Preview; adjFor = Adj.Clone();
+                if (old != null) old.Dispose();
+                return adjPreview;
+            }
+        }
 
         public TextLayer Current { get { return Selected >= 0 && Selected < Layers.Count ? Layers[Selected] : null; } }
         public int ShortSide { get { return W <= 0 ? 1000 : Math.Min(W, H); } }
@@ -383,6 +400,7 @@ namespace FileConverter
             End();
             Video = false;
             Source = Original = Work = source; SourcePath = path;
+            Adj = new Adjust();
             OW = W = source.Width; OH = H = source.Height;
             MakePreview();
             Dirty = false;
@@ -440,6 +458,7 @@ namespace FileConverter
 
         void DisposeImages()
         {
+            if (adjPreview != null) { adjPreview.Dispose(); adjPreview = null; adjBase = null; }
             HashSet<Bitmap> all = new HashSet<Bitmap>();
             foreach (Bitmap b in new[] { Preview, Work, Original, Source }) if (b != null) all.Add(b);
             foreach (Bitmap b in all) b.Dispose();
@@ -576,7 +595,8 @@ namespace FileConverter
             using (Graphics g = Graphics.FromImage(b))
             {
                 if (flatten) g.Clear(Color.White);
-                g.DrawImage(Work, new Rectangle(0, 0, W, H));
+                if (Video || Adj.None) g.DrawImage(Work, new Rectangle(0, 0, W, H));
+                else using (Bitmap a = Adj.Apply(Work)) g.DrawImage(a, new Rectangle(0, 0, W, H));
                 g.CompositingQuality = CompositingQuality.HighQuality;
                 foreach (TextLayer l in Layers) l.Draw(g);
             }

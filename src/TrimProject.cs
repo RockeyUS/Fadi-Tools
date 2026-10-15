@@ -149,7 +149,7 @@ namespace FileConverter
                 d.Title = L.T("proj_open_title");
                 d.Filter = L.T("proj_files") + " (*." + ProjectExt + ")|*." + ProjectExt;
                 try { if (Directory.Exists(ProjectsDir)) d.InitialDirectory = ProjectsDir; } catch { }
-                return d.ShowDialog(owner) == DialogResult.OK ? d.FileName : null;
+                return LastDir.Show(d, owner, "project") == DialogResult.OK ? d.FileName : null;
             }
         }
 

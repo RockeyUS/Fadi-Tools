@@ -42,6 +42,7 @@ namespace FileConverter
         public void Show(Page p)
         {
             if (active == p) return;
+            if (Visible && active != null) Fx.Crossfade(this, 180);
             active = p;
             Photos.Visible = p == Photos; Videos.Visible = p == Videos;
             DoLayout();

@@ -53,6 +53,19 @@ namespace FileConverter
         public bool AlignStart;      // icon + text at the start (menu-style rows)
         public Color InkColor = Color.Empty;   // optional text/icon color (e.g. red for "Clear list")
         public float GlyphSize = 11f;
+        readonly Ripple ripple = new Ripple();
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left && Enabled) { ripple.Start(e.Location, ClientRectangle); Animator.Start(this); }
+            base.OnMouseDown(e);
+        }
+        public override bool Step()
+        {
+            bool r = ripple.Step();
+            bool b = base.Step();
+            return r || b;
+        }
 
         public Btn(Func<string> label, string glyph, BtnKind kind)
         {
@@ -126,6 +139,9 @@ namespace FileConverter
                     }
             }
 
+            if (ripple.Running)
+                ripple.Paint(g, rad, Kind == BtnKind.Primary ? Color.FromArgb(90, 255, 255, 255) : Theme.Dark ? Color.FromArgb(40, 255, 255, 255) : Color.FromArgb(34, 0, 0, 0));
+
             string text = Caption;
             Font f = Theme.F(FontSize, Bold ? FontStyle.Bold : FontStyle.Regular);
             int tw = Theme.Measure(text, f);
@@ -159,14 +175,45 @@ namespace FileConverter
         public event EventHandler SelectedChanged;
         public float FontSize = 9.25f;
 
+        float pos = -1;   // where the selection pill is now: it slides to the chosen item
+        /// Optional: the part of the page this switch changes — it cross-fades to the new content.
+        public Control FadeTarget;
+        /// Which part of FadeTarget (null = all of it).
+        public Func<Rectangle> FadeArea;
+
         public Segments(params Func<string>[] items) { Items = items; Cursor = Cursors.Hand; }
 
         public int SelectedIndex
         {
             get { return selected; }
-            set { if (value != selected && value >= 0 && value < Items.Length) { selected = value; Invalidate(); if (SelectedChanged != null) SelectedChanged(this, EventArgs.Empty); } }
+            set
+            {
+                if (value != selected && value >= 0 && value < Items.Length)
+                {
+                    if (FadeTarget != null && Visible) Fx.Crossfade(FadeTarget, FadeArea, 170);
+                    selected = value; Slide();
+                    if (SelectedChanged != null) SelectedChanged(this, EventArgs.Empty);
+                }
+            }
         }
-        public void SetSilently(int i) { selected = i; Invalidate(); }
+        public void SetSilently(int i) { selected = i; pos = i; Invalidate(); }
+
+        void Slide()
+        {
+            if (pos < 0 || !Visible || !Fx.Motion) pos = selected;
+            Animator.Start(this);
+            Invalidate();
+        }
+
+        public override bool Step()
+        {
+            bool b = base.Step();
+            if (pos < 0) pos = selected;
+            bool m = Fx.Ease(ref pos, selected, 0.24f);
+            if (m) Invalidate();
+            return b || m;
+        }
+        protected override void OnVisibleChanged(EventArgs e) { pos = selected; base.OnVisibleChanged(e); }
 
         RectangleF Seg(int i)
         {
@@ -200,21 +247,31 @@ namespace FileConverter
             Theme.Smooth(g);
             Color track = Theme.Dark ? Theme.Mix(Theme.Card, Color.Black, 0.28f) : Theme.Mix(Theme.Bg, Theme.Selected, 0.75f);
             Theme.FillRound(g, new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), Theme.S(9), track);
+            if (selected >= 0 && selected < Items.Length)
+            {
+                // the white pill, on its way to (or at) the chosen item
+                float p = pos < 0 ? selected : Math.Max(0, Math.Min(Items.Length - 1, pos));
+                int a = (int)Math.Floor(p), b = Math.Min(Items.Length - 1, a + 1);
+                float f0 = p - a;
+                RectangleF ra = Seg(a), rb = Seg(b);
+                RectangleF pr = new RectangleF(ra.X + (rb.X - ra.X) * f0, ra.Y, ra.Width + (rb.Width - ra.Width) * f0, ra.Height);
+                Theme.FillRound(g, pr, Theme.S(7), Theme.Dark ? Theme.Mix(Theme.Card, Color.White, 0.06f) : Color.White);
+                Theme.StrokeRound(g, pr, Theme.S(7), Theme.Dark ? Color.FromArgb(18, 255, 255, 255) : Color.FromArgb(26, 60, 50, 30));
+            }
             for (int i = 0; i < Items.Length; i++)
             {
                 RectangleF r = Seg(i);
                 Color fg = Theme.InkSoft;
-                if (i == selected)
-                {
-                    Theme.FillRound(g, r, Theme.S(7), Theme.Dark ? Theme.Mix(Theme.Card, Color.White, 0.06f) : Color.White);
-                    Theme.StrokeRound(g, r, Theme.S(7), Theme.Dark ? Color.FromArgb(18, 255, 255, 255) : Color.FromArgb(26, 60, 50, 30));
-                    fg = Theme.Ink;
-                }
-                else if (i == hoverIndex && Enabled) { Theme.FillRound(g, r, Theme.S(7), Color.FromArgb(Theme.Dark ? 16 : 70, Color.White)); fg = Theme.Ink; }
+                if (i == selected) fg = Theme.Ink;
+                else if (i == hoverIndex && Enabled && Math.Abs(pos - i) > 0.5f) { Theme.FillRound(g, r, Theme.S(7), Color.FromArgb(Theme.Dark ? 16 : 70, Color.White)); fg = Theme.Ink; }
                 else if (i == hoverIndex && Enabled) fg = Theme.Ink;
                 if (!Enabled) fg = Theme.InkFaint;
                 Font f = Theme.F(FontSize, i == selected ? FontStyle.Bold : FontStyle.Regular);
                 Rectangle rr = Rectangle.Round(r);
+                // long words in a narrow tab: a slightly smaller font before cutting the word off
+                if (Glyphs == null || i >= Glyphs.Length || Glyphs[i] == null)
+                    for (float fs = FontSize - 0.5f; fs >= 7.5f && Theme.Measure(Items[i](), f) > rr.Width - Theme.S(8); fs -= 0.5f)
+                        f = Theme.F(fs, i == selected ? FontStyle.Bold : FontStyle.Regular);
                 if (Glyphs != null && i < Glyphs.Length && Glyphs[i] != null)
                 {
                     string t = Items[i]();
@@ -245,6 +302,8 @@ namespace FileConverter
         public int Columns = 4;
         public int RowH = 36;
         public event EventHandler SelectedChanged;
+        /// What a chip says (default: the item in capitals, like "PNG").
+        public Func<string, string> LabelOf;
 
         public ChipGrid() { Cursor = Cursors.Hand; }
 
@@ -313,7 +372,8 @@ namespace FileConverter
                     Theme.StrokeRound(g, r, Theme.S(8), h ? Theme.FieldBorder : Theme.ChipBorder);
                     fg = Enabled ? Theme.Ink : Theme.InkFaint;
                 }
-                Theme.Text(g, items[i].ToUpperInvariant(), f, fg, c, Align.Center, true, false, true);
+                string lbl = LabelOf != null ? LabelOf(items[i]) : items[i].ToUpperInvariant();
+                Theme.Text(g, lbl, f, fg, c, Align.Center, true, false, LabelOf == null);
             }
         }
     }
@@ -479,6 +539,15 @@ namespace FileConverter
         public Func<string> Title, Sub;
         public string Glyph = Ico.Upload;
         public bool DragHot;
+        /// Small tips shown at the bottom (keys); a different one each time the page is opened.
+        public string[] Tips;
+        static int tipSeed = Environment.TickCount & 0xFFFF;
+        int tip = -1;
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            if (Visible && Tips != null && Tips.Length > 0) tip = (tipSeed++) % Tips.Length;
+            base.OnVisibleChanged(e);
+        }
 
         public DropZone(Func<string> title, Func<string> sub)
         {
@@ -509,6 +578,20 @@ namespace FileConverter
             Theme.Text(g, Title(), Theme.Serif(14.5f), Theme.Ink, t1, Align.Center);
             Rectangle t2 = new Rectangle(Theme.S(10), t1.Bottom + Theme.S(2), Width - Theme.S(20), Theme.S(24));
             Theme.Text(g, Sub(), Theme.F(9.5f), Theme.InkSoft, t2, Align.Center);
+            if (Tips != null && Tips.Length > 0 && Height > Theme.S(300))
+            {
+                if (tip < 0) tip = (tipSeed++) % Tips.Length;
+                string tt = L.T(Tips[tip % Tips.Length]);
+                Font tf = Theme.F(9f);
+                int tw = Math.Min(Width - Theme.S(80), Theme.Measure(tt, tf)), gw = Theme.S(18);
+                Rectangle row = new Rectangle((Width - tw - gw - Theme.S(8)) / 2, Height - Theme.S(54), tw + gw + Theme.S(8), Theme.S(30));
+                Rectangle pill = new Rectangle(row.X - Theme.S(12), row.Y, row.Width + Theme.S(24), row.Height);
+                Theme.FillRound(g, pill, Theme.S(15), Theme.Mix(Theme.CardInner, Theme.Card, 0.5f));
+                Rectangle gr = Theme.Mirror(new Rectangle(row.X, row.Y, gw, row.Height), Width);
+                Rectangle tr = Theme.Mirror(new Rectangle(row.X + gw + Theme.S(8), row.Y, tw + 2, row.Height), Width);
+                Theme.Glyph(g, "\uEA80", 9f, Theme.AccentColor, gr);
+                Theme.Text(g, tt, tf, Theme.InkSoft, tr, Align.Start);
+            }
         }
     }
 
@@ -527,6 +610,8 @@ namespace FileConverter
         protected virtual void RowDoubleClick(int index) { }
         protected virtual void RowHover(int index, Point local, Rectangle row) { }
         protected virtual void PaintEmpty(Graphics g) { }
+        /// Files a row can be dragged out of the app as (null = it can't).
+        protected virtual string[] DragFiles(int index) { return null; }
 
         protected int RH { get { return Theme.S(RowHeight); } }
         int ContentH { get { return Count * RH; } }
@@ -598,6 +683,9 @@ namespace FileConverter
                 dragThumb = true; dragStartY = e.Y; Jump(scroll); dragStartScroll = scroll; if (!th.Contains(e.Location)) { Jump((int)((e.Y / (double)Height) * ContentH - Height / 2)); dragStartScroll = scroll; } Capture = true; Invalidate(); return;
             }
             Focus();
+            int row = (e.Y + scroll) / RH;
+            if (e.Button == MouseButtons.Left && row >= 0 && row < Count && DragFiles(row) != null)
+                DragOut.Arm(this, e.Location, () => row < Count ? DragFiles(row) : null);
             base.OnMouseDown(e);
         }
 
@@ -756,9 +844,10 @@ namespace FileConverter
         int selected;
         float pillY = -1;   // the selection pill glides between items
         int hoverIndex = -1, hoverFoot = -1; bool hoverSearch;
-        float[] footHot = new float[3]; float searchHot;
+        float[] footHot = new float[2]; float searchHot;
+        readonly Ripple ripple = new Ripple();
         public event Action<int> Navigate;
-        public event Action ToggleTheme, ToggleLanguage, OpenSearch;
+        public event Action OpenSearch;
         public event Action<Rectangle> OpenActivity;
         /// what the Activity row shows: jobs running, and finished ones not looked at yet
         public int ActivityRunning, ActivityNew;
@@ -769,8 +858,11 @@ namespace FileConverter
         public int Selected
         {
             get { return selected; }
-            set { selected = value; if (pillY < 0 || !Visible) pillY = ItemRect(value).Y; Animator.Start(this); Invalidate(); }
+            set { selected = value; if (pillY < 0 || !Visible || !Fx.Motion) pillY = SelRect(value).Y; Animator.Start(this); Invalidate(); }
         }
+        /// Settings lives at the bottom (under Activity), after the tools.
+        public int SettingsIndex { get { return Items.Count; } }
+        Rectangle SelRect(int i) { return i >= 0 && i < Items.Count ? ItemRect(i) : FootRect(1); }
 
         public Rectangle SearchRect { get { return new Rectangle(Theme.S(10), Theme.S(66), Width - Theme.S(20), Theme.S(36)); } }
         int NavTop { get { return Theme.S(140); } }
@@ -789,14 +881,11 @@ namespace FileConverter
             int st = Step0;
             return new Rectangle(Theme.S(10), NavTop + i * st, Width - Theme.S(20), st - Theme.S(4));
         }
-        /// 0 = Activity (full width), 1 = theme, 2 = language (half width each, side by side)
+        /// 0 = Activity, 1 = Settings (under it)
         public Rectangle FootRect(int i)
         {
             int x = Theme.S(10), w = Width - Theme.S(20), h = Theme.S(36);
-            if (i == 0) return new Rectangle(x, FootTop, w, h);
-            int half = (w - Theme.S(4)) / 2;
-            Rectangle r = new Rectangle(i == 1 ? x : x + half + Theme.S(4), FootTop + Theme.S(40), half, h);
-            return Theme.Mirror(r, Width);
+            return new Rectangle(x, FootTop + i * Theme.S(40), w, h);
         }
 
         public override bool Step()
@@ -808,7 +897,8 @@ namespace FileConverter
                 Items[i].Hot += (t - Items[i].Hot) * 0.28f;
                 if (Math.Abs(t - Items[i].Hot) < 0.03f) Items[i].Hot = t; else more = true;
             }
-            for (int i = 0; i < 3; i++)
+            if (ripple.Step()) more = true;
+            for (int i = 0; i < 2; i++)
             {
                 float t = i == hoverFoot ? 1 : 0;
                 footHot[i] += (t - footHot[i]) * 0.28f;
@@ -817,9 +907,9 @@ namespace FileConverter
             float ts = hoverSearch ? 1 : 0;
             searchHot += (ts - searchHot) * 0.28f;
             if (Math.Abs(ts - searchHot) < 0.03f) searchHot = ts; else more = true;
-            float ty = ItemRect(selected).Y;
-            if (pillY < 0) pillY = ty;
-            pillY += (ty - pillY) * 0.24f;
+            float ty = SelRect(selected).Y;
+            if (pillY < 0 || !Fx.Motion) pillY = ty;
+            pillY += (ty - pillY) * 0.22f;
             if (Math.Abs(ty - pillY) < 0.5f) pillY = ty; else more = true;
             if (more || !spinOnly) Invalidate();
             else if (ActivityRunning > 0) Invalidate(FootRect(0));   // only the little spinner is turning
@@ -833,7 +923,7 @@ namespace FileConverter
         {
             int h = -1, f = -1;
             for (int i = 0; i < Items.Count; i++) if (ItemRect(i).Contains(e.Location)) h = i;
-            for (int i = 0; i < 3; i++) if (FootRect(i).Contains(e.Location)) f = i;
+            for (int i = 0; i < 2; i++) if (FootRect(i).Contains(e.Location)) f = i;
             bool s = SearchRect.Contains(e.Location);
             if (h != hoverIndex || f != hoverFoot || s != hoverSearch) { hoverIndex = h; hoverFoot = f; hoverSearch = s; Animator.Start(this); }
             Cursor = (h >= 0 || f >= 0 || s) ? Cursors.Hand : Cursors.Default;
@@ -844,14 +934,15 @@ namespace FileConverter
         {
             int nav = -1;
             for (int i = 0; i < Items.Count; i++) if (ItemRect(i).Contains(e.Location)) nav = i;
-            bool act = FootRect(0).Contains(e.Location), th = FootRect(1).Contains(e.Location), lg = FootRect(2).Contains(e.Location);
+            bool act = FootRect(0).Contains(e.Location), set = FootRect(1).Contains(e.Location);
             bool srch = SearchRect.Contains(e.Location);
             base.OnMouseClick(e);
+            if (set) nav = SettingsIndex;
+            if (nav >= 0) { ripple.Start(e.Location, SelRect(nav)); Animator.Start(this); }
+            else if (act) { ripple.Start(e.Location, FootRect(0)); Animator.Start(this); }
             if (nav >= 0 && Navigate != null) Navigate(nav);
             else if (srch && OpenSearch != null) OpenSearch();
             else if (act && OpenActivity != null) OpenActivity(FootRect(0));
-            else if (th && ToggleTheme != null) ToggleTheme();
-            else if (lg && ToggleLanguage != null) ToggleLanguage();
         }
 
         /// Icon + label row, Claude-style: quiet until hovered or selected.
@@ -909,9 +1000,9 @@ namespace FileConverter
             Theme.Text(g, L.T("nav_section"), Theme.F(8.25f), Theme.InkFaint, sec);
 
             // the selection (glides between rows)
-            if (selected >= 0 && selected < Items.Count)
+            if (selected >= 0 && selected <= Items.Count)
             {
-                Rectangle r0 = ItemRect(selected);
+                Rectangle r0 = SelRect(selected);
                 RectangleF pr = new RectangleF(r0.X, pillY < 0 ? r0.Y : pillY, r0.Width, r0.Height);
                 Theme.FillRound(g, pr, Theme.S(8), Theme.Selected);
             }
@@ -932,37 +1023,42 @@ namespace FileConverter
                 }
             }
 
-            // footer: Activity, then appearance + language side by side
+            // footer: Activity, then Settings
             using (Pen p = new Pen(Theme.SideBorder)) g.DrawLine(p, Theme.S(18), FootTop - Theme.S(10), Width - Theme.S(18), FootTop - Theme.S(10));
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < 2; i++)
             {
                 Rectangle r = FootRect(i);
-                if (footHot[i] > 0) Theme.FillRound(g, r, Theme.S(8), Color.FromArgb((int)(255 * footHot[i]), Theme.Hover));
-                Color fg = Theme.Mix(Theme.InkSoft, Theme.Ink, footHot[i]);
-                if (i == 0)
+                bool sel = i == 1 && selected == SettingsIndex;
+                if (!sel && footHot[i] > 0) Theme.FillRound(g, r, Theme.S(8), Color.FromArgb((int)(255 * footHot[i]), Theme.Hover));
+                Color fg = sel ? Theme.Ink : Theme.Mix(Theme.InkSoft, Theme.Ink, footHot[i]);
+                if (i == 1)
                 {
-                    Row(g, r, "", L.T("act_title"), ActivityRunning > 0 ? Theme.Ink : fg, false);
-                    Rectangle badge = Theme.Mirror(new Rectangle(r.Right - Theme.S(34), r.Y + (r.Height - Theme.S(22)) / 2, Theme.S(24), Theme.S(22)), Width);
-                    if (ActivityRunning > 0)
+                    Row(g, r, Ico.Settings, L.T("nav_settings"), fg, false);
+                    if (sel && Math.Abs(pillY - r.Y) < 2)
                     {
-                        // a turning ring + how many are running
-                        float ang = (Environment.TickCount % 1000) / 1000f * 360f;
-                        RectangleF ring = new RectangleF(badge.X + Theme.S(3), badge.Y + Theme.S(2), Theme.S(18), Theme.S(18));
-                        using (Pen tp = new Pen(Theme.Mix(Theme.Side, Theme.AccentColor, 0.25f), Theme.S(2f))) g.DrawEllipse(tp, ring);
-                        using (Pen ap = new Pen(Theme.AccentColor, Theme.S(2f)) { StartCap = LineCap.Round, EndCap = LineCap.Round }) g.DrawArc(ap, ring, ang, 100);
-                        Theme.Text(g, ActivityRunning.ToString(), Theme.F(7.25f, FontStyle.Bold), Theme.AccentColor, Rectangle.Round(ring), Align.Center, true, false, true);
-                    }
-                    else if (ActivityNew > 0)
-                    {
-                        Rectangle dot = new Rectangle(badge.X + badge.Width / 2 - Theme.S(4), badge.Y + badge.Height / 2 - Theme.S(4), Theme.S(8), Theme.S(8));
-                        using (SolidBrush b = new SolidBrush(Theme.Success)) g.FillEllipse(b, dot);
+                        Rectangle mk = Theme.RTL ? new Rectangle(r.Right - Theme.S(3), r.Y + Theme.S(10), Theme.S(3), r.Height - Theme.S(20)) : new Rectangle(r.X, r.Y + Theme.S(10), Theme.S(3), r.Height - Theme.S(20));
+                        Theme.FillRound(g, mk, Theme.S(1.5f), Theme.AccentColor);
                     }
                     continue;
                 }
-                string glyph = i == 1 ? (Theme.Dark ? Ico.Sun : Ico.Moon) : Ico.Globe;
-                string text = i == 1 ? (Theme.Dark ? L.T("th_light") : L.T("th_dark")) : (Theme.RTL ? "English" : "العربية");
-                Row(g, r, glyph, text, fg, false, 9.25f);
+                Row(g, r, "\uE9D9", L.T("act_title"), ActivityRunning > 0 ? Theme.Ink : fg, false);
+                Rectangle badge = Theme.Mirror(new Rectangle(r.Right - Theme.S(34), r.Y + (r.Height - Theme.S(22)) / 2, Theme.S(24), Theme.S(22)), Width);
+                if (ActivityRunning > 0)
+                {
+                    // a turning ring + how many are running
+                    float ang = (Environment.TickCount % 1000) / 1000f * 360f;
+                    RectangleF ring = new RectangleF(badge.X + Theme.S(3), badge.Y + Theme.S(2), Theme.S(18), Theme.S(18));
+                    using (Pen tp = new Pen(Theme.Mix(Theme.Side, Theme.AccentColor, 0.25f), Theme.S(2f))) g.DrawEllipse(tp, ring);
+                    using (Pen ap = new Pen(Theme.AccentColor, Theme.S(2f)) { StartCap = LineCap.Round, EndCap = LineCap.Round }) g.DrawArc(ap, ring, ang, 100);
+                    Theme.Text(g, ActivityRunning.ToString(), Theme.F(7.25f, FontStyle.Bold), Theme.AccentColor, Rectangle.Round(ring), Align.Center, true, false, true);
+                }
+                else if (ActivityNew > 0)
+                {
+                    Rectangle dot = new Rectangle(badge.X + badge.Width / 2 - Theme.S(4), badge.Y + badge.Height / 2 - Theme.S(4), Theme.S(8), Theme.S(8));
+                    using (SolidBrush b = new SolidBrush(Theme.Success)) g.FillEllipse(b, dot);
+                }
             }
+            if (ripple.Running) ripple.Paint(g, Theme.S(8), Theme.Dark ? Color.FromArgb(34, 255, 255, 255) : Color.FromArgb(30, 0, 0, 0));
         }
     }
 
@@ -982,8 +1078,10 @@ namespace FileConverter
             AllowDrop = true;
         }
 
-        /// Top of the content area below the title.
-        protected int Top0 { get { return Theme.S(96); } }
+        /// Top of the content area below the title (moves up when a long page is scrolled).
+        protected int Top0 { get { return Theme.S(96) - ScrollY; } }
+        /// How far a long page (Settings) has been scrolled down.
+        protected int ScrollY;
         protected int Pad { get { return Theme.S(28); } }
 
         public abstract void DoLayout();
@@ -1017,8 +1115,8 @@ namespace FileConverter
             PaintBg(g);
             Theme.Smooth(g);
             int tx = Pad;
-            Label(g, L.T(TitleKey), Theme.Serif(20f), Theme.Ink, new Rectangle(tx, Theme.S(18), Width - Pad - tx, Theme.S(40)), Align.Start, false);
-            Label(g, L.T(SubKey), Theme.F(9.75f), Theme.InkSoft, new Rectangle(tx, Theme.S(58), Width - Pad - tx, Theme.S(24)), Align.Start, false);
+            Label(g, L.T(TitleKey), Theme.Serif(20f), Theme.Ink, new Rectangle(tx, Theme.S(18) - ScrollY, Width - Pad - tx, Theme.S(40)), Align.Start, false);
+            Label(g, L.T(SubKey), Theme.F(9.75f), Theme.InkSoft, new Rectangle(tx, Theme.S(58) - ScrollY, Width - Pad - tx, Theme.S(24)), Align.Start, false);
             foreach (Rectangle c in cards) Theme.PaintCard(g, M(c));
             PaintContent(g);
         }
@@ -1037,9 +1135,9 @@ namespace FileConverter
             foreach (Control c in all)
             {
                 c.AllowDrop = true;
-                c.DragEnter += (s, e) => { e.Effect = !Busy && e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; DragHighlight(true); };
+                c.DragEnter += (s, e) => { if (DragOut.Active) { e.Effect = DragDropEffects.None; return; } e.Effect = !Busy && e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; DragHighlight(true); };
                 c.DragLeave += (s, e) => DragHighlight(false);
-                c.DragDrop += (s, e) => { DragHighlight(false); string[] p = e.Data.GetData(DataFormats.FileDrop) as string[]; if (p != null && !Busy) AcceptFiles(p); };
+                c.DragDrop += (s, e) => { DragHighlight(false); if (DragOut.Active) return; string[] p = e.Data.GetData(DataFormats.FileDrop) as string[]; if (p != null && !Busy) AcceptFiles(p); };
             }
         }
         protected virtual void DragHighlight(bool on) { }

@@ -96,6 +96,7 @@ namespace FileConverter
         public event Action<DlItem> Act, Remove;
         public DlQueue() { RowHeight = 78; }
         public override int Count { get { return Items.Count; } }
+        protected override string[] DragFiles(int i) { return Items[i].Files.Count > 0 ? Items[i].Files.ToArray() : null; }
 
         Rectangle ActRect(Rectangle r)
         {
