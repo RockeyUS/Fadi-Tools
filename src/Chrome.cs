@@ -91,6 +91,11 @@ namespace FileConverter
         public bool CanMaximize = true, CanMinimize = true;
         public Func<string> Title;                 // optional text on the left
         public int SideWidth; public bool SideRight;   // part painted like the sidebar
+        /// Light/dark switch at the far side from the window buttons.
+        public event Action ThemeClicked;
+        public bool ShowThemeButton { get { return ThemeClicked != null; } }
+        const int ThemeSlot = 99;
+        Rectangle ThemeCell { get { return Theme.Mirror(new Rectangle(Theme.S(6), 0, Theme.S(42), Height - 1), Width); } }
         Point dragFrom; bool dragging;             // (only used where Windows can't drag for us)
 
         const int WM_NCHITTEST = 0x84, HTTRANSPARENT = -1;
@@ -111,7 +116,12 @@ namespace FileConverter
             Rectangle r = new Rectangle(Width - (slot + 1) * w, 0, w, Height);
             return Theme.Mirror(r, Width);
         }
-        public int ButtonAt(Point p) { for (int i = 0; i < Count; i++) if (Cell(i).Contains(p)) return i; return -1; }
+        public int ButtonAt(Point p)
+        {
+            for (int i = 0; i < Count; i++) if (Cell(i).Contains(p)) return i;
+            if (ShowThemeButton && ThemeCell.Contains(p)) return ThemeSlot;
+            return -1;
+        }
 
         protected override void WndProc(ref Message m)
         {
@@ -148,6 +158,7 @@ namespace FileConverter
             dragging = false;
             int was = press; press = -1; Invalidate();
             if (was < 0 || ButtonAt(e.Location) != was) return;
+            if (was == ThemeSlot) { if (ThemeClicked != null) ThemeClicked(); return; }
             switch (Kind(was))
             {
                 case 0: f.Close(); break;
@@ -174,12 +185,23 @@ namespace FileConverter
                 g.ResetClip();
                 using (Pen p = new Pen(Theme.SideBorder)) { int x = SideRight ? Width - SideWidth : SideWidth - 1; g.DrawLine(p, x, 0, x, Height); }
             }
+            // a line that separates the top bar from the app
+            using (Pen line = new Pen(Theme.SideBorder)) g.DrawLine(line, 0, Height - 1, Width, Height - 1);
             Theme.Smooth(g);
             bool active = Form.ActiveForm == f;
+            if (ShowThemeButton)
+            {
+                Rectangle c = ThemeCell;
+                Rectangle pill = new Rectangle(c.X + Theme.S(5), c.Y + Theme.S(5), c.Width - Theme.S(10), c.Height - Theme.S(10));
+                bool hot = hover == ThemeSlot;
+                if (hot) Theme.FillRound(g, pill, Theme.S(8), press == ThemeSlot ? Theme.Pressed : Theme.Hover);
+                // the moon in light mode (switch to dark), the sun in dark mode
+                Theme.Glyph(g, Theme.Dark ? "\uE706" : "\uE708", 9f, active || hot ? Theme.Ink : Theme.InkFaint, pill);
+            }
             if (Title != null)
             {
                 string t = Title();
-                int x0 = SideWidth > 0 && !SideRight ? SideWidth : 0;
+                int x0 = SideWidth > 0 && !SideRight ? SideWidth : (ShowThemeButton ? Theme.S(48) : 0);
                 Rectangle tr = new Rectangle(x0 + Theme.S(16), 0, Width - x0 - Count * Theme.S(46) - Theme.S(32), Height);
                 Theme.Text(g, t, Theme.F(9f, FontStyle.Bold), active ? Theme.InkSoft : Theme.InkFaint, Theme.Mirror(tr, Width), Align.Start);
             }

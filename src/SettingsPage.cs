@@ -50,13 +50,12 @@ namespace FileConverter
                 Settings.Set("Accent", accent.Selected.ToArgb() == AccentColors[0].ToArgb() ? "" : ColorTranslator.ToHtml(Color.FromArgb(accent.Selected.R, accent.Selected.G, accent.Selected.B)));
                 Theme.ApplySettings(); Theme.RaiseChanged();
             };
-            logoSeg = new Segments(() => L.T("logo_classic"), () => L.T("logo_silver"), () => L.T("logo_custom"));
+            logoSeg = new Segments(() => L.T("logo_classic"), () => L.T("logo_silver"), () => L.T("logo_night"));
             string lc = Settings.Get("Logo", "");
-            logoSeg.SetSilently(lc == "silver" ? 1 : lc == "custom" ? 2 : 0);
+            logoSeg.SetSilently(lc == "silver" ? 1 : lc == "dark" ? 2 : 0);
             logoSeg.SelectedChanged += (s, e) =>
             {
-                if (logoSeg.SelectedIndex == 2 && !PickCustomLogo()) { string cur = Settings.Get("Logo", ""); logoSeg.SetSilently(cur == "silver" ? 1 : cur == "custom" ? 2 : 0); return; }
-                Settings.Set("Logo", new[] { "", "silver", "custom" }[logoSeg.SelectedIndex]);
+                Settings.Set("Logo", new[] { "", "silver", "dark" }[logoSeg.SelectedIndex]);
                 Theme.ResetLogo(); Theme.RaiseChanged();
             };
             folder = new FolderButton();

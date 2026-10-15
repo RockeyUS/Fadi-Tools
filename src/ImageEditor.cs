@@ -994,9 +994,15 @@ namespace FileConverter
         }
 
         // ------------------------------------------------------------------ save (photos)
+        /// Documents: with PDF chosen, the page asks to save the whole document (true = it did).
+        public Func<bool> SaveAllPages;
+        public bool SavingPdf { get { return fmt.SelectedIndex == Array.IndexOf(SaveExts, "pdf"); } }
+        public void UsePdf() { fmt.SetSilently(Array.IndexOf(SaveExts, "pdf")); }
+
         public void Save()
         {
             if (S.Work == null || saving || S.Video) return;
+            if (SavingPdf && SaveAllPages != null && SaveAllPages()) return;
             string ext = SaveExts[fmt.SelectedIndex];
             string name = Path.GetFileNameWithoutExtension(S.SourcePath) + " " + L.T("ed_suffix");
             List<string> choices = new List<string> { ext };

@@ -36,28 +36,28 @@ namespace FileConverter
         public static Color AccentColor { get { return Accent.IsEmpty ? Clay : Accent; } }
 
         // warm, flat surfaces (ivory / charcoal) with hairline borders
-        public static Color Bg { get { return T(P(Dark, C(250, 249, 245), C(38, 38, 36)), 0.04f, 0.06f); } }
+        public static Color Bg { get { return T(P(Dark, C(242, 240, 233), C(38, 38, 36)), 0.04f, 0.06f); } }
         public static Color BgTop { get { return Bg; } }
         public static Color BgBottom { get { return Bg; } }
-        public static Color Side { get { return T(P(Dark, C(243, 241, 234), C(31, 30, 29)), 0.06f, 0.07f); } }
+        public static Color Side { get { return T(P(Dark, C(233, 230, 220), C(31, 30, 29)), 0.06f, 0.07f); } }
         public static Color SideTop { get { return Side; } }
         public static Color SideBottom { get { return Side; } }
-        public static Color SideBorder { get { return T(P(Dark, C(229, 226, 216), C(52, 51, 48)), 0.08f, 0.08f); } }
+        public static Color SideBorder { get { return T(P(Dark, C(208, 204, 191), C(52, 51, 48)), 0.08f, 0.08f); } }
         public static Color Card { get { return T(P(Dark, C(255, 255, 255), C(48, 48, 46)), 0.015f, 0.04f); } }
-        public static Color CardBorder { get { return T(P(Dark, C(229, 226, 216), C(64, 63, 59)), 0.08f, 0.08f); } }
-        public static Color CardInner { get { return T(P(Dark, C(247, 246, 241), C(42, 42, 40)), 0.04f, 0.05f); } }
+        public static Color CardBorder { get { return T(P(Dark, C(212, 208, 196), C(64, 63, 59)), 0.08f, 0.08f); } }
+        public static Color CardInner { get { return T(P(Dark, C(245, 243, 237), C(42, 42, 40)), 0.04f, 0.05f); } }
         public static Color Ink { get { return P(Dark, C(20, 20, 19), C(240, 238, 230)); } }
-        public static Color InkSoft { get { return P(Dark, C(94, 93, 89), C(184, 181, 169)); } }
-        public static Color InkFaint { get { return P(Dark, C(145, 143, 136), C(128, 126, 118)); } }
-        public static Color Line { get { return P(Dark, C(236, 233, 225), C(58, 57, 53)); } }
-        public static Color Hover { get { return T(P(Dark, C(237, 234, 225), C(53, 52, 49)), 0.06f, 0.08f); } }
-        public static Color Pressed { get { return T(P(Dark, C(228, 225, 214), C(62, 61, 57)), 0.08f, 0.1f); } }
-        public static Color Selected { get { return T(P(Dark, C(232, 229, 219), C(57, 56, 52)), 0.1f, 0.12f); } }
+        public static Color InkSoft { get { return P(Dark, C(70, 69, 65), C(184, 181, 169)); } }
+        public static Color InkFaint { get { return P(Dark, C(112, 110, 104), C(128, 126, 118)); } }
+        public static Color Line { get { return P(Dark, C(224, 220, 209), C(58, 57, 53)); } }
+        public static Color Hover { get { return T(P(Dark, C(230, 226, 215), C(53, 52, 49)), 0.06f, 0.08f); } }
+        public static Color Pressed { get { return T(P(Dark, C(218, 214, 201), C(62, 61, 57)), 0.08f, 0.1f); } }
+        public static Color Selected { get { return T(P(Dark, C(224, 220, 208), C(57, 56, 52)), 0.1f, 0.12f); } }
         public static Color Field { get { return T(P(Dark, C(255, 255, 255), C(48, 48, 46)), 0.015f, 0.04f); } }
-        public static Color FieldBorder { get { return T(P(Dark, C(218, 215, 204), C(74, 73, 68)), 0.08f, 0.08f); } }
+        public static Color FieldBorder { get { return T(P(Dark, C(190, 186, 173), C(74, 73, 68)), 0.08f, 0.08f); } }
         public static Color ChipTop { get { return T(P(Dark, C(255, 255, 255), C(52, 52, 49)), 0.015f, 0.04f); } }
         public static Color ChipBottom { get { return ChipTop; } }
-        public static Color ChipBorder { get { return T(P(Dark, C(222, 219, 208), C(70, 69, 64)), 0.08f, 0.08f); } }
+        public static Color ChipBorder { get { return T(P(Dark, C(200, 196, 184), C(70, 69, 64)), 0.08f, 0.08f); } }
         // primary actions: flat accent with white text (Claude's clay by default)
         public static Color PrimaryTop { get { return AccentColor; } }
         public static Color PrimaryBottom { get { return AccentColor; } }
@@ -69,8 +69,8 @@ namespace FileConverter
         public static Color ErrorBg { get { return P(Dark, C(250, 233, 228), C(72, 40, 34)); } }
         public static Color Warn { get { return P(Dark, C(158, 106, 18), C(236, 188, 102)); } }
         public static Color WarnBg { get { return P(Dark, C(250, 241, 222), C(66, 55, 32)); } }
-        public static Color Track { get { return T(P(Dark, C(231, 228, 218), C(64, 63, 59)), 0.08f, 0.1f); } }
-        public static Color Shadow { get { return P(Dark, Color.FromArgb(10, 60, 50, 30), Color.FromArgb(30, 0, 0, 0)); } }
+        public static Color Track { get { return T(P(Dark, C(216, 212, 200), C(64, 63, 59)), 0.08f, 0.1f); } }
+        public static Color Shadow { get { return P(Dark, Color.FromArgb(22, 60, 50, 30), Color.FromArgb(30, 0, 0, 0)); } }
 
         public static float Scale = 1f;
         public static int S(float v) { return (int)Math.Round(v * Scale); }
@@ -122,11 +122,8 @@ namespace FileConverter
                 if (logo == null)
                 {
                     string choice = Settings.Get("Logo", "");
-                    string custom = CustomLogoPath;
-                    if (choice == "custom" && File.Exists(custom))
-                        try { logo = Image.FromStream(new MemoryStream(File.ReadAllBytes(custom))); } catch { logo = null; }
-                    if (logo == null)
-                        using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(choice == "silver" ? "FileConverter.logo_silver.png" : "FileConverter.logo.png"))
+                    // ("custom" from older versions: a picture of your own is no longer offered — back to the classic logo)
+                        using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(choice == "silver" ? "FileConverter.logo_silver.png" : choice == "dark" ? "FileConverter.logo_dark.png" : "FileConverter.logo.png"))
                             if (s != null) { MemoryStream ms = new MemoryStream(); s.CopyTo(ms); logo = Image.FromStream(ms); }
                 }
                 return logo;

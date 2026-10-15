@@ -32,7 +32,7 @@ namespace FileConverter
             btnClear.Click += (s, e) => { list.Items.Clear(); list.Invalidate(); userPicked = false; progress.Value = 0; btnOpen.Visible = false; SetStatus("", Theme.InkSoft); DoLayout(); UpdateState(); };
 
             list = new FileList();
-            list.Previews = Settings.Get("ConvertPreviews", "0") == "1";
+            list.Previews = Settings.Get("ConvertPreviews", "1") == "1";
             // List / Previews: big rows with a picture of each file
             btnView = new Btn(() => L.T(list.Previews ? "view_list" : "view_previews"), list.Previews ? "\uE8FD" : "\uF0E2", BtnKind.Ghost);
             btnView.Click += (s, e) => { list.Previews = !list.Previews; Settings.Set("ConvertPreviews", list.Previews ? "1" : "0"); btnView.Glyph = list.Previews ? "\uE8FD" : "\uF0E2"; DoLayout(); };
