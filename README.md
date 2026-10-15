@@ -1,3 +1,5 @@
+
+
 # Fadi Tools
 
 **All-in-one Windows app — convert, compress, edit and download files. Free, offline, in English and Arabic.**
@@ -20,3 +22,9 @@ If Windows says "Windows protected your PC", click **More info → Run anyway**.
 ## Requirements
 
 Windows 10 or 11. The app updates itself when a new version comes out.
+
+<img width="1220" height="780" alt="convert" src="https://github.com/user-attachments/assets/bb00cf03-6993-49fa-abed-f62cbae6289c" />
+
+<img width="1220" height="780" alt="compress" src="https://github.com/user-attachments/assets/e1a5105b-750c-493a-8de7-8a7242778a67" />
+
+<img width="1220" height="780" alt="studio" src="https://github.com/user-attachments/assets/4f99879e-88fb-4674-83f5-0ae4a8436ae1" />
