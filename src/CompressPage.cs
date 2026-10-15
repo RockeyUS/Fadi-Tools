@@ -219,8 +219,16 @@ namespace FileConverter
                 {
                     long after = File.Exists(it.Output) ? new FileInfo(it.Output).Length : it.Size;
                     long saved = Math.Max(0, it.Size - after);
-                    badge = "−" + Math.Min(99, saved * 100 / Math.Max(1, it.Size)) + "%  ·  " + L.T("cmp_badge_saved", Theme.HumanSize(saved));
-                    bg = Theme.SuccessBg; fg = Theme.Success;
+                    if (after > it.Size)
+                    {
+                        badge = "+" + Math.Min(9999, (after - it.Size) * 100 / Math.Max(1, it.Size)) + "%  ·  " + L.T("cmp_badge_bigger");
+                        bg = Theme.Selected; fg = Theme.Ink;
+                    }
+                    else
+                    {
+                        badge = "−" + Math.Min(99, saved * 100 / Math.Max(1, it.Size)) + "%  ·  " + L.T("cmp_badge_saved", Theme.HumanSize(saved));
+                        bg = Theme.SuccessBg; fg = Theme.Success;
+                    }
                 }
                 Font bf = Theme.F(8f, FontStyle.Bold);
                 int bw = Theme.Measure(badge, bf) + Theme.S(14);
@@ -304,6 +312,9 @@ namespace FileConverter
         Rectangle left, opts, acts, filesTitleR, headR, footR, levelLblR, hintR, targetLblR, mbR, targetHintR, engineR, statusR, actsLblR;
         readonly Btn btnAdd, btnClear, btnGo, btnShow, btnMore, btnWipe, btnView;
         bool viewFits = true;
+        // "Grow smaller files to this size": pictures, videos and songs under the size are made bigger instead of skipped
+        readonly Toggle grow = new Toggle();
+        Rectangle growR;
         readonly CompressList list = new CompressList();
         readonly DropZone drop;
         readonly Segments level;
@@ -322,7 +333,7 @@ namespace FileConverter
         {
             btnAdd = new Btn(() => L.T("add_files"), Ico.Add, BtnKind.Secondary);
             btnAdd.Click += (s, e) => Browse();
-            list.Previews = Settings.Get("CompressPreviews", "0") == "1";
+            list.Previews = Settings.Get("CompressPreviews", "1") == "1";
             // List / Previews: big rows with a picture of each file
             btnView = new Btn(() => L.T(list.Previews ? "view_list" : "view_previews"), list.Previews ? "\uE8FD" : "\uF0E2", BtnKind.Ghost);
             btnView.Click += (s, e) => { list.Previews = !list.Previews; Settings.Set("CompressPreviews", list.Previews ? "1" : "0"); btnView.Glyph = list.Previews ? "\uE8FD" : "\uF0E2"; DoLayout(); };
@@ -355,7 +366,9 @@ namespace FileConverter
             btnWipe = new Btn(() => L.T("cmp_clear_list"), Ico.Delete, BtnKind.Ghost) { AlignStart = true };
             btnWipe.Click += (s, e) => ClearList();
             progress.Visible = false;
-            Controls.AddRange(new Control[] { btnAdd, btnClear, btnView, list, drop, level, targetMb, presets, progress, btnGo, btnShow, btnMore, btnWipe });
+            Controls.AddRange(new Control[] { btnAdd, btnClear, btnView, list, drop, level, targetMb, presets, progress, btnGo, btnShow, btnMore, btnWipe, grow });
+            grow.SetSilently(Settings.Get("CompressGrow", "0") == "1");
+            grow.CheckedChanged += (s, e) => Settings.Set("CompressGrow", grow.Checked ? "1" : "0");
             EnableDrop(list, drop);
             // the size preset picked last time (only once every control exists)
             int lastP; if (int.TryParse(Settings.Get("CompressPreset", ""), out lastP) && Settings.Get("CompressPresetV", "") != "2") { lastP = lastP == 3 ? 2 : lastP == 2 ? -1 : lastP; Settings.Set("CompressPresetV", "2"); Settings.Set("CompressPreset", lastP.ToString()); }
@@ -466,6 +479,8 @@ namespace FileConverter
             Place(targetMb, new Rectangle(x, oy, cw - Theme.S(52), Theme.S(40)));
             mbR = new Rectangle(x + cw - Theme.S(44), oy, Theme.S(44), Theme.S(40)); oy += Theme.S(46);
             targetHintR = new Rectangle(x, oy, cw, Theme.S(34)); oy += Theme.S(40);
+            growR = new Rectangle(x, oy, cw - Theme.S(58), Theme.S(30));
+            Place(grow, new Rectangle(x + cw - Theme.S(46), oy + Theme.S(3), Theme.S(46), Theme.S(24))); oy += Theme.S(38);
             engineR = new Rectangle(x, oy, cw, Theme.S(40)); oy += Theme.S(54);
             opts = new Rectangle(rx, y, w, oy - y);
             cards.Add(opts);
@@ -527,6 +542,7 @@ namespace FileConverter
             Label(g, "MB", Theme.F(10f, FontStyle.Bold), Theme.InkSoft, mbR, Align.Center);
             string th = presets.Selected >= 0 ? L.T("cmp_p_hint", presets.Items[presets.Selected].Name, presets.Items[presets.Selected].Limit) : L.T("cmp_target_hint");
             Label(g, th, Theme.F(8.5f), presets.Selected >= 0 ? Theme.InkSoft : Theme.InkFaint, targetHintR, Align.Start, false, true);
+            Label(g, L.T("cmp_grow"), Theme.F(9f), Theme.Ink, growR, Align.Start, false, true);
             Rectangle er = M(engineR);
             Theme.FillRound(g, er, Theme.S(10), Theme.CardInner);
             Rectangle gi = M(new Rectangle(engineR.X + Theme.S(8), engineR.Y, Theme.S(26), engineR.Height));
@@ -554,7 +570,7 @@ namespace FileConverter
         {
             bool empty = list.Items.Count == 0;
             drop.Visible = empty; list.Visible = !empty; btnClear.Visible = !empty; btnView.Visible = !empty && viewFits;
-            btnClear.Enabled = btnAdd.Enabled = btnMore.Enabled = btnWipe.Enabled = level.Enabled = targetMb.Enabled = presets.Enabled = !running;
+            btnClear.Enabled = btnAdd.Enabled = btnMore.Enabled = btnWipe.Enabled = level.Enabled = targetMb.Enabled = presets.Enabled = grow.Enabled = !running;
             btnWipe.InkColor = Theme.Error;
             list.Locked = running;
             btnGo.Enabled = running || !empty;
@@ -617,7 +633,8 @@ namespace FileConverter
             UpdateState();
             shownLimit = presets.Selected >= 0 ? presets.Items[presets.Selected].Limit : mb;
             act = Activity.Begin(this, L.T("act_k_compress"), items.Count == 1 ? items[0].Name : L.T("n_files", items.Count), () => { cancel = true; Ui(() => SetStatus(L.T("cancelling"), Theme.InkSoft)); });
-            Thread t = new Thread(() => Worker(items, outDir, single, lv, mb));
+            bool growOn = grow.Checked;
+            Thread t = new Thread(() => Worker(items, outDir, single, lv, mb, growOn));
             t.IsBackground = true; t.Start();
         }
 
@@ -626,9 +643,9 @@ namespace FileConverter
         ActJob act;
         double shownLimit;   // the limit as the person sees it (Discord's 20 MB, while aiming at 19)
 
-        void Worker(List<FileItem> items, string outDir, string single, Compressor.Level lv, double mb)
+        void Worker(List<FileItem> items, string outDir, string single, Compressor.Level lv, double mb, bool growOn)
         {
-            long before = 0, after = 0; int ok = 0, fail = 0, fit = 0;
+            long before = 0, after = 0; int ok = 0, fail = 0, fit = 0, grownN = 0;
             DateTime started = DateTime.Now;
             for (int i = 0; i < items.Count; i++)
             {
@@ -638,10 +655,13 @@ namespace FileConverter
                 Ui(() => { list.RefreshItem(it); SetStatus(L.T("cmp_working", index + 1, items.Count) + "  ·  " + it.Name, Theme.InkSoft); });
                 string error = null;
                 long size0 = 0; try { size0 = new FileInfo(it.Path).Length; } catch { }
-                if (mb > 0 && size0 > 0 && size0 <= Compressor.CapBytes(it.Path, mb))
+                long capPre = mb > 0 ? Compressor.CapBytes(it.Path, mb) : 0;
+                bool growIt = growOn && mb > 0 && size0 > 0 && size0 < capPre * 0.9 && Compressor.CanGrow(it.Path);
+                if (mb > 0 && size0 > 0 && size0 <= capPre && !growIt)
                 {
                     // already under the size asked for: nothing to do (and nothing to wait for)
-                    it.State = ItemState.Done; it.DoneText = L.T("cmp_fits", shownLimit.ToString("0.#", CultureInfo.InvariantCulture)); it.DoneQuiet = true;
+                    string lim = shownLimit.ToString("0.#", CultureInfo.InvariantCulture);
+                    it.State = ItemState.Done; it.DoneText = !growOn && Compressor.CanGrow(it.Path) ? L.T("cmp_fits_grow", lim) : L.T("cmp_fits", lim); it.DoneQuiet = true;
                     before += size0; after += size0; ok++; fit++;
                     long fb = before, fa = after;
                     Ui(() => { list.RefreshItem(it); progress.Value = (index + 1) / (double)items.Count; totalBefore = fb; totalAfter = fa; Invalidate(); });
@@ -654,7 +674,8 @@ namespace FileConverter
                     if (mb > 0 && Formats.CategoryOf(Formats.Ext(it.Path)) == Category.Video)
                         try { startH = Compressor.SuggestHeight(Media.Probe(it.Path), mb); } catch { }
                     if (startH > 0) { int sh = startH; Ui(() => SetStatus(L.T("cmp_refit_res", it.Name, sh), Theme.InkSoft)); }
-                    Job job = Compressor.Build(it.Path, outDir, lv, mb, true, startH);
+                    if (growIt) { startH = 0; Ui(() => SetStatus(L.T("cmp_growing", it.Name), Theme.InkSoft)); }
+                    Job job = growIt && Formats.CategoryOf(Formats.Ext(it.Path)) == Category.Image ? Compressor.BuildGrow(it.Path, outDir, mb) : Compressor.Build(it.Path, outDir, lv, mb, true, startH, growIt);
                     error = RunOne(job, it, index, items.Count);
                     if (error != null && !cancel && job.Fallback != null)
                     {
@@ -689,7 +710,7 @@ namespace FileConverter
                             try { File.Delete(job.Output); } catch { }
                             int mh = maxH;
                             Ui(() => SetStatus(mh > 0 ? L.T("cmp_refit_res", it.Name, mh) : L.T("cmp_refit", it.Name), Theme.InkSoft));
-                            job = Compressor.Build(it.Path, outDir, lv, mbTry, true, maxH);
+                            job = Compressor.Build(it.Path, outDir, lv, mbTry, true, maxH, growIt);
                             error = RunOne(job, it, index, items.Count);
                             if (error != null && !cancel && job.Fallback != null)
                             {
@@ -705,7 +726,7 @@ namespace FileConverter
                     if (error == null && mb > 0 && !cancel && File.Exists(job.Output) && Formats.CategoryOf(Formats.Ext(it.Path)) == Category.Image)
                     {
                         long got = new FileInfo(job.Output).Length;
-                        if (job.Note != null) it.DoneText = L.T("cmp_img_fit", job.Note, shownLimit.ToString("0.#", CultureInfo.InvariantCulture));
+                        if (job.Note != null) it.DoneText = L.T(growIt ? "cmp_img_grow" : "cmp_img_fit", job.Note, shownLimit.ToString("0.#", CultureInfo.InvariantCulture));
                         if (got > Compressor.CapBytes(it.Path, mb)) it.DoneText = L.T("cmp_img_still", Theme.HumanSize(got));
                     }
                     if (error == null)
@@ -713,7 +734,9 @@ namespace FileConverter
                         long b = new FileInfo(it.Path).Length, a = File.Exists(job.Output) ? new FileInfo(job.Output).Length : long.MaxValue;
                         long capB = mb > 0 ? Compressor.CapBytes(it.Path, mb) : 0;
                         bool nowFits = mb > 0 && b > capB && a <= capB;   // over the limit before, under it now: always worth keeping
-                        if (a >= b * 0.98 && !nowFits)
+                        bool grew = growIt && a > b && a <= capB;           // made bigger on purpose
+                        if (grew) { grownN++; if (job.Note == null) it.DoneText = null; }
+                        if (a >= b * 0.98 && !nowFits && !grew)
                         {
                             // no real gain: keep the original as it is
                             try { File.Delete(job.Output); } catch { }
@@ -751,18 +774,19 @@ namespace FileConverter
                 totalBefore = before; totalAfter = after;
                 string none = fit > 0 && fit == ok ? L.T("cmp_all_fit", shownLimit.ToString("0.#", CultureInfo.InvariantCulture)) : L.T("cmp_nothing");
                 Activity.End(act, ok == 0 ? L.T("cmp_none") : null, cancel,
-                    saved > 0 ? L.T("cmp_saved", Theme.HumanSize(saved), Pct(before, after)) + "  ·  " + L.T("cmp_took", Theme.Time(secs)) : none,
+                    saved > 0 ? L.T("cmp_saved", Theme.HumanSize(saved), Pct(before, after)) + "  ·  " + L.T("cmp_took", Theme.Time(secs)) : grownN > 0 ? L.T("cmp_grew_n", grownN) : none,
                     doneCount == 1 ? lastOutputFile : lastOutputDir);
                 if (cancel) SetStatus(L.T("cancelled"), Theme.InkSoft);
                 else if (ok == 0) SetStatus(L.T("cmp_none"), Theme.Error);
+                else if (saved <= 0 && grownN > 0) SetStatus(L.T("cmp_grew_n", grownN) + "  ·  " + L.T("cmp_took", Theme.Time(secs)), Theme.Success);
                 else if (saved <= 0) SetStatus(none, fit > 0 && fit == ok ? Theme.Success : Theme.InkSoft);
                 else SetStatus(L.T("cmp_saved", Theme.HumanSize(saved), Pct(before, after)) + "  ·  " + L.T("cmp_took", Theme.Time(secs)) + (fail > 0 ? "  ·  " + L.T("cmp_failed_n", fail) : ""), fail > 0 ? Theme.Warn : Theme.Success);
                 progress.Visible = false;
                 UpdateState();
                 list.Invalidate();
-                if (doneCount > 0 && saved > 0)
+                if (doneCount > 0 && (saved > 0 || grownN > 0))
                 {
-                    ShowToast(L.T("cmp_saved", Theme.HumanSize(saved), Pct(before, after)), true, () => doneCount == 1 ? L.T("show_file") : L.T("open_folder"), OpenOutput);
+                    ShowToast(saved > 0 ? L.T("cmp_saved", Theme.HumanSize(saved), Pct(before, after)) : L.T("cmp_grew_n", grownN), true, () => doneCount == 1 ? L.T("show_file") : L.T("open_folder"), OpenOutput);
                     if (Settings.OpenAfter) OpenOutput();
                 }
             });

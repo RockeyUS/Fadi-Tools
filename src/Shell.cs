@@ -12,7 +12,7 @@ namespace FileConverter
     /// Windows integration: install location, shortcuts, right-click menu, file associations, uninstall.
     public static class Shell
     {
-        public const string Version = "1.1.0";
+        public const string Version = "1.2.0";
 
         [DllImport("shell32.dll")]
         static extern void SHChangeNotify(int eventId, int flags, IntPtr item1, IntPtr item2);
@@ -217,6 +217,24 @@ namespace FileConverter
             catch { }
 
             SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        /// The right-click menu's words in the current language. Only text changes, so Windows needs no refresh.
+        public static void UpdateMenuText()
+        {
+            Action<string, string, string> set = (key, name, value) =>
+            {
+                using (RegistryKey k = Registry.CurrentUser.OpenSubKey(key, true))
+                    if (k != null) k.SetValue(name ?? "", value);
+            };
+            set(MenuKey, "MUIVerb", L.T("app_name"));
+            foreach (string[] v in new[] { new[] { "a_convert", "menu_convert" }, new[] { "b_compress", "menu_compress" }, new[] { "c_discord", "menu_discord" },
+                                           new[] { "d_studio", "menu_studio" }, new[] { "e_inspect", "menu_inspect" } })
+                set(MenuKey + @"\shell\" + v[0], "MUIVerb", L.T(v[1]));
+            set(TextKey, "MUIVerb", L.T("menu_text"));
+            set(@"Software\Classes\FadiTools.Project", null, L.T("proj_files"));
+            set(AppKey, "FriendlyAppName", L.T("viewer_app_name"));
+            foreach (string e in Formats.ViewerExt) set(@"Software\Classes\SystemFileAssociations\." + e + @"\shell\FileConverter.View", "MUIVerb", L.T("menu_view"));
         }
 
         const string MenuKey = @"Software\Classes\*\shell\FadiTools";

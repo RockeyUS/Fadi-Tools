@@ -643,7 +643,7 @@ namespace FileConverter
             bRotL = IconBtn("\uE7A8", "v_rotate_l", () => Rotate(270));
             bRotR = IconBtn(Ico.Rotate, "v_rotate_r", () => Rotate(90));
             bOpen = new Btn(() => L.T("v_open"), Ico.FolderOpen, BtnKind.Secondary); bOpen.Click += (s, e) => PickFile();
-            bSave = new Btn(() => L.T("v_save_jpg"), Ico.Save, BtnKind.Primary); bSave.FontSize = 9.5f; bSave.Click += (s, e) => SaveJpg();
+            bSave = new Btn(() => L.T(Doc ? "doc_save_pdf" : "v_save_jpg"), Ico.Save, BtnKind.Primary); bSave.FontSize = 9.5f; bSave.Click += (s, e) => { if (Doc) SaveDoc(); else SaveJpg(); };
             bConvert = new Btn(() => L.T("v_convert"), Ico.Sync, BtnKind.Secondary);
             bConvert.MouseEnter += (s, e) => tips.SetToolTip(bConvert, L.T("v_convert")); bConvert.Click += (s, e) => { if (Current != null && SendToConverter != null) SendToConverter(Current); };
             bFolder = new Btn(() => L.T("v_folder"), Ico.FolderOpen, BtnKind.Ghost);
@@ -658,6 +658,7 @@ namespace FileConverter
             canvas.Navigate += d => Go(d);
             canvas.AreaPicked += ReadText;
             editor = new EditorPanel { Canvas = canvas, Visible = false };
+            editor.SaveAllPages = () => { if (!Doc) return false; SaveDoc(); return true; };
             editor.Notify = (msg, ok, file) =>
             {
                 if (file != null) { if (InStudio) Recovery.Clear(Recovery.PhotoFile); ShowToast(msg, true, () => L.T("show_file"), () => { try { Process.Start("explorer.exe", "/select,\"" + file + "\""); } catch { } }); }
@@ -701,6 +702,69 @@ namespace FileConverter
 
         string Current { get { return files.Count > 0 ? files[index] : null; } }
 
+        // ------------------------------------------------------------------ documents (PDF / Word): every page can be edited
+        // Moving to another page keeps the edits of this one (they can be changed again later);
+        // saving as PDF writes all pages, edited or not, into one file.
+        string docSource, docEditDir;
+        bool docLoading, docSaved = true, quietRestore;
+        readonly Dictionary<int, string> pageState = new Dictionary<int, string>();   // page → its edit (texts, photos, size…)
+        readonly Dictionary<int, string> pageRender = new Dictionary<int, string>();  // page → the edited page as a picture
+        bool Doc { get { return docSource != null; } }
+        bool DocChanged { get { return Doc && !docSaved && pageState.Count > 0; } }
+
+        void ResetDoc()
+        {
+            docSource = null; docSaved = true;
+            pageState.Clear(); pageRender.Clear();
+            if (docEditDir != null) { string d = docEditDir; ThreadPool.QueueUserWorkItem(_ => { try { Directory.Delete(d, true); } catch { } }); docEditDir = null; }
+        }
+
+        /// Keeps the page being edited (its layers, and a picture of the result).
+        void CommitPage()
+        {
+            if (!editing || !Doc || !editor.S.Active || editor.S.Video) return;
+            if (!editor.S.Dirty && !pageState.ContainsKey(index)) return;
+            pageState[index] = EditJson();
+            if (docEditDir == null) { docEditDir = Path.Combine(Path.GetTempPath(), "FadiDocEdit_" + Guid.NewGuid().ToString("N").Substring(0, 10)); Directory.CreateDirectory(docEditDir); }
+            string f = Path.Combine(docEditDir, "page" + (index + 1).ToString("D4") + "_" + DateTime.Now.Ticks + ".png");
+            using (Bitmap b = editor.S.Render(true)) b.Save(f, ImageFormat.Png);
+            pageRender[index] = f;
+            docSaved = false;
+            editor.S.Dirty = false;
+        }
+
+        /// All pages into one PDF (the edited ones as edited).
+        void SaveDoc()
+        {
+            if (!Doc || files.Count == 0) return;
+            if (editing) CommitPage();
+            string outp = SaveAsk.File(FindForm(), Path.GetFileNameWithoutExtension(docSource) + " " + L.T("ed_suffix") + ".pdf", "pdf");
+            if (outp == null) return;
+            List<string> pages = new List<string>();
+            for (int i = 0; i < files.Count; i++) pages.Add(pageRender.ContainsKey(i) ? pageRender[i] : files[i]);
+            ShowToast(L.T("doc_saving", pages.Count), true, null, null);
+            ActJob act = Activity.Begin(this, L.T("act_k_pdf"), Path.GetFileName(outp), null);
+            Thread t = new Thread(() =>
+            {
+                string err = null;
+                try
+                {
+                    ImagePdf.Write(pages.Count, i => { using (Image im = Image.FromStream(new MemoryStream(File.ReadAllBytes(pages[i])))) return new Bitmap(im); }, true, outp, 92, ImagePdf.PageSize.Photo,
+                                   (done, total) => Activity.Update(act, done / (double)Math.Max(1, total), null));
+                }
+                catch (Exception ex) { err = ex.Message; }
+                Activity.End(act, err, false, err == null ? L.T("doc_saved_n", pages.Count) : null, err == null ? outp : null);
+                Ui(() =>
+                {
+                    if (err != null) { ShowToast(err, false, null, null); return; }
+                    docSaved = true;
+                    ShowToast(L.T("v_saved", Path.GetFileName(outp)), true, () => L.T("show_file"), () => { try { Process.Start("explorer.exe", "/select,\"" + outp + "\""); } catch { } });
+                    UpdateButtons(); Invalidate();
+                });
+            });
+            t.IsBackground = true; t.Start();
+        }
+
         public override void DoLayout()
         {
             int W = Width, H = Height, p = Pad;
@@ -709,6 +773,13 @@ namespace FileConverter
             cards.Add(bar);
             int y = bar.Y + Theme.S(16), h = Theme.S(36), x = bar.Right - Theme.S(16);
             foreach (Control c in new Control[] { bPrev, bNext, bRotL, bRotR, bOpen, bEdit, bText, bSave, bConvert, bFolder }) c.Visible = !editing;
+            if (editing && Doc && files.Count > 1)
+            {
+                // editing a document: ‹ › go to the other pages (this page's edits are kept)
+                bPrev.Visible = bNext.Visible = true;
+                x -= h; Place(bNext, new Rectangle(x, y, h, h)); x -= Theme.S(6);
+                x -= h; Place(bPrev, new Rectangle(x, y, h, h)); x -= Theme.S(8);
+            }
             if (!editing)
             {
                 // narrow windows: drop the text from the less important buttons
@@ -793,7 +864,10 @@ namespace FileConverter
         /// Closes the photo (asks first when there are unsaved edits).
         public bool CloseAll()
         {
-            if (editing) { if (!ConfirmDiscard()) return false; ExitEdit(false); }
+            if (editing && !Doc) { if (!ConfirmDiscard()) return false; ExitEdit(false); }
+            if (editing) ExitEdit(false);
+            if (DocChanged && !ConfirmDiscard()) return false;
+            ResetDoc();
             loadToken++;
             files.Clear();
             Image old = canvas.Image;
@@ -810,7 +884,7 @@ namespace FileConverter
 
         // ------------------------------------------------------------------ editing
         public bool Editing { get { return editing; } }
-        public bool HasUnsavedEdits { get { return editing && editor.S.Dirty; } }
+        public bool HasUnsavedEdits { get { return (editing && editor.S.Dirty) || DocChanged; } }
 
         /// Asks before throwing away unsaved edits. Returns true when it's fine to continue.
         public bool ConfirmDiscard()
@@ -826,6 +900,12 @@ namespace FileConverter
         void AutoSave()
         {
             if (!editing || !editor.S.Dirty || !editor.S.Active || editor.S.Video) return;
+            Recovery.Write(Recovery.PhotoFile, EditJson());
+        }
+
+        /// The edit as text: size, crop, background and every text / photo layer.
+        string EditJson()
+        {
             EditSession s = editor.S;
             StringBuilder b = new StringBuilder();
             b.Append("{\"app\": \"Fadi Tools\", \"kind\": \"photo\", \"version\": 1, \"saved\": ").Append(Js.Q(DateTime.Now.ToString("o")));
@@ -842,7 +922,7 @@ namespace FileConverter
             b.Append(", \"mask\": ").Append(Js.Q(mask)).Append(", \"texts\": [");
             for (int i = 0; i < s.Layers.Count; i++) b.Append(i > 0 ? "," : "").Append(Js.Layer(s.Layers[i]));
             b.Append("]}");
-            Recovery.Write(Recovery.PhotoFile, b.ToString());
+            return b.ToString();
         }
 
         /// Brings back a photo edit that wasn't saved when the app closed.
@@ -878,14 +958,20 @@ namespace FileConverter
             foreach (object o in Js.A(root, "texts")) { TextLayer tl = Js.Layer(o); if (tl != null) layers.Add(tl); }
             editor.ApplyState(Js.I(root, "w"), Js.I(root, "h"), crop, mask, Js.I(root, "bgMode"), Color.FromArgb(Js.I(root, "bgColor", -1)), (float)Js.D(root, "bgBlur", 40), layers);
             UpdateEditInfo();
-            ShowToast(L.T("proj_restored"), true, null, null);
+            if (!quietRestore) ShowToast(L.T("proj_restored"), true, null, null);
+            quietRestore = false;
         }
 
         void EnterEdit()
         {
             if (canvas.AreaMode) canvas.EndArea();
             if (editing || preparing || Current == null || canvas.Image == null) return;
-            string path = Current;
+            string path = Current;   // a document page is always edited from its original picture
+            if (Doc && pageState.ContainsKey(index) && pendingRestore == null)
+            {
+                try { pendingRestore = new JsonParser(pageState[index]).Parse(); quietRestore = true; } catch { }
+                canvas.Rotation = 0;
+            }
             int rot = canvas.Rotation;
             editRot = rot;
             int token = loadToken;
@@ -917,6 +1003,7 @@ namespace FileConverter
                     canvas.Rotation = 0; canvas.Zoom = 0;
                     editing = true;
                     editor.Begin(full, path);
+                    if (Doc) editor.UsePdf();
                     canvas.Reset();
                     UpdateEditInfo();
                     DoLayout();
@@ -930,6 +1017,7 @@ namespace FileConverter
         void ExitEdit(bool ask)
         {
             if (!editing) return;
+            if (Doc) { CommitPage(); ask = false; }
             if (ask && !ConfirmDiscard()) return;
             if (InStudio) Recovery.Clear(Recovery.PhotoFile);
             editing = false;
@@ -946,7 +1034,7 @@ namespace FileConverter
         {
             if (!editing || !editor.S.Active) return;
             int n = editor.S.Layers.Count;
-            info = L.T("ed_info", editor.S.W + " × " + editor.S.H, n);
+            info = (Doc ? L.T("doc_page_info", index + 1, files.Count) + "   ·   " : "") + L.T("ed_info", editor.S.W + " × " + editor.S.H, n);
         }
 
         public void PickFile()
@@ -1018,7 +1106,10 @@ namespace FileConverter
                     {
                         opening = false;
                         if (err != null || pages == null || pages.Count == 0) { info = ""; Invalidate(); ShowToast(err ?? L.T("doc_failed"), false, null, null); return; }
-                        LoadFiles(pages.ToArray());
+                        ResetDoc();
+                        docSource = path;
+                        docLoading = true;
+                        try { LoadFiles(pages.ToArray()); } finally { docLoading = false; }
                         if (pages.Count > 1) ShowToast(L.T("doc_pages", pages.Count), true, null, null);
                     }));
                 }
@@ -1035,6 +1126,7 @@ namespace FileConverter
                 if (c == Category.Video || c == Category.Audio) { OpenMedia(paths[0]); return; }
             }
             if (InStudio && paths != null && paths.Length == 1 && DocPages.IsDoc(paths[0]) && File.Exists(paths[0])) { OpenDocument(paths[0]); return; }
+            if (!docLoading && !editing && DocChanged && !ConfirmDiscard()) return;
             if (editing)
             {
                 // a picture dropped while editing goes on top of this one
@@ -1043,6 +1135,7 @@ namespace FileConverter
                 if (pics.Count > 0 && pics.Count == paths.Length) { foreach (string p in pics) editor.AddPicture(p); return; }
                 if (!ConfirmDiscard()) return; ExitEdit(false);
             }
+            if (!docLoading) ResetDoc();
             List<string> valid = new List<string>();
             foreach (string p in paths) if (File.Exists(p)) valid.Add(Path.GetFullPath(p));
             if (valid.Count == 0) return;
@@ -1067,8 +1160,16 @@ namespace FileConverter
         void Go(int d)
         {
             if (canvas.AreaMode) canvas.EndArea();
-            if (files.Count < 2 || editing || preparing) return;
+            if (files.Count < 2 || preparing) return;
+            bool keepEditing = false;
+            if (editing)
+            {
+                if (!Doc) return;
+                ExitEdit(false);        // (a document page is kept, not thrown away)
+                keepEditing = true;
+            }
             index = (index + d + files.Count) % files.Count;
+            if (keepEditing) afterLoad = EnterEdit;
             Show(index);
         }
 
@@ -1084,14 +1185,16 @@ namespace FileConverter
         void Show(int i)
         {
             string path = files[i];
+            bool edited = Doc && pageRender.ContainsKey(i);
+            string shown = edited ? pageRender[i] : path;
             int token = ++loadToken;
-            title = Path.GetFileName(path); info = L.T("v_loading");
+            title = Doc ? Path.GetFileName(docSource) : Path.GetFileName(path); info = L.T("v_loading");
             Form f = FindForm(); if (f is ViewerForm) f.Text = title + " — " + L.T("viewer_title");
             Invalidate();
             Thread t = new Thread(() =>
             {
                 Image img = null; string err = null;
-                try { img = Decode(path, 3840); } catch (Exception ex) { err = ex.Message; }
+                try { img = Decode(shown, 3840); } catch (Exception ex) { err = ex.Message; }
                 Ui(() =>
                 {
                     if (token != loadToken || editing) { if (img != null) img.Dispose(); return; }
@@ -1102,7 +1205,8 @@ namespace FileConverter
                     if (old != null) old.Dispose();
                     long size = 0; try { size = new FileInfo(path).Length; } catch { }
                     string ext = Formats.Ext(path).ToUpperInvariant();
-                    info = img != null ? string.Format("{0} × {1}   ·   {2}   ·   {3}   ·   {4} / {5}", img.Width, img.Height, ext, Theme.HumanSize(size), index + 1, files.Count)
+                    info = Doc ? L.T("doc_page_info", index + 1, files.Count) + (edited ? "   ·   " + L.T("doc_edited") : "") + (pageState.Count > 0 ? "   ·   " + L.T("doc_edited_n", pageState.Count) : "")
+                         : img != null ? string.Format("{0} × {1}   ·   {2}   ·   {3}   ·   {4} / {5}", img.Width, img.Height, ext, Theme.HumanSize(size), index + 1, files.Count)
                                        : ext + "   ·   " + (index + 1) + " / " + files.Count;
                     UpdateButtons();
                     Invalidate();

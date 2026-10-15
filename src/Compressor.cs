@@ -106,7 +106,8 @@ namespace FileConverter
         }
 
         /// maxHeight > 0: a smaller picture (only used when a size limit can't be reached at full resolution).
-        public static Job Build(string input, string outDir, Level level, double targetMb, bool gpu, int maxHeight)
+        /// fill: a video smaller than the size is padded out to it (constant bitrate) instead of stopping short.
+        public static Job Build(string input, string outDir, Level level, double targetMb, bool gpu, int maxHeight, bool fill = false)
         {
             string e = Formats.Ext(input);
             Category cat = Formats.CategoryOf(e);
@@ -177,7 +178,16 @@ namespace FileConverter
                     if (vb < 60) throw new UserError(L.T("cmp_too_small", Theme.HumanSize((long)((60 + aKbit) * mi.Duration / 8 * 1024))));
                     ab = aK + "k";
                     string rate = " -b:v " + vb + "k -maxrate " + (vb * 3 / 2) + "k -bufsize " + (vb * 2) + "k";
-                    if (enc == "h264_nvenc") v = "-c:v h264_nvenc -preset p5 -rc vbr" + rate + " -spatial-aq 1 -pix_fmt yuv420p";
+                    string cbr = " -b:v " + vb + "k -minrate " + vb + "k -maxrate " + vb + "k -bufsize " + (vb * 2) + "k";
+                    if (fill)
+                    {
+                        // constant bitrate with padding: the file comes out at the size asked for
+                        if (enc == "h264_nvenc") v = "-c:v h264_nvenc -preset p5 -rc cbr" + cbr + " -pix_fmt yuv420p";
+                        else if (enc == "h264_qsv") v = "-c:v h264_qsv -preset medium" + cbr + " -pix_fmt nv12";
+                        else if (enc == "h264_amf") v = "-c:v h264_amf -quality balanced -rc cbr -filler_data 1" + cbr + " -pix_fmt yuv420p";
+                        else v = "-c:v libx264 -preset faster" + cbr + " -x264-params nal-hrd=cbr:force-cfr=1 -pix_fmt yuv420p";
+                    }
+                    else if (enc == "h264_nvenc") v = "-c:v h264_nvenc -preset p5 -rc vbr" + rate + " -spatial-aq 1 -pix_fmt yuv420p";
                     else if (enc == "h264_qsv") v = "-c:v h264_qsv -preset medium" + rate + " -pix_fmt nv12";
                     else if (enc == "h264_amf") v = "-c:v h264_amf -quality balanced -rc vbr_peak" + rate + " -pix_fmt yuv420p";
                     else v = "-c:v libx264 -preset faster -b:v " + vb + "k -maxrate " + (vb * 7 / 5) + "k -bufsize " + (vb * 2) + "k -pix_fmt yuv420p";
@@ -198,7 +208,7 @@ namespace FileConverter
                 if (enc != "")
                 {
                     job.Encoder = HwEnc.Friendly(enc);
-                    job.Fallback = () => { HwEnc.Disable(); return Build(input, outDir, level, targetMb, false, maxHeight); };
+                    job.Fallback = () => { HwEnc.Disable(); return Build(input, outDir, level, targetMb, false, maxHeight, fill); };
                 }
                 return job;
             }
@@ -367,6 +377,77 @@ namespace FileConverter
             }
             finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
             return note(scale);
+        }
+
+        /// The other way round: a picture made bigger, up to a size (some sites ask for at least so many MB).
+        /// Best quality first, then a larger picture, staying just under the size. Returns the new width × height, or null.
+        public static string ImageGrow(string im, string input, string outp, string e, long want)
+        {
+            bool jpeg = In(JpegExt, e), png = e == "png";
+            bool lossy = jpeg || e == "webp" || e == "heic" || e == "heif" || e == "avif";
+            int w0 = 0, h0 = 0;
+            try
+            {
+                string o;
+                if (Tools.RunHidden(im, Q(input + "[0]") + " -auto-orient -format \"%w %h\" info:", 60000, out o) == 0)
+                {
+                    System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(o, @"(\d+) (\d+)");
+                    if (m.Success) { w0 = int.Parse(m.Groups[1].Value); h0 = int.Parse(m.Groups[2].Value); }
+                }
+            }
+            catch { }
+            string tmp = Path.Combine(Path.GetDirectoryName(outp), "fadi_grow_" + Guid.NewGuid().ToString("N").Substring(0, 8) + "." + e);
+            Func<double, long> enc = sc =>
+            {
+                string rs = Math.Abs(sc - 1) > 0.001 ? " -filter Lanczos -resize " + (sc * 100).ToString("0.###", CultureInfo.InvariantCulture) + "%" : "";
+                string ops = jpeg ? "-sampling-factor 1x1 -quality 100" : lossy ? "-quality " + (e == "webp" ? 100 : 95) : png ? "-define png:compression-level=6" : "-compress none";
+                string o;
+                if (Tools.RunHidden(im, Q(input + "[0]") + " -auto-orient" + rs + " " + ops + " " + Q(tmp), 10 * 60 * 1000, out o) != 0 || !File.Exists(tmp)) throw new Exception(Tools.LastLines(o, 1));
+                return new FileInfo(tmp).Length;
+            };
+            double scale = 1, bestScale = -1; long best = -1;
+            try
+            {
+                for (int i = 0; i < 7; i++)
+                {
+                    long got = enc(scale);
+                    if (got <= want)
+                    {
+                        if (got > best) { best = got; bestScale = scale; if (File.Exists(outp)) File.Delete(outp); File.Move(tmp, outp); }
+                        if (got >= want * 0.92 || scale >= 4) break;                    // close enough (or as big as it sensibly gets)
+                        scale = Math.Min(4, scale * Math.Max(1.03, Math.Sqrt(want / (double)got) * 0.98));
+                    }
+                    else
+                    {
+                        scale *= Math.Sqrt(want / (double)got) * 0.98;                // a bit over: a little smaller
+                        if (best >= 0 && scale <= bestScale * 1.01) break;
+                    }
+                }
+            }
+            finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
+            if (best < 0) return ImageToSize(im, input, outp, e, want);             // even the best quality is over: fit instead
+            return Math.Abs(bestScale - 1) > 0.001 && w0 > 0 ? Math.Max(1, (int)Math.Round(w0 * bestScale)) + " × " + Math.Max(1, (int)Math.Round(h0 * bestScale)) : null;
+        }
+
+        /// A job that makes a picture bigger, up to a size limit.
+        public static Job BuildGrow(string input, string outDir, double targetMb)
+        {
+            string e = Formats.Ext(input), ext = OutExt(input, targetMb), im = Tools.Magick;
+            if (im == null) throw new UserError(L.T("err_need_im"));
+            Job job = new Job();
+            job.Output = Paths.UniquePath(outDir, Path.GetFileNameWithoutExtension(OutName(input, ext)), ext);
+            string outp = job.Output;
+            long want = (long)(CapBytes(input, targetMb) * 0.98);
+            job.Steps.Add(new JobStep { Native = () => job.Note = ImageGrow(im, input, outp, e, want) });
+            return job;
+        }
+
+        /// Files that can be made bigger on purpose: pictures (not animated GIFs), videos and songs.
+        public static bool CanGrow(string path)
+        {
+            string e = Formats.Ext(path);
+            Category c = Formats.CategoryOf(e);
+            return (c == Category.Image && e != "gif") || c == Category.Video || c == Category.Audio;
         }
 
         /// JPEG without ImageMagick: turns the picture upright, drops camera data, re-encodes.

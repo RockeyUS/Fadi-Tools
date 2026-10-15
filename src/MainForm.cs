@@ -43,11 +43,13 @@ namespace FileConverter
             sidebar.Items.Add(new NavItem("nav_re", Ico.Code));
             sidebar.Items.Add(new NavItem("nav_settings", Ico.Settings));
             sidebar.Navigate += Go;
-            sidebar.ToggleTheme += () =>
+            Action flipTheme = () =>
             {
                 Settings.Set("Theme", Theme.Dark ? "light" : "dark");
                 Theme.ApplySettings(); Theme.RaiseChanged();
             };
+            sidebar.ToggleTheme += flipTheme;
+            Bar.ThemeClicked += flipTheme;
             sidebar.ToggleLanguage += () =>
             {
                 Settings.Set("Language", Theme.RTL ? "en" : "ar");
@@ -309,6 +311,7 @@ namespace FileConverter
             if (toast.Visible) toast.BringToFront();
         }
 
+        bool menuRtl = Theme.RTL;
         void OnThemeChanged()
         {
             SuspendLayout();
@@ -321,13 +324,12 @@ namespace FileConverter
             foreach (Page p in pages) { p.Restyle(); p.DoLayout(); }
             ResumeLayout();
             InvalidateAll(this);
-            // keep the Explorer menu text in the chosen language
-            if (Shell.IsInstalled && Shell.IsRegistered)
+            // keep the Explorer menu text in the chosen language — just the words: re-registering everything
+            // made Windows reload every icon (the whole desktop flickered on each theme or language change)
+            if (Theme.RTL != menuRtl && Shell.IsInstalled && Shell.IsRegistered)
             {
-                Thread t = new Thread(() =>
-                {
-                    try { Shell.Integrate(Settings.Get("IntDesktop", "1") == "1", Settings.Get("IntMenu", "1") == "1", Settings.Get("IntViewer", "1") == "1"); } catch { }
-                });
+                menuRtl = Theme.RTL;
+                Thread t = new Thread(() => { try { Shell.UpdateMenuText(); } catch { } });
                 t.IsBackground = true; t.Start();
             }
         }
