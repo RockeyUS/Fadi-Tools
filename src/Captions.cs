@@ -20,8 +20,9 @@ namespace FileConverter
         static bool IsWindows { get { return Environment.OSVersion.Platform == PlatformID.Win32NT; } }
         public static string Dir { get { return Path.Combine(Paths.ToolsDir, "whisper"); } }
         public static string ModelsDir { get { return Path.Combine(Dir, "models"); } }
-        public static readonly string[] Models = { "ggml-base-q5_1.bin", "ggml-small-q5_1.bin" };
-        public static readonly int[] ModelMb = { 60, 190 };
+        // Fast = "small" (it can also translate into English); Accurate = "large-v3-turbo", far better with Arabic
+        public static readonly string[] Models = { "ggml-small-q5_1.bin", "ggml-large-v3-turbo-q5_0.bin" };
+        public static readonly int[] ModelMb = { 190, 574 };
         const string ModelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
         const string FallbackZip = "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip";
 
@@ -91,14 +92,17 @@ namespace FileConverter
         }
 
         /// Writes subtitles for a 16 kHz WAV. lang = "auto", "ar", "en"... Returns the .srt path.
-        public static string Transcribe(string wav, int q, string lang, Action<double> progress, Func<bool> cancelled)
+        public static string Transcribe(string wav, int q, string lang, Action<double> progress, Func<bool> cancelled) { return Transcribe(wav, q, lang, false, progress, cancelled); }
+
+        /// english: subtitles in English whatever language is spoken (Whisper's translation goes into English only).
+        public static string Transcribe(string wav, int q, string lang, bool english, Action<double> progress, Func<bool> cancelled)
         {
             string exe = Exe;
             if (exe == null || !HasModel(q)) throw new UserError(L.T("cap_not_ready"));
             string outBase = Path.Combine(Path.GetTempPath(), "fadi_cap_" + Guid.NewGuid().ToString("N"));
             int threads = Math.Max(1, Math.Min(8, Environment.ProcessorCount));
             string args = "-m " + Tools.Quote(ModelPath(q)) + " -f " + Tools.Quote(wav) + " -l " + lang + " -t " + threads +
-                          " -osrt -of " + Tools.Quote(outBase) + " -ml 48 -sow -pp -np";
+                          " -osrt -of " + Tools.Quote(outBase) + " -ml 48 -sow -pp -np -bs 5 -bo 5 -et 2.6 -lpt -0.8" + (english && lang != "en" ? " -tr" : "");
             StringBuilder err = new StringBuilder();
             Regex pr = new Regex(@"progress\s*=\s*(\d+)\s*%");
             Action<string> on = line =>
@@ -120,12 +124,14 @@ namespace FileConverter
     /// "Auto captions": which language is spoken and how careful to be (Fast = small download).
     public class CaptionsForm : Form
     {
-        readonly Segments lang, quality;
+        readonly Segments lang, quality, subLang;
         readonly Btn bGo, bCancel;
         [DllImport("gdi32.dll")] static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
         public string Language { get { return new[] { "auto", "ar", "en" }[lang.SelectedIndex]; } }
         public int Quality { get { return quality.SelectedIndex; } }
-        Rectangle langLbl, qLbl, qHint, note;
+        /// Subtitles in English (translated) instead of the spoken language.
+        public bool English { get { return subLang.SelectedIndex == 1 && Language != "en"; } }
+        Rectangle langLbl, subLbl, subHint, qLbl, qHint, note;
 
         public CaptionsForm()
         {
@@ -143,22 +149,29 @@ namespace FileConverter
             quality = new Segments(() => L.T("cap_fast") + " · " + Whisper.ModelMb[0] + " MB", () => L.T("cap_accurate") + " · " + Whisper.ModelMb[1] + " MB") { FontSize = 9f };
             int qi; int.TryParse(Settings.Get("CapQuality", Whisper.HasModel(0) && !Whisper.HasModel(1) ? "0" : "1"), out qi); quality.SetSilently(Math.Max(0, Math.Min(1, qi)));
             quality.SelectedChanged += (s, e) => Invalidate();
+            subLang = new Segments(() => L.T("cap_sub_same"), () => "English") { FontSize = 9f };
+            subLang.SetSilently(Settings.Get("CapSubLang", "0") == "1" ? 1 : 0);
+            subLang.SelectedChanged += (s, e) => Invalidate();
+            lang.SelectedChanged += (s, e) => Invalidate();
             int y = Theme.S(84);
             langLbl = new Rectangle(pad, y, cw, Theme.S(20)); y += Theme.S(24);
             lang.Bounds = Theme.Mirror(new Rectangle(pad, y, cw, Theme.S(36)), W); y += Theme.S(50);
+            subLbl = new Rectangle(pad, y, cw, Theme.S(20)); y += Theme.S(24);
+            subLang.Bounds = Theme.Mirror(new Rectangle(pad, y, cw, Theme.S(36)), W); y += Theme.S(40);
+            subHint = new Rectangle(pad, y, cw, Theme.S(34)); y += Theme.S(44);
             qLbl = new Rectangle(pad, y, cw, Theme.S(20)); y += Theme.S(24);
             quality.Bounds = Theme.Mirror(new Rectangle(pad, y, cw, Theme.S(36)), W); y += Theme.S(42);
             qHint = new Rectangle(pad, y, cw, Theme.S(38)); y += Theme.S(44);
             note = new Rectangle(pad, y, cw, Theme.S(34)); y += Theme.S(48);
             bGo = new Btn(() => L.T("cap_go"), "", BtnKind.Primary);
-            bGo.Click += (s, e) => { Settings.Set("CapLang", lang.SelectedIndex.ToString()); Settings.Set("CapQuality", quality.SelectedIndex.ToString()); DialogResult = DialogResult.OK; Close(); };
+            bGo.Click += (s, e) => { Settings.Set("CapLang", lang.SelectedIndex.ToString()); Settings.Set("CapQuality", quality.SelectedIndex.ToString()); Settings.Set("CapSubLang", subLang.SelectedIndex.ToString()); DialogResult = DialogResult.OK; Close(); };
             bCancel = new Btn(() => L.T("cancel"), null, BtnKind.Secondary);
             bCancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             int gw = Math.Max(Theme.S(150), bGo.PreferredWidth + Theme.S(20)), xw = Math.Max(Theme.S(100), bCancel.PreferredWidth + Theme.S(20));
             bGo.Bounds = Theme.Mirror(new Rectangle(W - pad - gw, y, gw, Theme.S(40)), W);
             bCancel.Bounds = Theme.Mirror(new Rectangle(W - pad - gw - Theme.S(10) - xw, y, xw, Theme.S(40)), W);
             ClientSize = new Size(W, y + Theme.S(40) + pad);
-            foreach (UiControl c in new UiControl[] { lang, quality, bGo, bCancel }) { c.Surface = Surface.Card; Controls.Add(c); }
+            foreach (UiControl c in new UiControl[] { lang, subLang, quality, bGo, bCancel }) { c.Surface = Surface.Card; Controls.Add(c); }
             AcceptButton = null;
             Shown += (s, e) => bGo.Focus();
         }
@@ -191,6 +204,8 @@ namespace FileConverter
             Func<Rectangle, Rectangle> m = r => Theme.Mirror(r, W);
             Theme.Text(g, L.T("cap_lang").ToUpper(CultureInfo.CurrentCulture), Theme.F(7.75f, FontStyle.Bold), Theme.InkFaint, m(langLbl), Align.Start);
             Theme.Text(g, L.T("cap_quality").ToUpper(CultureInfo.CurrentCulture), Theme.F(7.75f, FontStyle.Bold), Theme.InkFaint, m(qLbl), Align.Start);
+            Theme.Text(g, L.T("cap_sub_lang").ToUpper(CultureInfo.CurrentCulture), Theme.F(7.75f, FontStyle.Bold), Theme.InkFaint, m(subLbl), Align.Start);
+            Theme.Text(g, L.T(English ? "cap_sub_hint_en" : "cap_sub_hint_same"), Theme.F(8.5f), Theme.InkSoft, m(subHint), Align.Start, false, true);
             int q = quality.SelectedIndex;
             string hint = L.T(q == 0 ? "cap_fast_hint" : "cap_accurate_hint") + "  " + (Whisper.Ready(q) ? L.T("cap_have") : L.T("cap_once", Whisper.ModelMb[q] + (Whisper.Exe == null ? 9 : 0)));
             Theme.Text(g, hint, Theme.F(8.5f), Theme.InkSoft, m(qHint), Align.Start, false, true);

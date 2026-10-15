@@ -437,7 +437,8 @@ namespace FileConverter
                 }
             }
             string chain = Math.Abs(speed - 1) > 0.001 ? Atempo(speed) : "";
-            fc.AppendFormat("[{0}]{1}aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono[aout]", aOut, chain);
+            // speech made clearer for the listener: rumble and hiss cut, quiet voices lifted
+            fc.AppendFormat("[{0}]{1}highpass=f=70,lowpass=f=7800,dynaudnorm=f=150:g=15,aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono[aout]", aOut, chain);
             Job job = new Job { Output = outWav };
             args.Append(" -filter_complex \"" + fc + "\" -map \"[aout]\" -c:a pcm_s16le -ar 16000 -ac 1 " + Q(outWav));
             job.Steps.Add(new JobStep { Exe = ff, Ffmpeg = true, Args = args.ToString(), Duration = total });

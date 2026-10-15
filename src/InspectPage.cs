@@ -140,9 +140,7 @@ namespace FileConverter
         DropZone drop;
         Btn btnConvert, btnWindows, btnOther, btnSaveAs, btnPlay, btnRe;
         Notice mismatch;
-        // online check (VirusTotal)
-        Notice vtNotice; Btn btnVt, btnVtKey;
-        VirusTotal.Report vtReport; bool vtBusy; string vtText; int vtKind;
+
         Segments tabs;
         DetailsView details;
         HexView hex;
@@ -162,7 +160,7 @@ namespace FileConverter
 
         public InspectPage() : base("insp_title", "insp_sub")
         {
-            drop = new DropZone(() => L.T("insp_drop"), () => L.T("insp_drop_sub")) { Tips = new[] { "tip_vt", "tip_fake_ext", "tip_paste" } };
+            drop = new DropZone(() => L.T("insp_drop"), () => L.T("insp_drop_sub")) { Tips = new[] { "tip_fake_ext", "tip_paste" } };
             drop.Glyph = Ico.Search;
             drop.Click += (s, e) => Browse();
             btnConvert = new Btn(() => L.T("send_convert"), Ico.Sync, BtnKind.Primary);
@@ -193,15 +191,8 @@ namespace FileConverter
             encSeg = new Segments(() => L.T("enc_auto"), () => "UTF-8", () => "UTF-16", () => L.T("enc_arabic"), () => L.T("enc_western"));
             encSeg.FontSize = 8.75f;
             encSeg.SelectedChanged += (s2, e2) => { text.Tag = null; ShowTab(); };
-            vtNotice = new Notice(() => vtText ?? L.T("vt_intro")) { Glyph = "\uEA18" };
-            btnVt = new Btn(() => vtReport != null && !vtReport.Pending ? L.T("vt_open") : L.T("vt_check"), "\uEA18", BtnKind.Secondary);
-            btnVt.Click += (s, e) => CheckOnline();
-            btnVtKey = new Btn(() => "", Ico.Settings, BtnKind.Ghost);
-            btnVtKey.MouseEnter += (s, e) => { if (tips == null) tips = new ToolTip(); tips.SetToolTip(btnVtKey, L.T("vt_key_title")); };
-            btnVtKey.Click += (s, e) => AskVtKey();
             preview = new FrameView();
             noPreview = new Label { TextAlign = ContentAlignment.MiddleCenter, Font = Theme.F(10f) };
-            Controls.AddRange(new Control[] { vtNotice, btnVt, btnVtKey });
             Controls.AddRange(new Control[] { drop, btnConvert, btnWindows, btnOther, btnRe, btnSaveAs, btnPlay, mismatch, tabs, details, hex, text, strings, preview, noPreview, textMode, encSeg });
             EnableDrop(drop, details, hex, strings, preview);
             Restyle();
@@ -231,7 +222,7 @@ namespace FileConverter
         {
             bool has = file != null;
             drop.Visible = !has;
-            foreach (Control c in new Control[] { btnConvert, btnWindows, btnOther, tabs, vtNotice, btnVt, btnVtKey }) c.Visible = has;
+            foreach (Control c in new Control[] { btnConvert, btnWindows, btnOther, tabs }) c.Visible = has;
             btnRe.Visible = has && ReFits;
             bool mis = has && sniff != null && sniff.Ext.Length > 0 && !SameExt(Formats.Ext(file), sniff.Ext);
             mismatch.Visible = mis; btnSaveAs.Visible = mis;
@@ -262,7 +253,7 @@ namespace FileConverter
                 Place(drop, new Rectangle(emptyCard.X + ip, emptyCard.Y + ip, emptyCard.Width - ip * 2, emptyCard.Height - ip * 2));
                 Invalidate(); return;
             }
-            int headH = (mismatch.Visible ? Theme.S(176) : Theme.S(124)) + Theme.S(52);
+            int headH = mismatch.Visible ? Theme.S(176) : Theme.S(124);
             head = new Rectangle(p, Top0, W - p * 2, headH);
             body = new Rectangle(p, head.Bottom + Theme.S(16), W - p * 2, H - head.Bottom - Theme.S(16) - p);
             cards.Add(head); cards.Add(body);
@@ -282,11 +273,6 @@ namespace FileConverter
                 Place(mismatch, new Rectangle(x, by + Theme.S(48), w - sw - Theme.S(10), Theme.S(42)));
                 Place(btnSaveAs, new Rectangle(x + w - sw, by + Theme.S(51), sw, Theme.S(36)));
             }
-            int vy = by + (mismatch.Visible ? Theme.S(100) : Theme.S(48));
-            int vw = Math.Max(Theme.S(150), btnVt.PreferredWidth), kw = Theme.S(36);
-            Place(vtNotice, new Rectangle(x, vy, w - vw - kw - Theme.S(16), Theme.S(42)));
-            Place(btnVt, new Rectangle(x + w - vw - kw - Theme.S(6), vy + Theme.S(3), vw, Theme.S(36)));
-            Place(btnVtKey, new Rectangle(x + w - kw, vy + Theme.S(3), kw, Theme.S(36)));
             Place(tabs, new Rectangle(body.X + ip, body.Y + Theme.S(14), Math.Min(Theme.S(560), body.Width - ip * 2), Theme.S(38)));
             Rectangle content = new Rectangle(body.X + Theme.S(6), body.Y + Theme.S(62), body.Width - Theme.S(12), body.Height - Theme.S(70));
             foreach (Control c in new Control[] { details, hex, strings }) Place(c, content);
@@ -368,7 +354,6 @@ namespace FileConverter
                 {
                     if (tk != token) return;
                     file = path; sniff = s; media = mi; hashes = null;
-                    vtReport = null; vtBusy = false; vtText = null; vtKind = 0; vtNotice.Kind = 0; btnVt.Enabled = true;
                     text.Tag = null; strings.Tag = null; if (web != null) web.Tag = null;
                     textMode.SetSilently(0); encSeg.SetSilently(0);
                     if (preview.Frame != null) { preview.Frame.Dispose(); preview.Frame = null; }
@@ -380,125 +365,6 @@ namespace FileConverter
                     LoadPreview(tk);
                     ComputeHashes(tk);
                 });
-            });
-            t.IsBackground = true; t.Start();
-        }
-
-        // ------------------------------------------------------------------ online check (VirusTotal)
-        ToolTip tips;
-
-        /// Asks for (or changes) the free VirusTotal key. True when a key is saved.
-        bool AskVtKey()
-        {
-            string k = Ask.Input(FindForm(), L.T("vt_key_title"), L.T("vt_key_msg"), VirusTotal.Key, L.T("vt_key_ph"),
-                                 L.T("save"), L.T("cancel"), L.T("vt_key_get"), VirusTotal.KeyUrl);
-            if (k == null) return false;
-            VirusTotal.Key = k;
-            if (k.Length > 0 && !VirusTotal.HasKey) { ShowToast(L.T("vt_bad_key"), false, null, null); return false; }
-            return VirusTotal.HasKey;
-        }
-
-        void SetVt(string text, int kind)
-        {
-            vtText = text; vtKind = kind; vtNotice.Kind = kind;
-            vtNotice.Glyph = kind == 2 || kind == 1 ? Ico.Warning : kind == 3 ? Ico.Check : "\uEA18";
-            vtNotice.Invalidate(); btnVt.Invalidate();
-            DoLayout();
-        }
-
-        void CheckOnline()
-        {
-            if (file == null || vtBusy) return;
-            if (vtReport != null && !vtReport.Pending) { try { Process.Start(VirusTotal.ReportUrl(vtReport.Sha256)); } catch { } return; }
-            if (!VirusTotal.HasKey && !AskVtKey()) return;
-            string path = file; int tk = token;
-            string known = hashes != null ? hashes[2] : null;
-            vtBusy = true; btnVt.Enabled = false;
-            SetVt(L.T("vt_checking"), 0);
-            Thread t = new Thread(() =>
-            {
-                try
-                {
-                    string sha = known != null ? known.Replace(" ", "").ToLowerInvariant() : VirusTotal.Sha256(path);
-                    VirusTotal.Report r = VirusTotal.Lookup(sha);
-                    Ui(() =>
-                    {
-                        if (tk != token) return;
-                        if (r == null || r.Pending) OfferUpload(path, sha, tk);
-                        else ShowReport(r);
-                    });
-                }
-                catch (Exception ex) { Ui(() => VtFailed(tk, ex)); }
-            });
-            t.IsBackground = true; t.Start();
-        }
-
-        void VtFailed(int tk, Exception ex)
-        {
-            if (tk != token) return;
-            vtBusy = false; btnVt.Enabled = true;
-            SetVt(ex is VirusTotal.Problem ? ex.Message : L.T("vt_failed", ex.Message), 1);
-        }
-
-        void ShowReport(VirusTotal.Report r)
-        {
-            vtBusy = false; btnVt.Enabled = true; vtReport = r;
-            string when = r.Scanned > DateTime.MinValue ? TrimPage.Ago(r.Scanned) : "";
-            if (r.Malicious > 0)
-                SetVt(L.T("vt_bad", r.Malicious, r.Total) + (string.IsNullOrEmpty(r.Label) ? "" : "  (" + r.Label + ")") + (when.Length > 0 ? "  ·  " + L.T("vt_when", when) : ""), 2);
-            else if (r.Suspicious > 0)
-                SetVt(L.T("vt_sus", r.Suspicious, r.Total) + (when.Length > 0 ? "  ·  " + L.T("vt_when", when) : ""), 1);
-            else
-                SetVt(L.T("vt_clean", r.Total) + (when.Length > 0 ? "  ·  " + L.T("vt_when", when) : ""), 3);
-        }
-
-        /// VirusTotal has never seen this file: upload it, but only if the person agrees.
-        void OfferUpload(string path, string sha, int tk)
-        {
-            long size = 0; try { size = new FileInfo(path).Length; } catch { }
-            if (size > VirusTotal.MaxUpload) { vtBusy = false; btnVt.Enabled = true; SetVt(L.T("vt_unknown_big"), 0); return; }
-            if (!Ask.Confirm(FindForm(), L.T("vt_unknown_title"), L.T("vt_upload_ask"), L.T("vt_upload"), L.T("cancel"), AskKind.Warning))
-            {
-                vtBusy = false; btnVt.Enabled = true; SetVt(L.T("vt_unknown"), 0); return;
-            }
-            bool stop = false;
-            ActJob job = Activity.Begin(this, L.T("vt_job"), Path.GetFileName(path), () => stop = true);
-            SetVt(L.T("vt_uploading", 0), 0);
-            Thread t = new Thread(() =>
-            {
-                try
-                {
-                    DateTime last = DateTime.MinValue;
-                    string id = VirusTotal.Upload(path, (done, total) =>
-                    {
-                        if ((DateTime.Now - last).TotalMilliseconds < 300) return;
-                        last = DateTime.Now;
-                        int pc = (int)(done * 100 / Math.Max(1, total));
-                        Activity.Update(job, done / (double)Math.Max(1, total) * 0.5, L.T("vt_uploading", pc));
-                        Ui(() => { if (tk == token) SetVt(L.T("vt_uploading", pc), 0); });
-                    }, () => stop || tk != token);
-                    // the free key allows 4 requests a minute: ask every 20 seconds, for up to 6 minutes
-                    Ui(() => { if (tk == token) SetVt(L.T("vt_scanning"), 0); });
-                    Activity.Update(job, 0.5, L.T("vt_scanning"));
-                    VirusTotal.Report r = null;
-                    for (int i = 0; i < 18 && !stop; i++)
-                    {
-                        for (int k = 0; k < 40 && !stop; k++) Thread.Sleep(500);
-                        if (stop) break;
-                        Activity.Update(job, 0.5 + 0.5 * (i + 1) / 18.0, L.T("vt_scanning"));
-                        bool fin = false;
-                        try { fin = VirusTotal.Finished(id); } catch (VirusTotal.Problem) { }
-                        if (!fin) continue;
-                        r = VirusTotal.Lookup(sha);
-                        if (r != null && !r.Pending) break;
-                    }
-                    if (stop) { Activity.Cancelled(job); Ui(() => { if (tk == token) { vtBusy = false; btnVt.Enabled = true; SetVt(null, 0); } }); return; }
-                    if (r == null || r.Pending) throw new VirusTotal.Problem(L.T("vt_slow"));
-                    Activity.Done(job, r.Malicious > 0 ? L.T("vt_bad", r.Malicious, r.Total) : L.T("vt_clean", r.Total), null);
-                    Ui(() => { if (tk == token) ShowReport(r); });
-                }
-                catch (OperationCanceledException) { Activity.Cancelled(job); Ui(() => { if (tk == token) { vtBusy = false; btnVt.Enabled = true; SetVt(null, 0); } }); }
-                catch (Exception ex) { Activity.Fail(job, ex.Message); Ui(() => VtFailed(tk, ex)); }
             });
             t.IsBackground = true; t.Start();
         }

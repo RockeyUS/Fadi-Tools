@@ -27,7 +27,58 @@ namespace FileConverter
             }
         }
         public static string ExeDir { get { return Path.GetDirectoryName(System.Windows.Forms.Application.ExecutablePath); } }
-        public static string AppDir { get { return Portable ? Path.Combine(ExeDir, "data") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FileConverter"); } }
+        public static string AppDir { get { return Portable ? Path.Combine(ExeDir, "data") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Fadi Tools"); } }
+        /// Where everything lived before 1.4.0 (AppData\Local\FileConverter).
+        public static string OldAppDir { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FileConverter"); } }
+
+        /// 1.4.0 moved the app's folder from "FileConverter" to "Fadi Tools": settings, engines, autosaves and the
+        /// installed program come along (moved, not downloaded again). Runs once, before anything reads the settings.
+        public static void MoveOldFolder()
+        {
+            if (Portable) return;
+            try
+            {
+                string oldDir = OldAppDir, newDir = AppDir;
+                if (!Directory.Exists(oldDir)) return;
+                bool fromOld = ExeDir.TrimEnd('\\').Equals(oldDir.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+                if (File.Exists(Path.Combine(newDir, "settings.ini")))
+                {
+                    // already moved: what's left is the old program, removed once it isn't the one running
+                    // (it may still be closing after handing over to this copy, so try for a few seconds)
+                    if (!fromOld)
+                        new System.Threading.Thread(() =>
+                        {
+                            for (int i = 0; i < 12 && Directory.Exists(oldDir); i++)
+                                try { Directory.Delete(oldDir, true); } catch { System.Threading.Thread.Sleep(500); }
+                        }) { IsBackground = true }.Start();
+                    return;
+                }
+                Directory.CreateDirectory(newDir);
+                foreach (string d in Directory.GetDirectories(oldDir))
+                {
+                    string to = Path.Combine(newDir, Path.GetFileName(d));
+                    if (Directory.Exists(to)) continue;
+                    try { Directory.Move(d, to); } catch { try { CopyDir(d, to); } catch { } }
+                }
+                foreach (string f in Directory.GetFiles(oldDir))
+                {
+                    string name = Path.GetFileName(f), to = Path.Combine(newDir, name);
+                    if (File.Exists(to)) continue;
+                    bool exe = name.Equals("Fadi Tools.exe", StringComparison.OrdinalIgnoreCase) || name.Equals("FileConverter.exe", StringComparison.OrdinalIgnoreCase);
+                    if (exe) { if (name.StartsWith("Fadi")) try { File.Copy(f, to); } catch { } continue; }   // copied: it may be running
+                    try { File.Move(f, to); } catch { try { File.Copy(f, to); } catch { } }
+                }
+                if (!fromOld) try { Directory.Delete(oldDir, true); } catch { }
+            }
+            catch { }
+        }
+
+        static void CopyDir(string from, string to)
+        {
+            Directory.CreateDirectory(to);
+            foreach (string f in Directory.GetFiles(from)) File.Copy(f, Path.Combine(to, Path.GetFileName(f)), true);
+            foreach (string d in Directory.GetDirectories(from)) CopyDir(d, Path.Combine(to, Path.GetFileName(d)));
+        }
         public static string ToolsDir { get { return Path.Combine(AppDir, "tools"); } }
         public static string InstalledExe { get { return Path.Combine(AppDir, "Fadi Tools.exe"); } }
         /// The installed copy's name before 1.0.1 (removed once the new one is in place).

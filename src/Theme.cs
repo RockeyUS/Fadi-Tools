@@ -33,33 +33,33 @@ namespace FileConverter
         static Color T(Color c, float light, float dark) { return Accent.IsEmpty ? c : Mix(c, Accent, Dark ? dark : light); }
         static float Lum(Color c) { return (0.299f * c.R + 0.587f * c.G + 0.114f * c.B) / 255f; }
 
-        /// The default accent: Claude's warm clay.
-        public static Color Clay { get { return P(Dark, C(201, 100, 66), C(217, 119, 87)); } }
+        /// The default accent: a warm orange (it sits well with the fez red of the logo).
+        public static Color Clay { get { return P(Dark, C(238, 98, 46), C(245, 120, 70)); } }
         public static Color AccentColor { get { return Accent.IsEmpty ? Clay : Accent; } }
 
-        // warm, flat surfaces (ivory / charcoal) with hairline borders
-        public static Color Bg { get { return T(P(Dark, C(242, 240, 233), C(38, 38, 36)), 0.04f, 0.06f); } }
+        // clean, flat surfaces: warm cream with white cards (light), soft black with charcoal cards (dark)
+        public static Color Bg { get { return T(P(Dark, C(246, 240, 233), C(22, 22, 24)), 0.03f, 0.05f); } }
         public static Color BgTop { get { return Bg; } }
         public static Color BgBottom { get { return Bg; } }
-        public static Color Side { get { return T(P(Dark, C(233, 230, 220), C(31, 30, 29)), 0.06f, 0.07f); } }
+        public static Color Side { get { return T(P(Dark, C(255, 255, 255), C(29, 29, 31)), 0.0f, 0.04f); } }
         public static Color SideTop { get { return Side; } }
         public static Color SideBottom { get { return Side; } }
-        public static Color SideBorder { get { return T(P(Dark, C(208, 204, 191), C(52, 51, 48)), 0.08f, 0.08f); } }
-        public static Color Card { get { return T(P(Dark, C(255, 255, 255), C(48, 48, 46)), 0.015f, 0.04f); } }
-        public static Color CardBorder { get { return T(P(Dark, C(212, 208, 196), C(64, 63, 59)), 0.08f, 0.08f); } }
-        public static Color CardInner { get { return T(P(Dark, C(245, 243, 237), C(42, 42, 40)), 0.04f, 0.05f); } }
-        public static Color Ink { get { return P(Dark, C(20, 20, 19), C(240, 238, 230)); } }
-        public static Color InkSoft { get { return P(Dark, C(70, 69, 65), C(184, 181, 169)); } }
-        public static Color InkFaint { get { return P(Dark, C(112, 110, 104), C(128, 126, 118)); } }
-        public static Color Line { get { return P(Dark, C(224, 220, 209), C(58, 57, 53)); } }
-        public static Color Hover { get { return T(P(Dark, C(230, 226, 215), C(53, 52, 49)), 0.06f, 0.08f); } }
-        public static Color Pressed { get { return T(P(Dark, C(218, 214, 201), C(62, 61, 57)), 0.08f, 0.1f); } }
-        public static Color Selected { get { return T(P(Dark, C(224, 220, 208), C(57, 56, 52)), 0.1f, 0.12f); } }
-        public static Color Field { get { return T(P(Dark, C(255, 255, 255), C(48, 48, 46)), 0.015f, 0.04f); } }
-        public static Color FieldBorder { get { return T(P(Dark, C(190, 186, 173), C(74, 73, 68)), 0.08f, 0.08f); } }
-        public static Color ChipTop { get { return T(P(Dark, C(255, 255, 255), C(52, 52, 49)), 0.015f, 0.04f); } }
+        public static Color SideBorder { get { return T(P(Dark, C(234, 227, 218), C(44, 44, 48)), 0.06f, 0.06f); } }
+        public static Color Card { get { return T(P(Dark, C(255, 255, 255), C(32, 32, 35)), 0.0f, 0.03f); } }
+        public static Color CardBorder { get { return T(P(Dark, C(234, 227, 218), C(48, 48, 52)), 0.06f, 0.06f); } }
+        public static Color CardInner { get { return T(P(Dark, C(249, 245, 240), C(27, 27, 30)), 0.03f, 0.04f); } }
+        public static Color Ink { get { return P(Dark, C(24, 22, 20), C(242, 242, 244)); } }
+        public static Color InkSoft { get { return P(Dark, C(86, 82, 76), C(176, 176, 183)); } }
+        public static Color InkFaint { get { return P(Dark, C(136, 130, 122), C(124, 124, 132)); } }
+        public static Color Line { get { return P(Dark, C(238, 232, 224), C(46, 46, 50)); } }
+        public static Color Hover { get { return T(P(Dark, C(245, 240, 234), C(42, 42, 46)), 0.04f, 0.06f); } }
+        public static Color Pressed { get { return T(P(Dark, C(236, 229, 220), C(52, 52, 57)), 0.06f, 0.08f); } }
+        public static Color Selected { get { return T(P(Dark, C(241, 234, 226), C(48, 48, 53)), 0.08f, 0.1f); } }
+        public static Color Field { get { return T(P(Dark, C(255, 255, 255), C(36, 36, 39)), 0.0f, 0.03f); } }
+        public static Color FieldBorder { get { return T(P(Dark, C(222, 214, 204), C(64, 64, 70)), 0.06f, 0.06f); } }
+        public static Color ChipTop { get { return T(P(Dark, C(255, 255, 255), C(38, 38, 41)), 0.0f, 0.03f); } }
         public static Color ChipBottom { get { return ChipTop; } }
-        public static Color ChipBorder { get { return T(P(Dark, C(200, 196, 184), C(70, 69, 64)), 0.08f, 0.08f); } }
+        public static Color ChipBorder { get { return T(P(Dark, C(228, 220, 210), C(58, 58, 63)), 0.06f, 0.06f); } }
         // primary actions: flat accent with white text (Claude's clay by default)
         public static Color PrimaryTop { get { return AccentColor; } }
         public static Color PrimaryBottom { get { return AccentColor; } }
@@ -71,7 +71,7 @@ namespace FileConverter
         public static Color ErrorBg { get { return P(Dark, C(250, 233, 228), C(72, 40, 34)); } }
         public static Color Warn { get { return P(Dark, C(158, 106, 18), C(236, 188, 102)); } }
         public static Color WarnBg { get { return P(Dark, C(250, 241, 222), C(66, 55, 32)); } }
-        public static Color Track { get { return T(P(Dark, C(216, 212, 200), C(64, 63, 59)), 0.08f, 0.1f); } }
+        public static Color Track { get { return T(P(Dark, C(230, 223, 214), C(58, 58, 63)), 0.08f, 0.1f); } }
         public static Color Shadow { get { return P(Dark, Color.FromArgb(22, 60, 50, 30), Color.FromArgb(30, 0, 0, 0)); } }
 
         public static float Scale = 1f;

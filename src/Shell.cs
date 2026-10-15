@@ -12,7 +12,7 @@ namespace FileConverter
     /// Windows integration: install location, shortcuts, right-click menu, file associations, uninstall.
     public static class Shell
     {
-        public const string Version = "1.3.0";
+        public const string Version = "1.4.0";
 
         [DllImport("shell32.dll")]
         static extern void SHChangeNotify(int eventId, int flags, IntPtr item1, IntPtr item2);
@@ -41,7 +41,7 @@ namespace FileConverter
             }
         }
 
-        /// Copies this exe into %LOCALAPPDATA%\FileConverter (if needed) and removes leftovers of version 1.
+        /// Copies this exe into %LOCALAPPDATA%\Fadi Tools (if needed) and removes leftovers of version 1.
         public static void CopySelf()
         {
             Directory.CreateDirectory(Paths.AppDir);
@@ -268,7 +268,7 @@ namespace FileConverter
             SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero);
 
             // The running exe can't delete itself: let a hidden cmd remove the folder after we exit.
-            ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c timeout /t 3 /nobreak >nul & rd /s /q \"" + Paths.AppDir + "\"");
+            ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c timeout /t 3 /nobreak >nul & rd /s /q \"" + Paths.AppDir + "\" & rd /s /q \"" + Paths.OldAppDir + "\"");
             psi.CreateNoWindow = true;
             psi.UseShellExecute = false;
             psi.WorkingDirectory = Path.GetTempPath();

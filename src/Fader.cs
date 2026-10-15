@@ -140,6 +140,26 @@ namespace FileConverter
         /// Movement on (Settings > Animations; off = everything jumps straight to where it ends).
         public static bool Motion { get { return !noAnim && Settings.Get("Animations", "1") != "0"; } }
 
+        class TweenRun : IAnimated
+        {
+            public int Frame, Frames; public Action<float> Each; public Action Done;
+            public bool Step()
+            {
+                Frame++;
+                float t = Math.Min(1f, Frame / (float)Math.Max(1, Frames));
+                float e = 1 - (float)Math.Pow(1 - t, 3);
+                try { Each(e); } catch { }
+                if (t >= 1) { if (Done != null) try { Done(); } catch { } return false; }
+                return true;
+            }
+        }
+        /// Runs step(0..1, eased) over about ms milliseconds, then done (instantly when motion is off).
+        public static void Tween(int ms, Action<float> step, Action done)
+        {
+            if (!Motion) { step(1); if (done != null) done(); return; }
+            Animator.Start(new TweenRun { Frames = Math.Max(2, ms / 15), Each = step, Done = done });
+        }
+
         /// Moves a value a step closer to its target; true while it's still moving.
         public static bool Ease(ref float v, float target, float speed)
         {

@@ -10,16 +10,17 @@ namespace FileConverter
     public class SettingsPage : Page
     {
         Rectangle appearance, saving, about, engines, integration;
-        Rectangle themeLbl, langLbl, openAfterLbl, askSaveLbl, aboutR, animLbl, vtRow;
+        int aboutLogoY, aboutTextW;
+        bool aboutTallNow;
+        Rectangle themeLbl, langLbl, openAfterLbl, askSaveLbl, aboutR, animLbl;
         readonly Toggle askSave = new Toggle(), anim = new Toggle();
-        Btn btnVtKey;
         float scrollTo, scrollNow; int maxScroll;
         Rectangle[] engineRows = new Rectangle[4], integRows = new Rectangle[4];
         Segments theme, lang, logoSeg;
         Swatches accent;
         Rectangle accentLbl, logoLbl;
         static readonly Color[] AccentColors = {
-            Color.FromArgb(201, 100, 66), Color.FromArgb(108, 112, 120), Color.FromArgb(59, 130, 246), Color.FromArgb(124, 58, 237),
+            Color.FromArgb(238, 98, 46), Color.FromArgb(108, 112, 120), Color.FromArgb(59, 130, 246), Color.FromArgb(124, 58, 237),
             Color.FromArgb(219, 39, 119), Color.FromArgb(220, 38, 38), Color.FromArgb(22, 163, 74), Color.FromArgb(13, 148, 136) };
         FolderButton folder;
         Btn btnReset, btnUninstall, btnLo, btnYt, btnYtUpdate;
@@ -98,18 +99,9 @@ namespace FileConverter
             integ[3] = new Toggle();
             integ[3].CheckedChanged += (s, e) => Notifier.Enabled = integ[3].Checked;
             anim.CheckedChanged += (s, e) => Settings.Set("Animations", anim.Checked ? "1" : "0");
-            btnVtKey = new Btn(() => VirusTotal.HasKey ? L.T("vt_key_change") : L.T("vt_key_add"), "\uEA18", BtnKind.Secondary);
-            btnVtKey.Click += (s, e) =>
-            {
-                string k = Ask.Input(FindForm(), L.T("vt_key_title"), L.T("vt_key_msg"), VirusTotal.Key, L.T("vt_key_ph"), L.T("save"), L.T("cancel"), L.T("vt_key_get"), VirusTotal.KeyUrl);
-                if (k == null) return;
-                VirusTotal.Key = k;
-                if (k.Length > 0 && !VirusTotal.HasKey) ShowToast(L.T("vt_bad_key"), false, null, null);
-                DoLayout();
-            };
             btnZip = new Btn(() => L.T("zip_make"), "\uE8B7", BtnKind.Secondary);
             btnZip.Click += (s, e) => MakeZip();
-            Controls.AddRange(new Control[] { btnUpdate, btnTips, btnNew, askSave, btnZip, anim, btnVtKey });
+            Controls.AddRange(new Control[] { btnUpdate, btnTips, btnNew, askSave, btnZip, anim });
             Controls.AddRange(new Control[] { theme, lang, accent, logoSeg, folder, btnReset, openAfter, btnUninstall, btnLo, btnYt, btnYtUpdate, ytProgress });
             Controls.AddRange(integ);
             LoadValues();
@@ -213,9 +205,13 @@ namespace FileConverter
             int lx = p, rx = p + colW + gap, y = Top0;
             appearance = new Rectangle(lx, y, colW, Theme.S(292));
             saving = new Rectangle(lx, appearance.Bottom + gap, colW, Theme.S(236));
-            about = new Rectangle(lx, saving.Bottom + gap, colW, Math.Max(Theme.S(96), Math.Min(Theme.S(120), H - saving.Bottom - gap - p)));
+            // the about card: when "Show tips" and "What's new" don't fit beside the buttons, they get a row of their own
+            int uw = Math.Max(Theme.S(150), Math.Max(btnUninstall.PreferredWidth, btnUpdate.PreferredWidth));
+            int tw = Math.Max(Theme.S(120), btnTips.PreferredWidth), nw2 = Math.Max(Theme.S(110), btnNew.PreferredWidth);
+            bool aboutTall = tw + Theme.S(4) + nw2 > colW - ip * 2 - Theme.S(50) - uw - Theme.S(12);
+            about = new Rectangle(lx, saving.Bottom + gap, colW, aboutTall ? Theme.S(152) : Math.Max(Theme.S(96), Math.Min(Theme.S(120), H - saving.Bottom - gap - p)));
             engines = new Rectangle(rx, y, colW, Theme.S(296));
-            integration = new Rectangle(rx, engines.Bottom + gap, colW, Theme.S(376));
+            integration = new Rectangle(rx, engines.Bottom + gap, colW, Theme.S(322));
             cards.AddRange(new[] { appearance, saving, about, engines, integration });
 
             int x = appearance.X + ip, w = colW - ip * 2;
@@ -240,14 +236,15 @@ namespace FileConverter
             Place(openAfter, new Rectangle(x + w - Theme.S(52), saving.Y + Theme.S(190), Theme.S(52), Theme.S(34)));
 
             aboutR = new Rectangle(about.X + ip, about.Y, colW - ip * 2, about.Height);
-            int uw = Math.Max(Theme.S(150), Math.Max(btnUninstall.PreferredWidth, btnUpdate.PreferredWidth));
-            int bt = about.Y + (about.Height - Theme.S(76)) / 2;
+            int bt = aboutTall ? about.Y + Theme.S(20) : about.Y + (about.Height - Theme.S(76)) / 2;
             Place(btnUpdate, new Rectangle(about.Right - ip - uw, bt, uw, Theme.S(34)));
             Place(btnUninstall, new Rectangle(about.Right - ip - uw, bt + Theme.S(42), uw, Theme.S(34)));
-            int tw = Math.Max(Theme.S(120), btnTips.PreferredWidth);
-            Place(btnTips, new Rectangle(aboutR.X + Theme.S(50), about.Y + about.Height / 2 + Theme.S(16), tw, Theme.S(28)));
-            int nw2 = Math.Max(Theme.S(110), btnNew.PreferredWidth);
-            Place(btnNew, new Rectangle(aboutR.X + Theme.S(50) + tw + Theme.S(4), about.Y + about.Height / 2 + Theme.S(16), nw2, Theme.S(28)));
+            aboutTallNow = aboutTall;
+            aboutTextW = Math.Max(Theme.S(80), aboutR.Width - Theme.S(56) - uw - Theme.S(10));
+            aboutLogoY = aboutTall ? about.Y + Theme.S(22) : about.Y + (about.Height - Theme.S(44)) / 2 - Theme.S(14);
+            int ty = aboutTall ? about.Y + Theme.S(106) : about.Y + about.Height / 2 + Theme.S(16);
+            Place(btnTips, new Rectangle(aboutR.X + Theme.S(50), ty, tw, Theme.S(28)));
+            Place(btnNew, new Rectangle(aboutR.X + Theme.S(50) + tw + Theme.S(4), ty, nw2, Theme.S(28)));
 
             int ex = engines.X + ip, ew = colW - ip * 2;
             for (int i = 0; i < 4; i++) engineRows[i] = new Rectangle(ex, engines.Y + Theme.S(50) + i * Theme.S(58), ew, Theme.S(54));
@@ -266,10 +263,6 @@ namespace FileConverter
             zipRow = new Rectangle(ex, integration.Y + Theme.S(50) + 4 * Theme.S(52) + Theme.S(6), ew, Theme.S(48));
             int zw = Math.Max(Theme.S(130), btnZip.PreferredWidth);
             Place(btnZip, new Rectangle(ex + ew - zw, zipRow.Y + Theme.S(7), zw, Theme.S(34)));
-            vtRow = new Rectangle(ex, zipRow.Bottom + Theme.S(6), ew, Theme.S(48));
-            int vw = Math.Max(Theme.S(130), btnVtKey.PreferredWidth);
-            Place(btnVtKey, new Rectangle(ex + ew - vw, vtRow.Y + Theme.S(7), vw, Theme.S(34)));
-
             // long page: scroll with the mouse wheel when the window is short
             int bottom = Math.Max(about.Bottom, integration.Bottom) + p + ScrollY;
             maxScroll = Math.Max(0, bottom - H);
@@ -296,10 +289,10 @@ namespace FileConverter
             Label(g, L.T("open_after"), Theme.F(9.5f), Theme.Ink, openAfterLbl);
             Label(g, L.T("ask_save"), Theme.F(9.5f), Theme.Ink, askSaveLbl);
             // about
-            Rectangle logo = new Rectangle(aboutR.X, about.Y + (about.Height - Theme.S(44)) / 2 - Theme.S(14), Theme.S(44), Theme.S(44));
+            Rectangle logo = new Rectangle(aboutR.X, aboutLogoY, Theme.S(44), Theme.S(44));
             if (Theme.Logo != null) g.DrawImage(Theme.Logo, M(logo));
-            Label(g, L.T("app_name"), Theme.F(11f, FontStyle.Bold), Theme.Ink, new Rectangle(aboutR.X + Theme.S(56), logo.Y, aboutR.Width - Theme.S(200), Theme.S(24)));
-            Label(g, L.T("version", Shell.Version), Theme.F(9f), Theme.InkSoft, new Rectangle(aboutR.X + Theme.S(56), logo.Y + Theme.S(22), aboutR.Width - Theme.S(200), Theme.S(22)));
+            Label(g, L.T("app_name"), Theme.F(11f, FontStyle.Bold), Theme.Ink, new Rectangle(aboutR.X + Theme.S(56), logo.Y, aboutTextW, Theme.S(24)));
+            Label(g, L.T("version", Shell.Version), Theme.F(9f), Theme.InkSoft, new Rectangle(aboutR.X + Theme.S(56), logo.Y + Theme.S(24), aboutTextW, aboutTallNow ? Theme.S(40) : Theme.S(20)), Align.Start, !aboutTallNow, aboutTallNow);
 
             Head(g, engines, Ico.Settings, "engines");
             string[] names = { L.T("eng_ff"), L.T("eng_im"), L.T("eng_lo"), L.T("eng_yt") };
@@ -323,8 +316,6 @@ namespace FileConverter
             Head(g, integration, Ico.Settings, "integration");
             using (Pen lp = new Pen(Theme.Line)) { Rectangle l = M(new Rectangle(zipRow.X, zipRow.Y - Theme.S(4), zipRow.Width, 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
             Label(g, zipStatus ?? L.T(Paths.Portable ? "zip_label_portable" : "zip_label"), Theme.F(9.5f), zipStatus != null ? Theme.InkSoft : Theme.Ink, new Rectangle(zipRow.X, zipRow.Y, zipRow.Width - Theme.S(150), zipRow.Height), Align.Start, true, true);
-            using (Pen lp = new Pen(Theme.Line)) { Rectangle l = M(new Rectangle(vtRow.X, vtRow.Y - Theme.S(4), vtRow.Width, 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
-            Label(g, L.T("set_vt"), Theme.F(9.5f), Theme.Ink, new Rectangle(vtRow.X, vtRow.Y, vtRow.Width - Theme.S(150), vtRow.Height), Align.Start, true, true);
             if (maxScroll > 0)
             {
                 int th = Math.Max(Theme.S(40), Height * Height / (Height + maxScroll));

@@ -36,12 +36,13 @@ namespace FileConverter
             if (!clips[0].Info.HasVideo) { ShowToast(L.T("cap_video_only"), false, null, null); return; }
             if (reverse.Checked) { ShowToast(L.T("cap_no_reverse"), false, null, null); return; }
             if (!clips.Exists(c => c.Info.HasAudio)) { ShowToast(L.T("cap_no_sound"), false, null, null); return; }
-            int q; string lang;
+            int q; string lang; bool english;
             using (CaptionsForm f = new CaptionsForm())
             {
                 f.StartPosition = FormStartPosition.CenterParent;
                 if (f.ShowDialog(FindForm()) != DialogResult.OK) return;
-                q = f.Quality; lang = f.Language;
+                q = f.Quality; lang = f.Language; english = f.English;
+                if (english) q = 0;   // only the "small" listener can translate into English
             }
             StopPlay();
             editor.SelectTab(EdTabPublic.Effects);
@@ -74,7 +75,7 @@ namespace FileConverter
                     string e1 = Engine.Run(j, f => SetCap(L.T("cap_prep"), f * 0.05), () => capCancel);
                     if (capCancel) throw new OperationCanceledException();
                     if (e1 != null) throw new UserError(e1);
-                    string srt = Whisper.Transcribe(wav, q, lang, f => SetCap(L.T("cap_listening", (int)(f * 100)), 0.05 + f * 0.95), () => capCancel);
+                    string srt = Whisper.Transcribe(wav, q, lang, english, f => SetCap(L.T("cap_listening", (int)(f * 100)), 0.05 + f * 0.95), () => capCancel);
                     Directory.CreateDirectory(CaptionsDir);
                     srtOut = Path.Combine(CaptionsDir, stem + " " + DateTime.Now.ToString("yyyy-MM-dd HH.mm.ss") + ".srt");
                     File.Copy(srt, srtOut, true);

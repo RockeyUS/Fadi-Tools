@@ -198,6 +198,8 @@ namespace FileConverter
             }
         }
         public void SetSilently(int i) { selected = i; pos = i; Invalidate(); }
+        /// Moves the selection (sliding) without raising SelectedChanged.
+        public void SetQuietly(int i) { if (i < 0 || i >= Items.Length || i == selected) return; selected = i; Slide(); }
 
         void Slide()
         {
@@ -311,6 +313,7 @@ namespace FileConverter
         public void SetItems(IEnumerable<string> list, string select)
         {
             items = new List<string>(list);
+            morph = 1;
             selected = items.Contains(select) ? select : (items.Count > 0 ? items[0] : null);
             Invalidate();
             if (SelectedChanged != null) SelectedChanged(this, EventArgs.Empty);
@@ -346,7 +349,39 @@ namespace FileConverter
             string hit = null;
             for (int i = 0; i < items.Count; i++) if (Cell(i).Contains(e.Location)) { hit = items[i]; break; }
             base.OnMouseClick(e);
-            if (hit != null) Selected = hit;
+            if (hit != null && hit != selected)
+            {
+                // the orange chip flows over to the one clicked (its front edge leads, its back edge catches up)
+                int was = items.IndexOf(selected);
+                if (was >= 0 && Fx.Motion) { morphFrom = morph < 1 ? PillAt(morph) : CellF(was); morph = 0; Animator.Start(this); }
+                Selected = hit;
+            }
+        }
+
+        // ---- the moving selection
+        float morph = 1;
+        RectangleF morphFrom;
+        RectangleF CellF(int i) { Rectangle c = Cell(i); return new RectangleF(c.X + 0.5f, c.Y + 0.5f, c.Width - 1, c.Height - 1); }
+        static float Out3(float t) { t = Math.Max(0, Math.Min(1, t)); return 1 - (float)Math.Pow(1 - t, 3); }
+        static float OutBack(float t) { t = Math.Max(0, Math.Min(1, t)); const float k = 1.4f; float u = t - 1; return 1 + (k + 1) * u * u * u + k * u * u; }
+
+        RectangleF PillAt(float t)
+        {
+            RectangleF a = morphFrom, b = CellF(Math.Max(0, items.IndexOf(selected)));
+            float lead = Out3(t / 0.62f), tail = OutBack((t - 0.16f) / 0.84f);
+            Func<float, float, bool, float> mix = (x, y, front) => x + (y - x) * (front ? lead : tail);
+            bool right = b.X > a.X, down = b.Y > a.Y;
+            float l = mix(a.Left, b.Left, !right), r = mix(a.Right, b.Right, right);
+            float tp = mix(a.Top, b.Top, !down), bt = mix(a.Bottom, b.Bottom, down);
+            if (r - l < Theme.S(10)) { float m = (l + r) / 2; l = m - Theme.S(5); r = m + Theme.S(5); }
+            return RectangleF.FromLTRB(l, tp, r, Math.Max(tp + Theme.S(10), bt));
+        }
+
+        public override bool Step()
+        {
+            bool more = base.Step();
+            if (morph < 1) { morph = Math.Min(1, morph + 0.034f); Invalidate(); return true; }
+            return more;
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -355,11 +390,14 @@ namespace FileConverter
             PaintBg(g);
             Theme.Smooth(g);
             Font f = Theme.F(9.25f, FontStyle.Bold);
+            int si = items.IndexOf(selected);
+            bool moving = morph < 1 && si >= 0;
+            RectangleF pill = moving ? PillAt(morph) : RectangleF.Empty;
             for (int i = 0; i < items.Count; i++)
             {
                 Rectangle c = Cell(i);
-                RectangleF r = new RectangleF(c.X + 0.5f, c.Y + 0.5f, c.Width - 1, c.Height - 1);
-                bool sel = items[i] == selected;
+                RectangleF r = CellF(i);
+                bool sel = items[i] == selected && !moving;
                 Color fg;
                 if (sel)
                 {
@@ -373,10 +411,31 @@ namespace FileConverter
                     Theme.StrokeRound(g, r, Theme.S(8), h ? Theme.FieldBorder : Theme.ChipBorder);
                     fg = Enabled ? Theme.Ink : Theme.InkFaint;
                 }
-                string lbl = LabelOf != null ? LabelOf(items[i]) : items[i].ToUpperInvariant();
-                Theme.Text(g, lbl, f, fg, c, Align.Center, true, false, LabelOf == null);
+                Theme.Text(g, ChipLabel(i), f, fg, c, Align.Center, true, false, LabelOf == null);
             }
+            if (!moving) return;
+            // a soft ring spreads from the chip as the selection lands on it
+            if (morph > 0.42f)
+            {
+                float p = (morph - 0.42f) / 0.58f;
+                RectangleF ring = CellF(si);
+                float grow = Theme.S(1) + p * Theme.S(6);
+                ring.Inflate(grow, grow);
+                Theme.StrokeRound(g, ring, Theme.S(8) + grow, Color.FromArgb((int)(150 * (1 - p) * (1 - p)), Theme.AccentColor), Theme.S(1.6f));
+            }
+            Theme.FillRound(g, pill, Theme.S(8), Enabled ? Theme.PrimaryTop : Theme.InkFaint);
+            // the labels under the moving chip turn white where it covers them
+            GraphicsState st = g.Save();
+            using (System.Drawing.Drawing2D.GraphicsPath clip = Theme.Round(pill, Theme.S(8)))
+            {
+                g.SetClip(clip, System.Drawing.Drawing2D.CombineMode.Intersect);
+                for (int i = 0; i < items.Count; i++)
+                    if (CellF(i).IntersectsWith(pill)) Theme.Text(g, ChipLabel(i), f, Theme.PrimaryInk, Cell(i), Align.Center, true, false, LabelOf == null);
+            }
+            g.Restore(st);
         }
+
+        string ChipLabel(int i) { return LabelOf != null ? LabelOf(items[i]) : items[i].ToUpperInvariant(); }
     }
 
     /// On/off switch.
@@ -841,9 +900,14 @@ namespace FileConverter
     public class NavItem
     {
         public string Key; public string Glyph; public float Hot;
+        /// Starts a new group in the side list (a small heading key, e.g. "nav_sec_files").
+        public string Section;
+        /// A count shown as a small pill (0 = none), e.g. downloads going on.
+        public Func<int> Badge;
         public NavItem(string key, string glyph) { Key = key; Glyph = glyph; }
     }
 
+<<<<<<< Updated upstream
     /// Left (or right, in Arabic) navigation bar with logo, pages and theme/language switches.
     public class Sidebar : UiControl
     {
@@ -1081,6 +1145,8 @@ namespace FileConverter
         }
     }
 
+=======
+>>>>>>> Stashed changes
     /// Base for a page: themed background, page title, cards, and RTL-aware placement helpers.
     public abstract class Page : UiControl
     {
@@ -1101,6 +1167,8 @@ namespace FileConverter
         protected int Top0 { get { return Theme.S(96) - ScrollY; } }
         /// How far a long page (Settings) has been scrolled down.
         protected int ScrollY;
+        /// Room kept free at the end of the title row (for the tabs of a page that holds several tools).
+        public int HeaderReserve;
         protected int Pad { get { return Theme.S(28); } }
 
         public abstract void DoLayout();
@@ -1134,8 +1202,8 @@ namespace FileConverter
             PaintBg(g);
             Theme.Smooth(g);
             int tx = Pad;
-            Label(g, L.T(TitleKey), Theme.Serif(20f), Theme.Ink, new Rectangle(tx, Theme.S(18) - ScrollY, Width - Pad - tx, Theme.S(40)), Align.Start, false);
-            Label(g, L.T(SubKey), Theme.F(9.75f), Theme.InkSoft, new Rectangle(tx, Theme.S(58) - ScrollY, Width - Pad - tx, Theme.S(24)), Align.Start, false);
+            Label(g, L.T(TitleKey), Theme.Serif(20f), Theme.Ink, new Rectangle(tx, Theme.S(18) - ScrollY, Width - Pad - tx - HeaderReserve, Theme.S(40)), Align.Start, false);
+            Label(g, L.T(SubKey), Theme.F(9.75f), Theme.InkSoft, new Rectangle(tx, Theme.S(58) - ScrollY, Width - Pad - tx - HeaderReserve, Theme.S(24)), Align.Start, false);
             foreach (Rectangle c in cards) Theme.PaintCard(g, M(c));
             PaintContent(g);
         }

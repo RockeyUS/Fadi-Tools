@@ -14,16 +14,12 @@ namespace FileConverter
         /// glyph, title key, text key
         public static readonly string[][] Items =
         {
-            new[] { "", "wn_pages_t", "wn_pages_d" },
-            new[] { "", "wn_adjust_t", "wn_adjust_d" },
-            new[] { "", "wn_vbg_t", "wn_vbg_d" },
-            new[] { "", "wn_sticker_t", "wn_sticker_d" },
-            new[] { "", "wn_pdf_t", "wn_pdf_d" },
-            new[] { "", "wn_rename_t", "wn_rename_d" },
-            new[] { "", "wn_vt_t", "wn_vt_d" },
-            new[] { "", "wn_drag_t", "wn_drag_d" },
-            new[] { "", "wn_paste_t", "wn_paste_d" },
-            new[] { "", "wn_look_t", "wn_look_d" },
+            new[] { "", "wn_design_t", "wn_design_d" },
+            new[] { "", "wn_merge_t", "wn_merge_d" },
+            new[] { Ico.Copy, "wn_arabic_t", "wn_arabic_d" },
+            new[] { Ico.Text, "wn_capsub_t", "wn_capsub_d" },
+            new[] { Ico.Download, "wn_ready_t", "wn_ready_d" },
+            new[] { "", "wn_motion_t", "wn_motion_d" },
         };
 
         /// Shows the window once after the app was updated (not on a first install: the tour is shown then).

@@ -13,11 +13,11 @@ If Windows says "Windows protected your PC", click **More info → Run anyway**.
 
 - **Convert** pictures, audio, video, documents and data files
 - **Compress** videos and pictures, with one-click sizes for Discord, Email and profile pictures
-- **Studio** — edit photos and videos: text, photos on top, rotate, remove backgrounds, trim, transitions, music, auto captions
-- **PDF tools** — combine, reorder, rotate, delete, split and save pages as pictures
+- **Studio** — edit photos and videos (text, photos on top, rotate, remove backgrounds, trim, transitions, music, auto captions) and PDFs (combine, reorder, rotate, sign, number, watermark, lock, split, save pages as pictures)
+- **Rename** many files at once, with undo
 - **Copy text from pictures** (Arabic and English)
 - **Download** from YouTube and 1,000+ sites
-- **File inspector** and **Reverse engineer** for the curious
+- **File inspector**, with **Reverse engineer** inside it, for the curious
 
 ## Requirements
 

@@ -18,6 +18,9 @@ namespace FileConverter
         public Func<Control, string> GlyphOf;
 
         [System.Runtime.InteropServices.DllImport("gdi32.dll")] static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr h);
+        static bool Win { get { return Environment.OSVersion.Platform == PlatformID.Win32NT; } }
+        int gen; bool closing; Point home; int slide;
 
         public ActivityPanel()
         {
@@ -35,7 +38,7 @@ namespace FileConverter
             rows.GlyphOf = c => GlyphOf != null ? GlyphOf(c) : null;
             rows.Changed += () => Refresh2();
             Controls.Add(rows); Controls.Add(clear);
-            Deactivate += (s, e) => Close();
+            Deactivate += (s, e) => Dismiss();
             poll.Tick += (s, e) => { if (Activity.Version != seen) Refresh2(); };
             poll.Start();
         }
@@ -72,19 +75,65 @@ namespace FileConverter
             int cw = Math.Max(Theme.S(110), clear.PreferredWidth);
             clear.Bounds = Theme.Mirror(new Rectangle(w - cw - Theme.S(12), Theme.S(16), cw, Theme.S(32)), w);
             rows.Bounds = new Rectangle(Theme.S(6), Theme.S(66), w - Theme.S(12), h - Theme.S(66) - Theme.S(6));
+            home = new Point(x, y);
+            slide = Theme.RTL ? Theme.S(14) : -Theme.S(14);   // starts a little towards the sidebar
+            bool anim = Fx.Motion && Win;
+            if (anim) { Opacity = 0; rows.Intro = 0; Location = new Point(x + slide, y); }
             Show(sidebar.FindForm());
+            if (!anim) return;
+            // opens out of the Activity row: unfolds upwards, slides out of the sidebar and fades in, then the rows follow one by one
+            int g0 = ++gen;
+            Fx.Tween(260, t =>
+            {
+                if (IsDisposed || g0 != gen) return;
+                Opacity = Math.Min(1.0, t * 1.5);
+                Location = new Point(home.X + (int)Math.Round(slide * (1 - t)), home.Y);
+                Clip(t);
+            }, null);
+            Fx.Tween(520, t => { if (!IsDisposed) { rows.Intro = t; rows.Invalidate(); } }, null);
+        }
+
+        /// The visible part: from the bottom (next to the Activity row) up to the top as it opens.
+        void Clip(float t)
+        {
+            int r = Theme.S(18);
+            int top = (int)Math.Round((1 - t) * Math.Max(0, Height - Theme.S(54)));
+            try
+            {
+                IntPtr h = CreateRoundRectRgn(0, top, Width + 1, Height + 1, r, r);
+                Region old = Region;
+                Region = Region.FromHrgn(h);
+                DeleteObject(h);
+                if (old != null) old.Dispose();
+            }
+            catch { }
+        }
+
+        /// Fades out and slides back towards the sidebar, then closes.
+        public void Dismiss()
+        {
+            if (closing || IsDisposed) return;
+            closing = true;
+            if (!Fx.Motion || !Win || !Visible) { Close(); return; }
+            int g0 = ++gen;
+            double o0 = Opacity; Point p0 = Location;
+            Fx.Tween(140, t =>
+            {
+                if (IsDisposed || g0 != gen) return;
+                Opacity = o0 * (1 - t);
+                Location = new Point(p0.X + (int)Math.Round(slide * 0.6f * t), p0.Y);
+            }, () => { if (!IsDisposed) Close(); });
         }
 
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            int r = Theme.S(18);
-            try { Region = Region.FromHrgn(CreateRoundRectRgn(0, 0, Width + 1, Height + 1, r, r)); } catch { }
+            Clip(Fx.Motion && Win ? 0 : 1);
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys k)
         {
-            if (k == Keys.Escape) { Close(); return true; }
+            if (k == Keys.Escape) { Dismiss(); return true; }
             return base.ProcessCmdKey(ref msg, k);
         }
 
@@ -175,7 +224,23 @@ namespace FileConverter
             return t.ToString("HH:mm");
         }
 
+        /// 0..1 while the panel opens: each row slides in and fades up a moment after the one above it.
+        public float Intro = 1;
+
         protected override void DrawRow(Graphics g, int i, Rectangle r, bool hover)
+        {
+            float p = Intro >= 1 ? 1 : Math.Max(0, Math.Min(1, (Intro - i * 0.09f) / 0.55f));
+            if (p >= 1) { DrawRow2(g, i, r, hover); return; }
+            p = 1 - (1 - p) * (1 - p) * (1 - p);
+            float dx = (1 - p) * Theme.S(22) * (Theme.RTL ? 1 : -1);
+            GraphicsState st = g.Save();
+            g.TranslateTransform(dx, 0);
+            DrawRow2(g, i, r, hover);
+            g.Restore(st);
+            using (SolidBrush veil = new SolidBrush(Color.FromArgb((int)(255 * (1 - p)), Theme.Card))) g.FillRectangle(veil, r);
+        }
+
+        void DrawRow2(Graphics g, int i, Rectangle r, bool hover)
         {
             ActJob j = Jobs[i];
             Theme.Smooth(g);

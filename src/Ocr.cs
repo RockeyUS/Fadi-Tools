@@ -42,10 +42,41 @@ foreach ($lang in $langs) {
   if ($engine -eq $null) { continue }
   $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
   $null = $sb.AppendLine('@@LANG ' + $lang.LanguageTag)
-  foreach ($line in $result.Lines) { $null = $sb.AppendLine($line.Text) }
+  foreach ($line in $result.Lines) {
+    $null = $sb.AppendLine('@@LINE')
+    foreach ($w in $line.Words) { $null = $sb.AppendLine([string]([int]$w.BoundingRect.X) + [char]9 + $w.Text) }
+  }
 }
 [System.IO.File]::WriteAllText($Out, $sb.ToString(), [System.Text.Encoding]::UTF8)
 ";
+
+        /// Words come in the order they sit on the page (left to right). Arabic reads right to left, with any
+        /// English or numbers inside it still left to right — this puts them back in reading order.
+        static string LogicalLine(List<KeyValuePair<int, string>> words)
+        {
+            List<KeyValuePair<int, string>> w = new List<KeyValuePair<int, string>>(words);
+            w.Sort((a, b) => a.Key.CompareTo(b.Key));
+            int ar = 0, lat = 0;
+            foreach (KeyValuePair<int, string> k in w) { if (IsArabicWord(k.Value)) ar++; else if (HasLetter(k.Value)) lat++; }
+            // mostly Arabic words = right to left; on a tie, the word at the right edge decides (where an Arabic line starts)
+            bool rtl = ar > lat || (ar > 0 && ar == lat && IsArabicWord(w[w.Count - 1].Value));
+            if (rtl) w.Reverse();
+            // runs written the other way round go back to their own order
+            List<string> outp = new List<string>();
+            int i = 0;
+            while (i < w.Count)
+            {
+                bool other = rtl ? !IsArabicWord(w[i].Value) : IsArabicWord(w[i].Value);
+                if (!other) { outp.Add(w[i].Value); i++; continue; }
+                int j = i;
+                while (j < w.Count && (rtl ? !IsArabicWord(w[j].Value) : IsArabicWord(w[j].Value))) j++;
+                for (int k = j - 1; k >= i; k--) outp.Add(w[k].Value);
+                i = j;
+            }
+            return string.Join(" ", outp.ToArray());
+        }
+        static bool IsArabicWord(string s) { foreach (char c in s) if (Arabic(c)) return true; return false; }
+        static bool HasLetter(string s) { foreach (char c in s) if (char.IsLetterOrDigit(c)) return true; return false; }
 
         static bool Arabic(char c) { return (c >= 0x0600 && c <= 0x06FF) || (c >= 0x0750 && c <= 0x077F) || (c >= 0xFB50 && c <= 0xFEFF); }
 
@@ -107,22 +138,36 @@ foreach ($lang in $langs) {
                     if ((o ?? "").Contains("NOLANG")) throw new UserError(L.T("ocr_no_lang"));
                     throw new UserError(L.T("ocr_failed") + " " + Tools.LastLines(o ?? "", 1));
                 }
-                // pick the reading that fits its own language best
-                string best = "", lang = ""; int bestScore = -1;
-                StringBuilder cur = null; string curLang = null;
-                Action flush = () =>
-                {
-                    if (cur == null) return;
-                    string t = cur.ToString().Trim();
-                    int sc = Score(curLang, t);
-                    if (sc > bestScore) { bestScore = sc; best = t; lang = curLang; }
-                };
+                // each reader's lines, with every word's place on the line
+                List<string> langs = new List<string>();
+                List<List<List<KeyValuePair<int, string>>>> reads = new List<List<List<KeyValuePair<int, string>>>>();
+                List<List<KeyValuePair<int, string>>> curRead = null; List<KeyValuePair<int, string>> curLine = null;
                 foreach (string line in File.ReadAllLines(outp, Encoding.UTF8))
                 {
-                    if (line.StartsWith("@@LANG ")) { flush(); cur = new StringBuilder(); curLang = line.Substring(7).Trim().ToLowerInvariant(); continue; }
-                    if (cur != null) cur.AppendLine(line);
+                    if (line.StartsWith("@@LANG ")) { langs.Add(line.Substring(7).Trim().ToLowerInvariant()); curRead = new List<List<KeyValuePair<int, string>>>(); reads.Add(curRead); curLine = null; continue; }
+                    if (curRead == null) continue;
+                    if (line == "@@LINE") { curLine = new List<KeyValuePair<int, string>>(); curRead.Add(curLine); continue; }
+                    int tab = line.IndexOf('\t'); int x;
+                    if (curLine != null && tab > 0 && int.TryParse(line.Substring(0, tab), out x)) curLine.Add(new KeyValuePair<int, string>(x, line.Substring(tab + 1)));
                 }
-                flush();
+                string best = ""; int bestScore = -1; string arabicRead = null; int arabicLetters = 0, arabicAll = 0;
+                for (int i = 0; i < reads.Count; i++)
+                {
+                    StringBuilder sb = new StringBuilder();
+                    foreach (List<KeyValuePair<int, string>> ln in reads[i]) sb.AppendLine(LogicalLine(ln));
+                    string t = sb.ToString().Trim();
+                    bool rtl = langs[i].StartsWith("ar") || langs[i].StartsWith("fa") || langs[i].StartsWith("ur");
+                    if (rtl)
+                    {
+                        int ar = 0, all = 0;
+                        foreach (char c in t) { if (Arabic(c)) ar++; if (char.IsLetter(c)) all++; }
+                        if (ar > arabicLetters) { arabicLetters = ar; arabicAll = all; arabicRead = t; }
+                    }
+                    int sc = Score(langs[i], t);
+                    if (sc > bestScore) { bestScore = sc; best = t; }
+                }
+                // any real Arabic in it: the Arabic reader (it reads English words too); otherwise the best reader
+                if (arabicRead != null && arabicLetters >= 3 && arabicLetters * 100 >= arabicAll * 12) best = arabicRead;
                 return best.Replace("\r\n", "\n").Replace("\n", "\r\n");
             }
             finally { ThreadPool.QueueUserWorkItem(_ => { try { Directory.Delete(dir, true); } catch { } }); }

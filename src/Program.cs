@@ -104,6 +104,10 @@ namespace FileConverter
         public static int Main(string[] args)
         {
             try { SetProcessDPIAware(); } catch { }
+            // an update: let the old window finish closing before its folder is moved
+            if (args.Length > 0 && args[0].Equals("/update", StringComparison.OrdinalIgnoreCase))
+                for (int i = 0; i < 100 && SingleInstance.MainRunning; i++) Thread.Sleep(150);
+            Paths.MoveOldFolder();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Theme.Init();

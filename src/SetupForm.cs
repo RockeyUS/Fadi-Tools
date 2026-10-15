@@ -195,7 +195,7 @@ namespace FileConverter
                 if (!portable) Shell.CopySelf();
                 Directory.CreateDirectory(Paths.ToolsDir);
                 bool ff = Tools.FFmpeg == null, im = Tools.Magick == null;
-                if (ff || im) GetEngines(ff, im);
+                if (ff || im || !YtDlp.Ready || !Qpdf.Ready) GetEngines(ff, im);
                 CheckMagickRuns();
                 if (!portable)
                 {
@@ -232,8 +232,10 @@ namespace FileConverter
             Step(L.T("preparing"), 0.02);
             Fetch(L.T("eng_unpacker"), new[] { "https://github.com/ip7z/7zip/releases/download/26.04/7zr.exe", "https://www.7-zip.org/a/7zr.exe" }, sevenZ, null);
 
-            long[] got = new long[2], size = { ff ? 36L << 20 : 0, im ? 12L << 20 : 0 };   // guesses until the servers answer
-            Exception[] errors = new Exception[2];
+            // everything at once: video/audio, pictures, the download engine (yt-dlp) and the PDF engine (qpdf)
+            bool yt = !YtDlp.Ready, pdf = !Qpdf.Ready;
+            long[] got = new long[4], size = { ff ? 36L << 20 : 0, im ? 12L << 20 : 0, yt ? 60L << 20 : 0, pdf ? 27L << 20 : 0 };   // guesses until the servers answer
+            Exception[] errors = new Exception[4];
             int[] unpacking = new int[1];
             Thread a = null, b = null;
             if (ff) a = Run(() =>
@@ -279,13 +281,17 @@ namespace FileConverter
                 Unpack(sevenZ, "x " + Tools.Quote(arc) + " -o" + Tools.Quote(dir) + " magick.exe *.xml *.icc *.txt -y");
                 try { File.Delete(arc); } catch { }
             }, errors, 1);
+            // these two are welcome but not essential: if one fails, the app gets it later by itself
+            Exception[] extra = new Exception[2];
+            Thread c = yt ? Run(() => YtDlp.Install((label, f) => got[2] = (long)(Math.Max(0, f) * size[2]), () => cancelled), extra, 0) : null;
+            Thread d = pdf ? Run(() => Qpdf.Install((g, t) => { got[3] = g; if (t > 0) size[3] = t; }, () => cancelled), extra, 1) : null;
 
-            // one progress bar for both, with the speed
+            // one progress bar for all of them, with the speed
             DateTime t0 = DateTime.Now, lastT = t0; long lastSum = 0; double speed = 0;
-            while ((a != null && a.IsAlive) || (b != null && b.IsAlive))
+            while ((a != null && a.IsAlive) || (b != null && b.IsAlive) || (c != null && c.IsAlive) || (d != null && d.IsAlive))
             {
                 Thread.Sleep(200);
-                long sum = got[0] + got[1], total = Math.Max(1, size[0] + size[1]);
+                long sum = got[0] + got[1] + got[2] + got[3], total = Math.Max(1, size[0] + size[1] + size[2] + size[3]);
                 double dt = (DateTime.Now - lastT).TotalSeconds;
                 if (dt >= 0.5) { double now = (sum - lastSum) / dt; speed = speed <= 0 ? now : speed * 0.6 + now * 0.4; lastSum = sum; lastT = DateTime.Now; }
                 double frac = Math.Min(1, sum / (double)total);

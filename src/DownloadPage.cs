@@ -694,6 +694,9 @@ namespace FileConverter
 
         public override void AcceptFiles(string[] paths) { }
 
+        /// Downloads waiting or going on (the count on the side list).
+        public int ActiveCount { get { int n = 0; foreach (DlItem it in queue.Items) if (it.State == ItemState.Working || it.State == ItemState.Waiting) n++; return n; } }
+
         /// Puts the cursor in the link box (and pastes a copied link, if there is one).
         public void FocusLink()
         {

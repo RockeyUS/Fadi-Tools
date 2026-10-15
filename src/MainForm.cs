@@ -11,7 +11,9 @@ namespace FileConverter
     {
         Sidebar sidebar;
         List<Page> pages = new List<Page>();
-        ConvertPage convert; StudioPage studio; DownloadPage youtube; InspectPage inspect; RePage re; CompressPage compress; PdfPage pdf; RenamePage rename; SettingsPage settings;
+        ConvertPage convert; StudioPage studio; DownloadPage youtube; InspectorHost inspector; CompressPage compress; RenamePage rename; SettingsPage settings;
+        InspectPage inspect { get { return inspector.Inspect; } }
+        PdfPage pdf { get { return studio.Pdf; } }
         Toast toast;
         int current = -1;
 
@@ -34,14 +36,13 @@ namespace FileConverter
             KeyPreview = true;
 
             sidebar = new Sidebar();
-            sidebar.Items.Add(new NavItem("nav_convert", Ico.Sync));
+            // grouped like the side list shows them: making things, files, the internet
+            sidebar.Items.Add(new NavItem("nav_convert", Ico.Sync) { Section = "nav_sec_create" });
             sidebar.Items.Add(new NavItem("nav_studio", Ico.Photo));
             sidebar.Items.Add(new NavItem("nav_compress", "\uE73F"));
-            sidebar.Items.Add(new NavItem("nav_pdf", "\uEA90"));
-            sidebar.Items.Add(new NavItem("nav_rename", "\uE8AC"));
-            sidebar.Items.Add(new NavItem("nav_download", Ico.Download));
+            sidebar.Items.Add(new NavItem("nav_rename", "\uE8AC") { Section = "nav_sec_files" });
             sidebar.Items.Add(new NavItem("nav_inspect", Ico.Search));
-            sidebar.Items.Add(new NavItem("nav_re", Ico.Code));
+            sidebar.Items.Add(new NavItem("nav_download", Ico.Download) { Section = "nav_sec_web", Badge = () => youtube != null ? youtube.ActiveCount : 0 });
             nav.AddRange(sidebar.Items);
             nav.Add(new NavItem("nav_settings", Ico.Settings));   // at the bottom of the side list, under Activity
             sidebar.Navigate += Go;
@@ -59,17 +60,26 @@ namespace FileConverter
             };
             Theme.Changing += BeginLookChange;
             sidebar.OpenActivity += ShowActivity;
+            sidebar.Collapsed = Settings.Get("SideCollapsed", "0") == "1";
+            sideW = sidebar.Collapsed ? SideNarrow : SideWide;
+            sidebar.ToggleCollapse += () =>
+            {
+                // fold into icons / open again, sliding
+                sidebar.Collapsed = !sidebar.Collapsed;
+                Settings.Set("SideCollapsed", sidebar.Collapsed ? "1" : "0");
+                float from = sideW, to = sidebar.Collapsed ? SideNarrow : SideWide;
+                Fx.Tween(240, t => { sideW = from + (to - from) * t; DoLayout(); }, () => { sideW = to; DoLayout(); });
+            };
             sidebar.OpenSearch += ShowPalette;
             actTimer.Tick += (s, e) => PollActivity();
             actTimer.Start();
 
             toast = new Toast();
             convert = new ConvertPage(); studio = new StudioPage(); youtube = new DownloadPage();
-            inspect = new InspectPage(); re = new RePage(); compress = new CompressPage(); pdf = new PdfPage(); rename = new RenamePage(); settings = new SettingsPage();
-            pages.AddRange(new Page[] { convert, studio, compress, pdf, rename, youtube, inspect, re, settings });
+            inspector = new InspectorHost(); compress = new CompressPage(); rename = new RenamePage(); settings = new SettingsPage();
+            pages.AddRange(new Page[] { convert, studio, compress, rename, inspector, youtube, settings });
             for (int i = 0; i < pages.Count; i++) pages[i].Glyph = nav[i].Glyph;
             inspect.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
-            inspect.SendToRe += f => { Go(pages.IndexOf(re)); re.AcceptFiles(new[] { f }); };
             studio.Photos.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
 
             Controls.Add(toast);
@@ -86,6 +96,7 @@ namespace FileConverter
                     bool tour = false;
                     if (Settings.Get("TourDone", "") != TourForm.Version && Environment.GetEnvironmentVariable("FADI_NO_TOUR") == null) { TourForm.ShowTour(this); tour = true; }
                     WhatsNew.ShowIfUpdated(this, tour);
+                    GetMissingEngines();
                     OfferRestore();
                     Updater.CheckInBackground(toast, this);
                 }));
@@ -95,7 +106,7 @@ namespace FileConverter
 
             int start = 0;
             int.TryParse(Settings.Get("LastPage", "0"), out start);
-            if (Settings.Get("PagesV", "") != "7") { start = 0; Settings.Set("PagesV", "7"); }   // page order changed in 1.3 (Rename)
+            if (Settings.Get("PagesV", "") != "8") { start = 0; Settings.Set("PagesV", "8"); }   // page order changed in 1.4 (PDF in Studio, reverse engineering in File inspector)
             if (start < 0 || start >= pages.Count || start == SettingsIndex) start = 0;
             bool hasFiles = files != null && files.Length > 0;
             if (!hasFiles) Go(start);
@@ -112,6 +123,26 @@ namespace FileConverter
         }
 
         int SettingsIndex { get { return pages.Count - 1; } }
+
+        /// Everything comes installed: engines an older version left out (the download engine, the PDF engine)
+        /// are fetched quietly in the background, shown in Activity.
+        void GetMissingEngines()
+        {
+            if (Environment.GetEnvironmentVariable("FADI_NO_TOUR") != null) return;
+            bool yt = !YtDlp.Ready, pdf = !Qpdf.Ready;
+            if (!yt && !pdf) return;
+            ActJob job = Activity.Begin(this, L.T("eng_getting"), yt && pdf ? "yt-dlp · qpdf" : yt ? "yt-dlp" : "qpdf", null);
+            Thread t = new Thread(() =>
+            {
+                string err = null;
+                try { if (yt) YtDlp.Install((label, f) => Activity.Update(job, (pdf ? 0.7 : 1) * Math.Max(0, f), label), () => Tools.ShuttingDown); }
+                catch (Exception ex) { err = ex.Message; }
+                try { if (pdf) Qpdf.Install((g, total) => Activity.Update(job, (yt ? 0.7 : 0) + (yt ? 0.3 : 1) * (total > 0 ? g / (double)total : 0), "qpdf"), () => Tools.ShuttingDown); }
+                catch (Exception ex) { if (err == null) err = ex.Message; }
+                Activity.End(job, err, false, L.T("eng_ready"), null);
+            }) { IsBackground = true, Priority = ThreadPriority.BelowNormal };
+            t.Start();
+        }
         readonly List<NavItem> nav = new List<NavItem>();
 
         // ------------------------------------------------------------------ light/dark and language changes, animated
@@ -185,7 +216,7 @@ namespace FileConverter
                     Go(pages.IndexOf(studio)); studio.AcceptFiles(new[] { paths[0] });
                     Ocr.Run(studio.Photos, paths[0], 0, (m, ok) => toast.Show(m, ok, null, null));
                     break;
-                case "inspect": Go(pages.IndexOf(inspect)); inspect.AcceptFiles(paths); break;
+                case "inspect": Go(pages.IndexOf(inspector)); inspector.Show(inspect); inspect.AcceptFiles(paths); break;
                 default:
                     Go(pages.IndexOf(convert));
                     if (!convert.Busy) convert.AcceptFiles(paths);
@@ -207,12 +238,15 @@ namespace FileConverter
         string GlyphFor(Control c) { int i = PageIndexOf(c); return i >= 0 ? pages[i].Glyph : null; }
 
         /// Shows the page (and, in the Studio, the photo or video side) a job came from.
+        void GoPdf() { Go(pages.IndexOf(studio)); studio.Show(studio.Pdf); }
+
         void GoTo(Control c)
         {
             int i = PageIndexOf(c);
             if (i < 0) return;
             Go(i);
-            if (pages[i] == studio && (c == studio.Videos || c == studio.Photos)) studio.Show((Page)c);
+            if (pages[i] == studio && (c == studio.Videos || c == studio.Photos || c == studio.Pdf)) studio.Show((Page)c);
+            if (pages[i] == inspector && (c == inspector.Inspect || c == inspector.Re)) inspector.Show((Page)c);
         }
 
         void PollActivity()
@@ -221,10 +255,9 @@ namespace FileConverter
             actSeen = Activity.Version;
             int run = Activity.RunningCount, fresh = 0;
             foreach (ActJob j in Activity.Snapshot()) if (!j.Running && j.State != ActState.Cancelled && j.Ended > actSeenAt) fresh++;
-            bool changed = sidebar.ActivityRunning != run || sidebar.ActivityNew != fresh;
             sidebar.ActivityRunning = run; sidebar.ActivityNew = actPanel != null ? 0 : fresh;
             if (run > 0) Animator.Start(sidebar);
-            else if (changed) sidebar.Invalidate();
+            sidebar.Invalidate();   // counts (downloads, jobs) may have changed
             Taskbar.Set(this, Activity.Overall);
             foreach (ActJob j in Activity.TakeFinished()) Announce(j);
         }
@@ -275,19 +308,19 @@ namespace FileConverter
                 if (studio.Videos.HasFile) studio.Videos.MakeCaptions(); else { studio.Videos.Browse(false); toast.Show(L.T("cap_open_first"), true, null, null); }
             });
             add("pal_video_new", Ico.Video, "video edit cut trim new project capcut فيديو قص مشروع", () => { Go(pages.IndexOf(studio)); studio.Show(studio.Videos); studio.Videos.Browse(false); });
-            add("pal_pdf_combine", "\uE8AB", "merge combine join pdf photos images to pdf دمج ملفات pdf صور", () => { Go(pages.IndexOf(pdf)); pdf.StartMode(0, true); });
-            add("pal_pdf_pages", "\uEA90", "pdf pages rotate delete reorder organize صفحات تدوير حذف ترتيب", () => { Go(pages.IndexOf(pdf)); pdf.StartMode(1, true); });
-            add("pal_pdf_split", "\uE8C9", "split pdf extract pages separate تقسيم استخراج صفحات", () => { Go(pages.IndexOf(pdf)); pdf.StartMode(1, true); });
-            add("pal_pdf_images", Ico.Photo, "pdf to jpg png images pictures export صور", () => { Go(pages.IndexOf(pdf)); pdf.StartMode(1, true); });
+            add("pal_pdf_combine", "\uE8AB", "merge combine join pdf photos images to pdf دمج ملفات pdf صور", () => { GoPdf(); pdf.StartMode(0, true); });
+            add("pal_pdf_pages", "\uEA90", "pdf pages rotate delete reorder organize صفحات تدوير حذف ترتيب", () => { GoPdf(); pdf.StartMode(1, true); });
+            add("pal_pdf_split", "\uE8C9", "split pdf extract pages separate تقسيم استخراج صفحات", () => { GoPdf(); pdf.StartMode(1, true); });
+            add("pal_pdf_images", Ico.Photo, "pdf to jpg png images pictures export صور", () => { GoPdf(); pdf.StartMode(1, true); });
             add("pal_ocr", "\uE8EF", "ocr copy text from picture image screenshot read scan نسخ نص من صورة لقطة شاشة", () => { Go(pages.IndexOf(studio)); studio.Show(studio.Photos); studio.Photos.CopyText(); });
             add("pal_rename", "\uE8AC", "rename batch many files names numbers numbered replace إعادة تسمية ملفات أسماء ترقيم", () => { Go(pages.IndexOf(rename)); rename.Browse(); });
             add("pal_vbg", "\uE77B", "remove video background green screen cut out person transparent إزالة خلفية الفيديو شاشة خضراء", () => { Go(pages.IndexOf(studio)); studio.Show(studio.Videos); if (studio.Videos.HasFile) studio.Videos.RemoveVideoBg(); else studio.Videos.Browse(false); });
             add("pal_sticker", "\uE899", "sticker whatsapp telegram discord emoji ملصق واتساب تيليجرام ديسكورد", () => { Go(pages.IndexOf(convert)); convert.Browse(); });
-            add("pal_pdf_sign", "\uEC87", "sign pdf signature watermark page numbers password lock unlock توقيع علامة مائية ترقيم كلمة مرور قفل", () => { Go(pages.IndexOf(pdf)); pdf.StartMode(1, true); });
+            add("pal_pdf_sign", "\uEC87", "sign pdf signature watermark page numbers password lock unlock توقيع علامة مائية ترقيم كلمة مرور قفل", () => { GoPdf(); pdf.StartMode(1, true); });
             add("pal_whatsnew", "\uE789", "what's new changes update version changelog الجديد التغييرات تحديث", () => WhatsNew.Show(this));
             add("pal_download", Ico.Download, "download youtube tiktok instagram link url video تنزيل يوتيوب رابط", () => { Go(pages.IndexOf(youtube)); youtube.FocusLink(); });
-            add("pal_inspect", Ico.Search, "inspect file type hex checksum فحص ملف", () => { Go(pages.IndexOf(inspect)); inspect.Browse(); });
-            add("pal_re", Ico.Code, "reverse engineer exe dll analyse program هندسة عكسية برنامج", () => Go(pages.IndexOf(re)));
+            add("pal_inspect", Ico.Search, "inspect file type hex checksum فحص ملف", () => { Go(pages.IndexOf(inspector)); inspector.Show(inspect); inspect.Browse(); });
+            add("pal_re", Ico.Code, "reverse engineer exe dll analyse program هندسة عكسية برنامج", () => { Go(pages.IndexOf(inspector)); inspector.Show(inspector.Re); });
             add("pal_activity", "\uE9D9", "activity running jobs progress tasks النشاط المهام", () => ShowActivity(sidebar.FootRect(0)));
             Action<string, string, string, Action> set = (key, glyph, words, run) => l.Add(new PaletteItem { Group = gs, Title = L.T(key), Glyph = glyph, Words = L.Both(key) + " " + (words ?? ""), Run = run });
             set(Theme.Dark ? "pal_light" : "pal_dark", Theme.Dark ? Ico.Sun : Ico.Moon, "theme dark light mode appearance مظهر داكن فاتح", () => { Settings.Set("Theme", Theme.Dark ? "light" : "dark"); Theme.ApplySettings(); Theme.RaiseChanged(); });
@@ -298,13 +331,13 @@ namespace FileConverter
 
         void ShowActivity(Rectangle row)
         {
-            if (actPanel != null) { actPanel.Close(); return; }
+            if (actPanel != null) { actPanel.Dismiss(); return; }
             if ((DateTime.Now - actPanelClosed).TotalMilliseconds < 250) return;   // the click that closed it
             actPanel = new ActivityPanel();
             actPanel.GlyphOf = GlyphFor;
             actPanel.Navigate += GoTo;
-            actPanel.FormClosed += (s, e) => { actPanel = null; actPanelClosed = DateTime.Now; actSeenAt = DateTime.Now; sidebar.ActivityNew = 0; sidebar.Invalidate(); };
-            actSeenAt = DateTime.Now; sidebar.ActivityNew = 0; sidebar.Invalidate();
+            actPanel.FormClosed += (s, e) => { actPanel = null; actPanelClosed = DateTime.Now; actSeenAt = DateTime.Now; sidebar.ActivityNew = 0; sidebar.ActivityOpen = false; Animator.Start(sidebar); };
+            actSeenAt = DateTime.Now; sidebar.ActivityNew = 0; sidebar.ActivityOpen = true; Animator.Start(sidebar);
             actPanel.ShowBeside(sidebar, row);
         }
         public void ShowStudio(string[] files) { Go(1); studio.AcceptFiles(files); }
@@ -331,12 +364,17 @@ namespace FileConverter
             if (i != SettingsIndex) Settings.Set("LastPage", i.ToString());
         }
 
+        float sideW = -1;
+        float SideWide { get { return Theme.S(244); } }
+        float SideNarrow { get { return Theme.S(78); } }
+
         void DoLayout()
         {
             if (ClientSize.Width <= 0) return;
-            int sw = Theme.S(236), bh = BarHeight;
+            if (sideW < 0) sideW = sidebar.Collapsed ? SideNarrow : SideWide;
+            int sw = (int)Math.Round(sideW), bh = BarHeight;
             Bar.Bounds = new Rectangle(0, 0, ClientSize.Width, Bar.Height);
-            Bar.SideWidth = sw; Bar.SideRight = Theme.RTL;
+            Bar.SideWidth = 0; Bar.SideRight = Theme.RTL;   // the side list floats as its own card: the top bar is one plain strip
             Rectangle side = new Rectangle(0, bh, sw, ClientSize.Height - bh);
             Rectangle content = new Rectangle(sw, bh, ClientSize.Width - sw, ClientSize.Height - bh);
             if (Theme.RTL) { side.X = ClientSize.Width - sw; content.X = 0; }
