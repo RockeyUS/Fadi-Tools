@@ -325,6 +325,7 @@ namespace FileConverter
         public override bool Step()
         {
             bool more = base.Step();
+            if (!Fx.Motion) { scrollF = target; scroll = target; Invalidate(); return more; }
             if (scroll != target)
             {
                 scrollF += (target - scrollF) * 0.3f;

@@ -199,6 +199,14 @@ namespace FileConverter
 
         public void AnimateLayerTo(TextLayer l, PointF to)
         {
+            if (!Fx.Motion)
+            {
+                animLayer = null;
+                l.Pos = to;
+                Invalidate();
+                if (LayerMoved != null) LayerMoved();
+                return;
+            }
             animLayer = l; animFrom = l.Pos; animTo = to; animT = 0;
             Animator.Start(this);
         }

@@ -30,6 +30,7 @@ namespace FileConverter
         public virtual bool Step()
         {
             float target = hovering && Enabled ? 1f : 0f;
+            if (!Fx.Motion) { hot = target; Invalidate(); return false; }
             hot += (target - hot) * 0.3f;
             if (Math.Abs(target - hot) < 0.03f) hot = target;
             Invalidate();
@@ -395,6 +396,7 @@ namespace FileConverter
         public override bool Step()
         {
             bool more = base.Step();
+            if (!Fx.Motion) { pos = on ? 1 : 0; Invalidate(); return more; }
             float t = on ? 1 : 0;
             pos += (t - pos) * 0.3f;
             if (Math.Abs(t - pos) < 0.02f) pos = t;
@@ -640,6 +642,7 @@ namespace FileConverter
         public override bool Step()
         {
             bool more = base.Step();
+            if (!Fx.Motion) { scrollF = target; scroll = target; Invalidate(); return more; }
             if (scroll != target)
             {
                 scrollF += (target - scrollF) * 0.32f;
@@ -791,8 +794,12 @@ namespace FileConverter
         public override bool Step()
         {
             float t = wantShown ? 1 : 0;
-            shown += (t - shown) * 0.25f;
-            if (Math.Abs(t - shown) < 0.02f) shown = t;
+            if (!Fx.Motion) shown = t;
+            else
+            {
+                shown += (t - shown) * 0.25f;
+                if (Math.Abs(t - shown) < 0.02f) shown = t;
+            }
             if (shown <= 0) Visible = false;
             Place();
             Invalidate();
@@ -891,6 +898,18 @@ namespace FileConverter
         public override bool Step()
         {
             bool more = false;
+            if (!Fx.Motion)
+            {
+                for (int i = 0; i < Items.Count; i++) Items[i].Hot = i == hoverIndex ? 1 : 0;
+                Array.Clear(footHot, 0, footHot.Length);
+                if (hoverFoot >= 0 && hoverFoot < footHot.Length) footHot[hoverFoot] = 1;
+                searchHot = hoverSearch ? 1 : 0;
+                pillY = SelRect(selected).Y;
+                ripple.Step();
+                spinOnly = ActivityRunning <= 0;
+                if (ActivityRunning > 0) Invalidate(FootRect(0)); else Invalidate();
+                return ActivityRunning > 0;
+            }
             for (int i = 0; i < Items.Count; i++)
             {
                 float t = i == hoverIndex ? 1 : 0;

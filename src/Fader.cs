@@ -91,6 +91,7 @@ namespace FileConverter
         public bool Step()
         {
             if (to == null) return false;
+            if (!Fx.Motion) { Done(); return false; }
             frame++;
             t = Math.Min(1, frame / Math.Max(1, Frames));
             if (t >= 1) { Done(); return false; }
@@ -256,6 +257,7 @@ namespace FileConverter
         /// One frame; true while it's still spreading.
         public bool Step()
         {
+            if (!Fx.Motion) { t = 1; return false; }
             if (t >= 1) return false;
             t = Math.Min(1, t + 0.055f);
             return true;
