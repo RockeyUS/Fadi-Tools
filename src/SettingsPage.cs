@@ -15,7 +15,7 @@ namespace FileConverter
         Rectangle themeLbl, langLbl, openAfterLbl, askSaveLbl, aboutR, animLbl;
         readonly Toggle askSave = new Toggle(), anim = new Toggle();
         float scrollTo, scrollNow; int maxScroll;
-        Rectangle[] engineRows = new Rectangle[4], integRows = new Rectangle[4];
+        Rectangle[] engineRows = new Rectangle[4], integRows = new Rectangle[6];
         Segments theme, lang, logoSeg;
         Swatches accent;
         Rectangle accentLbl, logoLbl;
@@ -25,7 +25,7 @@ namespace FileConverter
         FolderButton folder;
         Btn btnReset, btnUninstall, btnLo, btnYt, btnYtUpdate;
         Toggle openAfter;
-        Toggle[] integ = new Toggle[4];
+        Toggle[] integ = new Toggle[6];
         Progress ytProgress;
         string ytStatus = "";
         bool ytBusy;
@@ -98,6 +98,10 @@ namespace FileConverter
             }
             integ[3] = new Toggle();
             integ[3].CheckedChanged += (s, e) => Notifier.Enabled = integ[3].Checked;
+            integ[4] = new Toggle();
+            integ[4].CheckedChanged += (s, e) => Settings.Set("KeepInTray", integ[4].Checked ? "1" : "0");
+            integ[5] = new Toggle();
+            integ[5].CheckedChanged += (s, e) => Settings.Set("WatchLinks", integ[5].Checked ? "1" : "0");
             anim.CheckedChanged += (s, e) => Settings.Set("Animations", anim.Checked ? "1" : "0");
             btnZip = new Btn(() => L.T("zip_make"), "\uE8B7", BtnKind.Secondary);
             btnZip.Click += (s, e) => MakeZip();
@@ -185,6 +189,8 @@ namespace FileConverter
             integ[1].SetSilently(Settings.Get("IntMenu", "1") == "1");
             integ[2].SetSilently(Settings.Get("IntViewer", "1") == "1");
             integ[3].SetSilently(Notifier.Enabled);
+            integ[4].SetSilently(Settings.Get("KeepInTray", "1") == "1");
+            integ[5].SetSilently(Settings.Get("WatchLinks", "1") == "1");
         }
 
         public override void OnShown() { Tools.Reset(); LoadValues(); Refresh2(); }
@@ -219,14 +225,14 @@ namespace FileConverter
             if (one)
             {
                 engines = new Rectangle(lx, saving.Bottom + gap, colW, Theme.S(296));
-                integration = new Rectangle(lx, engines.Bottom + gap, colW, Theme.S(322));
+                integration = new Rectangle(lx, engines.Bottom + gap, colW, Theme.S(426));
                 about = new Rectangle(lx, integration.Bottom + gap, colW, aboutTall ? Theme.S(152) : Theme.S(112));
             }
             else
             {
                 about = new Rectangle(lx, saving.Bottom + gap, colW, aboutTall ? Theme.S(152) : Math.Max(Theme.S(96), Math.Min(Theme.S(120), H - saving.Bottom - gap - p)));
                 engines = new Rectangle(rx, y, colW, Theme.S(296));
-                integration = new Rectangle(rx, engines.Bottom + gap, colW, Theme.S(322));
+                integration = new Rectangle(rx, engines.Bottom + gap, colW, Theme.S(426));
             }
             cards.AddRange(new[] { appearance, saving, about, engines, integration });
 
@@ -271,12 +277,12 @@ namespace FileConverter
             Place(btnYtUpdate, new Rectangle(ex + ew - uw2, engineRows[3].Y + Theme.S(10), uw2, Theme.S(34)));
             Place(ytProgress, new Rectangle(ex + ew - bw, engineRows[3].Y + Theme.S(24), bw, Theme.S(5)));
 
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < 6; i++)
             {
                 integRows[i] = new Rectangle(ex, integration.Y + Theme.S(50) + i * Theme.S(52), ew, Theme.S(48));
                 Place(integ[i], new Rectangle(ex + ew - Theme.S(52), integRows[i].Y + Theme.S(7), Theme.S(52), Theme.S(34)));
             }
-            zipRow = new Rectangle(ex, integration.Y + Theme.S(50) + 4 * Theme.S(52) + Theme.S(6), ew, Theme.S(48));
+            zipRow = new Rectangle(ex, integration.Y + Theme.S(50) + 6 * Theme.S(52) + Theme.S(6), ew, Theme.S(48));
             int zw = Math.Max(Theme.S(130), btnZip.PreferredWidth);
             Place(btnZip, new Rectangle(ex + ew - zw, zipRow.Y + Theme.S(7), zw, Theme.S(34)));
             // long page: scroll with the mouse wheel when the window is short
@@ -338,8 +344,8 @@ namespace FileConverter
             Head(g, integration, Ico.Settings, "integration");
             using (Pen lp = new Pen(Theme.Line)) { Rectangle l = M(new Rectangle(zipRow.X, zipRow.Y - Theme.S(4), zipRow.Width, 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
             Label(g, zipStatus ?? L.T(Paths.Portable ? "zip_label_portable" : "zip_label"), Theme.F(9.5f), zipStatus != null ? Theme.InkSoft : Theme.Ink, new Rectangle(zipRow.X, zipRow.Y, zipRow.Width - Theme.S(150), zipRow.Height), Align.Start, true, true);
-            string[] ik = { "int_desktop", "int_menu", "int_viewer", "int_notify" };
-            for (int i = 0; i < 4; i++)
+            string[] ik = { "int_desktop", "int_menu", "int_viewer", "int_notify", "int_tray", "int_links" };
+            for (int i = 0; i < 6; i++)
                 Label(g, L.T(ik[i]), Theme.F(9.5f), Theme.Ink, new Rectangle(integRows[i].X, integRows[i].Y, integRows[i].Width - Theme.S(64), integRows[i].Height), Align.Start, true, true);
         }
 

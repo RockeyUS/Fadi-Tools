@@ -70,6 +70,28 @@ namespace FileConverter
         public static Color Error { get { return P(Dark, C(184, 58, 44), C(240, 130, 112)); } }
         public static Color ErrorBg { get { return P(Dark, C(250, 233, 228), C(72, 40, 34)); } }
         public static Color Warn { get { return P(Dark, C(158, 106, 18), C(236, 188, 102)); } }
+
+        /// A text colour that follows light / dark: remember one of the theme's own colours (Ink, InkSoft, Success...)
+        /// and it is shown in the matching colour of whichever look is on when it's drawn.
+        public struct LiveColor
+        {
+            int tone; Color raw;
+            public static implicit operator LiveColor(Color c)
+            {
+                int a = c.ToArgb();
+                int t = a == Ink.ToArgb() ? 1 : a == InkSoft.ToArgb() ? 2 : a == InkFaint.ToArgb() ? 3 : a == Success.ToArgb() ? 4 : a == Error.ToArgb() ? 5 : a == Warn.ToArgb() ? 6 : 0;
+                return new LiveColor { tone = t, raw = c };
+            }
+            public static implicit operator Color(LiveColor l)
+            {
+                switch (l.tone)
+                {
+                    case 1: return Ink; case 2: return InkSoft; case 3: return InkFaint;
+                    case 4: return Success; case 5: return Error; case 6: return Warn;
+                    default: return l.raw;
+                }
+            }
+        }
         public static Color WarnBg { get { return P(Dark, C(250, 241, 222), C(66, 55, 32)); } }
         public static Color Track { get { return T(P(Dark, C(230, 223, 214), C(58, 58, 63)), 0.08f, 0.1f); } }
         public static Color Shadow { get { return P(Dark, Color.FromArgb(22, 60, 50, 30), Color.FromArgb(30, 0, 0, 0)); } }
@@ -82,36 +104,49 @@ namespace FileConverter
         public static bool HasIconFont;
 
         static Dictionary<string, Font> fonts = new Dictionary<string, Font>();
+        /// A size in points at 96 dpi → pixels on this screen. Fonts are made in pixels (not points), so they follow
+        /// Scale exactly — also after moving the window to a screen with a different size setting.
+        public static float Px(float points) { return points * Scale * 96f / 72f; }
         /// Cached font. size in points.
         public static Font F(float size, FontStyle style = FontStyle.Regular)
         {
-            string key = FontName + size + style;
+            string key = FontName + size + style + "@" + Scale;
             Font f;
-            if (!fonts.TryGetValue(key, out f)) { f = new Font(FontName, size, style, GraphicsUnit.Point); fonts[key] = f; }
+            if (!fonts.TryGetValue(key, out f)) { f = new Font(FontName, Px(size), style, GraphicsUnit.Pixel); fonts[key] = f; }
             return f;
+        }
+
+        /// The screen's size setting changed (the window moved to another screen): sizes and fonts follow it.
+        public static void SetDpi(int dpi)
+        {
+            float s = Math.Max(1f, dpi / 96f);
+            if (Math.Abs(s - Scale) < 0.001f) return;
+            Scale = s;
+            fonts = new Dictionary<string, Font>();
+            // (the old fonts are left for the garbage collector: controls may still be drawing with them this moment)
         }
         static string serifName;
         /// Headings in a book serif, like Claude's titles (Arabic stays in the UI font).
         public static Font Serif(float size, FontStyle style = FontStyle.Regular)
         {
             if (RTL || serifName == null) return F(size, style == FontStyle.Regular ? FontStyle.Bold : style);
-            string key = "serif" + size + style;
+            string key = "serif" + size + style + "@" + Scale;
             Font f;
-            if (!fonts.TryGetValue(key, out f)) { f = new Font(serifName, size, style, GraphicsUnit.Point); fonts[key] = f; }
+            if (!fonts.TryGetValue(key, out f)) { f = new Font(serifName, Px(size), style, GraphicsUnit.Pixel); fonts[key] = f; }
             return f;
         }
         public static Font Icon(float size)
         {
-            string key = "icon" + size;
+            string key = "icon" + size + "@" + Scale;
             Font f;
-            if (!fonts.TryGetValue(key, out f)) { f = new Font(HasIconFont ? IconFontName : FontName, size, FontStyle.Regular, GraphicsUnit.Point); fonts[key] = f; }
+            if (!fonts.TryGetValue(key, out f)) { f = new Font(HasIconFont ? IconFontName : FontName, Px(size), FontStyle.Regular, GraphicsUnit.Pixel); fonts[key] = f; }
             return f;
         }
         public static Font Mono(float size)
         {
-            string key = "mono" + size;
+            string key = "mono" + size + "@" + Scale;
             Font f;
-            if (!fonts.TryGetValue(key, out f)) { f = new Font(monoName, size, FontStyle.Regular, GraphicsUnit.Point); fonts[key] = f; }
+            if (!fonts.TryGetValue(key, out f)) { f = new Font(monoName, Px(size), FontStyle.Regular, GraphicsUnit.Pixel); fonts[key] = f; }
             return f;
         }
         static string monoName = "Consolas";
@@ -153,11 +188,20 @@ namespace FileConverter
             }
         }
 
+        [DllImport("user32.dll")] static extern uint GetDpiForSystem();
+        [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
+        static int SystemDpi() { try { return (int)GetDpiForSystem(); } catch { return 0; } }
+        /// The size setting of the screen a window is on (0 when Windows can't say: older than Windows 10 1607).
+        public static int DpiOf(IntPtr hwnd) { try { return (int)GetDpiForWindow(hwnd); } catch { return 0; } }
+
         public static void Init()
         {
-            using (Bitmap b = new Bitmap(1, 1))
-            using (Graphics g = Graphics.FromImage(b))
-                Scale = Math.Max(1f, g.DpiX / 96f);
+            int sys = SystemDpi();
+            if (sys > 0) Scale = Math.Max(1f, sys / 96f);
+            else
+                using (Bitmap b = new Bitmap(1, 1))
+                using (Graphics g = Graphics.FromImage(b))
+                    Scale = Math.Max(1f, g.DpiX / 96f);
             using (InstalledFontCollection fc = new InstalledFontCollection())
             {
                 bool segoe = false, mono = false;

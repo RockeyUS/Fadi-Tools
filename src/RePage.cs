@@ -494,7 +494,7 @@ namespace FileConverter
         readonly Progress busy = new Progress { Visible = false };
         List<Analysis> fits = new List<Analysis>();
         string nodeVer; bool nodeOk, checkedNode, running, cancel;
-        string status = ""; Color statusColor;
+        string status = ""; Theme.LiveColor statusColor;
         string lastJson, lastSummary, lastName;
 
         public RePage() : base("re_title", "re_sub")
@@ -663,8 +663,8 @@ namespace FileConverter
             if (bIcon.Visible) Place(bIcon, new Rectangle(x + w - rw - sw - Theme.S(24) - iw, by, iw, Theme.S(42)));
             Place(bNode, new Rectangle(x, y, nw, Theme.S(42)));
             iconR = Rectangle.Empty;
-            int lead = bNode.Visible ? nw + Theme.S(12) : 0;
-            if (iconImg != null && !bNode.Visible)
+            int lead = bNode.Wanted ? nw + Theme.S(12) : 0;
+            if (iconImg != null && !bNode.Wanted)
             {
                 iconR = new Rectangle(x, y + Theme.S(1), Theme.S(40), Theme.S(40));
                 lead = Theme.S(52);

@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.locale.1.6.0.schema.json
+
+PackageIdentifier: RockeyUS.FadiTools
+PackageVersion: 1.5.0
+PackageLocale: ar-SA
+PackageName: Fadi Tools
+ShortDescription: حوّل الملفات واضغطها وحرّرها ونزّلها — مجانًا وبدون إنترنت، بالعربية والإنجليزية.
+ManifestType: locale
+ManifestVersion: 1.6.0

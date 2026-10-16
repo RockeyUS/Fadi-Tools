@@ -71,6 +71,7 @@ namespace FileConverter
         int hoverAction = -1;
 
         public CompressList() { RowHeight = 66; Surface = Surface.Card; }
+        protected override string RowText(int i) { FileItem f = Items[i]; string m = !string.IsNullOrEmpty(f.DoneText) ? f.DoneText : f.Message; return m.Length > 0 ? f.Name + ", " + m : f.Name; }
         /// Big rows with a picture of each file instead of an icon.
         public bool Previews { get { return previews; } set { previews = value; RowHeight = value ? 112 : 66; ClampScroll(); Invalidate(); } }
         bool previews;
@@ -327,7 +328,7 @@ namespace FileConverter
         readonly PresetChips presets = new PresetChips();
         bool settingPreset;
         readonly Progress progress = new Progress();
-        string statusText = ""; Color statusColor;
+        string statusText = ""; Theme.LiveColor statusColor;
         bool running, cancel;
         string lastOutputFile, lastOutputDir; int doneCount;
         long totalBefore, totalAfter;

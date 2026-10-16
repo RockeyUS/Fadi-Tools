@@ -119,6 +119,15 @@ namespace FileConverter
     public static class Settings
     {
         static Dictionary<string, string> values;
+        /// Changes are kept in memory only (self-test and screenshot runs).
+        static bool inMemory;
+
+        /// Starts from default settings that are never written to disk (the person's own settings stay as they are).
+        public static void StartFresh()
+        {
+            values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            inMemory = true;
+        }
 
         static void Load()
         {
@@ -147,6 +156,7 @@ namespace FileConverter
         {
             Load();
             values[key] = value ?? "";
+            if (inMemory) return;
             try
             {
                 Directory.CreateDirectory(Paths.AppDir);

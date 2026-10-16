@@ -14,17 +14,15 @@ namespace FileConverter
         /// glyph, title key, text key
         public static readonly string[][] Items =
         {
-            // 1.4.2
-            new[] { "", "wn_pdftab_t", "wn_pdftab_d" },
-            new[] { "", "wn_smooth_t", "wn_smooth_d" },
-            new[] { Ico.Search, "wn_pop_t", "wn_pop_d" },
-            new[] { "\uE740", "wn_small_t", "wn_small_d" },
-            // 1.4.0
-            new[] { "", "wn_design_t", "wn_design_d" },
-            new[] { "", "wn_merge_t", "wn_merge_d" },
-            new[] { Ico.Copy, "wn_arabic_t", "wn_arabic_d" },
-            new[] { Ico.Text, "wn_capsub_t", "wn_capsub_d" },
-            new[] { Ico.Download, "wn_ready_t", "wn_ready_d" },
+            // 1.5.0
+            new[] { Ico.Copy, "wn_dupes_t", "wn_dupes_d" },
+            new[] { "\uE8EF", "wn_ocrpdf_t", "wn_ocrpdf_d" },
+            new[] { "\uE916", "wn_rename_t", "wn_rename_d" },
+            new[] { "\uE7E7", "wn_tray_t", "wn_tray_d" },
+            new[] { "\uE71B", "wn_links_t", "wn_links_d" },
+            new[] { "\uEA90", "wn_photospdf_t", "wn_photospdf_d" },
+            new[] { "\uE8C8", "wn_copytext_t", "wn_copytext_d" },
+            new[] { "\uE765", "wn_keys_t", "wn_keys_d" },
         };
 
         /// Shows the window once after the app was updated (not on a first install: the tour is shown then).
@@ -51,6 +49,7 @@ namespace FileConverter
 
         public WhatsNewForm()
         {
+            Movable.Make(this, () => Theme.S(100));   // drag it by the top
             FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; KeyPreview = true;
             AutoScaleMode = AutoScaleMode.None; DoubleBuffered = true;
             BackColor = Theme.Card; Font = Theme.F(10f);

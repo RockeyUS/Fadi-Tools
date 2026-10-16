@@ -82,7 +82,7 @@ namespace FileConverter
             owner = sidebar.FindForm();
             // opens out of the Activity row: it grows from the row's corner, with a little spring, and fades in
             IntPtr hh = Handle;   // made now, so its picture can be taken before it shows
-            Fx.PopIn(this, owner, a, Theme.S(9), 230, () => { if (!IsDisposed) Show(owner); });
+            Fx.PopIn(this, owner, a, Theme.S(9), 150, () => { if (!IsDisposed) Show(owner); });
         }
 
         /// Shrinks back towards the Activity row and fades out, then closes.
@@ -90,7 +90,7 @@ namespace FileConverter
         {
             if (closing || IsDisposed) return;
             closing = true;
-            Fx.PopOut(this, owner, anchor, Theme.S(9), 150, () => { if (!IsDisposed) Close(); });
+            Fx.PopOut(this, owner, anchor, Theme.S(9), 110, () => { if (!IsDisposed) Close(); });
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -133,6 +133,7 @@ namespace FileConverter
         bool hoverAct;
 
         public ActivityRows() { RowHeight = 68; Surface = Surface.Card; Cursor = Cursors.Hand; }
+        protected override string RowText(int i) { ActJob j = Jobs[i]; return j.Kind + ": " + j.Title + (j.Detail.Length > 0 ? ", " + j.Detail : ""); }
         public override int Count { get { return Jobs.Count; } }
 
         public override bool Step()

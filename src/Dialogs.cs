@@ -6,6 +6,24 @@ using System.Windows.Forms;
 
 namespace FileConverter
 {
+    /// Lets a borderless window be dragged around by its top part (like a normal title bar).
+    public static class Movable
+    {
+        [DllImport("user32.dll")] static extern bool ReleaseCapture();
+        [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+
+        /// header = how tall the draggable top part is (in pixels).
+        public static void Make(Form f, Func<int> header)
+        {
+            f.MouseDown += (s, e) =>
+            {
+                if (e.Button != MouseButtons.Left || e.Y > header()) return;
+                try { ReleaseCapture(); SendMessage(f.Handle, 0xA1, (IntPtr)2, IntPtr.Zero); } catch { }   // move it like a title bar
+            };
+            f.MouseMove += (s, e) => { Cursor c = e.Y <= header() ? Cursors.SizeAll : Cursors.Default; if (f.Cursor != c) f.Cursor = c; };
+        }
+    }
+
     public enum AskKind { Question, Info, Warning, Danger }
 
     /// App-styled replacement for MessageBox: rounded card, theme colors, Arabic layout, dimmed window behind.
@@ -112,6 +130,7 @@ namespace FileConverter
 
         public AskForm(string title, string message, string yes, string no, AskKind kind)
         {
+            Movable.Make(this, () => Theme.S(64));   // drag it by the top
             this.title = title; this.message = message; this.kind = kind;
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;

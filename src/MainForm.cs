@@ -11,7 +11,7 @@ namespace FileConverter
     {
         Sidebar sidebar;
         List<Page> pages = new List<Page>();
-        ConvertPage convert; StudioPage studio; DownloadPage youtube; InspectorHost inspector; CompressPage compress; RenamePage rename; SettingsPage settings;
+        ConvertPage convert; StudioPage studio; DownloadPage youtube; InspectorHost inspector; CompressPage compress; RenamePage rename; SettingsPage settings; DuplicatesPage dupes;
         InspectPage inspect { get { return inspector.Inspect; } }
         PdfPage pdf { get { return studio.Pdf; } }
         Toast toast;
@@ -42,6 +42,7 @@ namespace FileConverter
             sidebar.Items.Add(new NavItem("nav_compress", "\uE73F"));
             sidebar.Items.Add(new NavItem("nav_rename", "\uE8AC") { Section = "nav_sec_files" });
             sidebar.Items.Add(new NavItem("nav_inspect", Ico.Search));
+            sidebar.Items.Add(new NavItem("nav_dupes", Ico.Copy));
             sidebar.Items.Add(new NavItem("nav_download", Ico.Download) { Section = "nav_sec_web", Badge = () => youtube != null ? youtube.ActiveCount : 0 });
             nav.AddRange(sidebar.Items);
             nav.Add(new NavItem("nav_settings", Ico.Settings));   // at the bottom of the side list, under Activity
@@ -72,16 +73,17 @@ namespace FileConverter
                 SlideSidebar(from, to);
             };
             sidebar.OpenSearch += ShowPalette;
+            Notifier.ExitRequested += ExitFromTray;
             actTimer.Tick += (s, e) => PollActivity();
             actTimer.Start();
 
             toast = new Toast();
             convert = new ConvertPage(); studio = new StudioPage(); youtube = new DownloadPage();
             inspector = new InspectorHost(); compress = new CompressPage(); rename = new RenamePage(); settings = new SettingsPage();
-            pages.AddRange(new Page[] { convert, studio, compress, rename, inspector, youtube, settings });
+            dupes = new DuplicatesPage();
+            pages.AddRange(new Page[] { convert, studio, compress, rename, inspector, dupes, youtube, settings });
             for (int i = 0; i < pages.Count; i++) pages[i].Glyph = nav[i].Glyph;
             inspect.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
-            studio.Photos.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
             studio.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
 
             Controls.Add(toast);
@@ -92,6 +94,7 @@ namespace FileConverter
             Theme.Changed += OnThemeChanged;
             Shown += (s, e) =>
             {
+                if (SelfTest.Active) return;   // a test run: no tour, questions or update check
                 BeginInvoke((Action)(() =>
                 {
                     bool tour = false;
@@ -107,7 +110,7 @@ namespace FileConverter
 
             int start = 0;
             int.TryParse(Settings.Get("LastPage", "0"), out start);
-            if (Settings.Get("PagesV", "") != "8") { start = 0; Settings.Set("PagesV", "8"); }   // page order changed in 1.4 (PDF in Studio, reverse engineering in File inspector)
+            if (Settings.Get("PagesV", "") != "9") { start = 0; Settings.Set("PagesV", "9"); }   // page order changed in 1.5 (Duplicates)
             if (start < 0 || start >= pages.Count || start == SettingsIndex) start = 0;
             bool hasFiles = files != null && files.Length > 0;
             if (!hasFiles) Go(start);
@@ -116,6 +119,7 @@ namespace FileConverter
 
             SingleInstance.FilesReceived += (paths, v) => BeginInvoke((Action)(() =>
             {
+                if (!Visible) Show();   // it was working in the tray
                 if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
                 Activate();
                 if (paths.Length == 0) return;
@@ -273,7 +277,7 @@ namespace FileConverter
             int i = PageIndexOf(c);
             if (i < 0) return;
             Go(i);
-            if (pages[i] == studio && (c == studio.Videos || c == studio.Photos || c == studio.Pdf || c == studio.PdfDoc)) studio.Show((Page)c);
+            if (pages[i] == studio && (c == studio.Videos || c == studio.Photos || c == studio.Pdf)) studio.Show((Page)c);
             if (pages[i] == inspector && (c == inspector.Inspect || c == inspector.Re)) inspector.Show((Page)c);
         }
 
@@ -287,7 +291,139 @@ namespace FileConverter
             if (run > 0) Animator.Start(sidebar);
             sidebar.Invalidate();   // counts (downloads, jobs) may have changed
             Taskbar.Set(this, Activity.Overall);
-            foreach (ActJob j in Activity.TakeFinished()) Announce(j);
+            bool any = false;
+            foreach (ActJob j in Activity.TakeFinished()) { Announce(j); any = true; }
+            // working in the tray and now everything's done: say so (the app stays by the clock until opened or exited)
+            if (any && inTray && run == 0 && !AnyBusy) Notifier.Show(this, L.T("tray_all_done"), L.T("tray_all_done_d"), true, null);
+        }
+
+        // ------------------------------------------------------------------ working on in the tray
+        bool inTray, reallyExit;
+        bool AnyBusy { get { foreach (Page p in pages) if (p.Busy) return true; return false; } }
+
+        /// Closing the window while something runs: it hides and keeps working, with an icon by the clock.
+        void GoToTray()
+        {
+            inTray = true;
+            Hide();
+            Notifier.Tray(this, true);
+            Notifier.Show(this, L.T("tray_still"), L.T("tray_still_d"), true, null);
+        }
+
+        /// "Exit" in the tray icon's menu: really close (still asking about unsaved work).
+        void ExitFromTray()
+        {
+            if (IsDisposed) return;
+            reallyExit = true;
+            Close();
+            reallyExit = false;   // a question was answered "keep editing": the window stays
+        }
+
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            if (Visible && inTray) { inTray = false; Notifier.Tray(this, false); }
+        }
+
+        // ------------------------------------------------------------------ links copied anywhere
+        [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool AddClipboardFormatListener(IntPtr hwnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool RemoveClipboardFormatListener(IntPtr hwnd);
+        string lastLink, pendingLink; DateTime pendingAt;
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            // opened on a screen whose size setting differs from the main screen's
+            int dpi = Theme.DpiOf(Handle);
+            if (!SelfTest.FixedScale && dpi > 0 && Math.Abs(dpi / 96f - Theme.Scale) > 0.001f) BeginInvoke((Action)(() => ApplyDpi(dpi, null)));
+            try { if (Environment.OSVersion.Platform == PlatformID.Win32NT && !SelfTest.Active) AddClipboardFormatListener(Handle); } catch { }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == 0x031D) { try { BeginInvoke((Action)ClipboardChanged); } catch { } }   // WM_CLIPBOARDUPDATE
+            if (m.Msg == 0x02E0)   // WM_DPICHANGED: moved to a screen with another size setting
+            {
+                int dpi = (int)((long)m.WParam & 0xFFFF);
+                RECT r = (RECT)System.Runtime.InteropServices.Marshal.PtrToStructure(m.LParam, typeof(RECT));
+                if (SelfTest.FixedScale) { m.Result = IntPtr.Zero; return; }
+                ApplyDpi(dpi, Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom));
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        struct RECT { public int Left, Top, Right, Bottom; }
+
+        /// The window is now on a screen with another size setting (or opened on one): everything is measured
+        /// again for it, so it's sharp and the right size there instead of stretched.
+        public void ApplyDpi(int dpi, Rectangle? bounds)
+        {
+            float before = Theme.Scale;
+            Theme.SetDpi(dpi);
+            float k = Theme.Scale / before;
+            if (Math.Abs(k - 1) < 0.001f) { if (bounds.HasValue) Bounds = bounds.Value; return; }
+            SuspendLayout();
+            try
+            {
+                Rectangle wa = Screen.FromHandle(Handle).WorkingArea;
+                MinimumSize = new Size(Math.Min(wa.Width, (int)(MinimumSize.Width * k)), Math.Min(wa.Height, (int)(MinimumSize.Height * k)));
+                if (bounds.HasValue) Bounds = bounds.Value;
+                else if (WindowState == FormWindowState.Normal) Bounds = Rectangle.Intersect(wa, Bounds);
+                sideW = sidebar.Collapsed ? SideNarrow : SideWide;
+                // Windows' own text boxes keep the font they were given: make theirs follow too
+                foreach (Form f in Application.OpenForms) RescaleFonts(f, k);
+                OnThemeChanged();
+            }
+            finally { ResumeLayout(); }
+        }
+
+        static void RescaleFonts(Control c, float k)
+        {
+            foreach (Control ch in c.Controls)
+            {
+                if ((ch is TextBoxBase || ch is ComboBox || ch is ListBox || ch is WebBrowser) && ch.Font != null && ch.Font.Unit == GraphicsUnit.Pixel)
+                    try { ch.Font = new Font(ch.Font.FontFamily, ch.Font.Size * k, ch.Font.Style, GraphicsUnit.Pixel); } catch { }
+                RescaleFonts(ch, k);
+            }
+        }
+
+        /// A video link was copied (in the browser, an app…): offer to download it.
+        void ClipboardChanged()
+        {
+            if (Settings.Get("WatchLinks", "1") != "1") return;
+            string t = null;
+            try { if (Clipboard.ContainsText()) t = Clipboard.GetText(); } catch { return; }
+            if (t == null) return;
+            t = t.Trim();
+            if (t.Length > 400 || t.IndexOfAny(new[] { ' ', '\n', '\r', '\t' }) >= 0 || !DownloadPage.IsVideoLink(t)) return;
+            if (t == lastLink || (current == pages.IndexOf(youtube) && Form.ActiveForm == this)) { lastLink = t; return; }   // already there
+            lastLink = t;
+            if (Form.ActiveForm == this) OfferLink(t);
+            else { pendingLink = t; pendingAt = DateTime.Now; }
+        }
+
+        void OfferLink(string url)
+        {
+            string host = url; try { host = new Uri(url).Host.Replace("www.", ""); } catch { }
+            toast.Show(L.T("link_copied") + "  (" + host + ")", true, () => L.T("link_get"), () =>
+            {
+                Go(pages.IndexOf(youtube));
+                youtube.FetchLink(url);
+            });
+        }
+
+        protected override void OnActivated(EventArgs e)
+        {
+            base.OnActivated(e);
+            // a link copied while the app was in the background: offered when you come back (if it's recent)
+            if (pendingLink != null)
+            {
+                string l = pendingLink; pendingLink = null;
+                if ((DateTime.Now - pendingAt).TotalMinutes < 3) BeginInvoke((Action)(() => OfferLink(l)));
+            }
         }
 
         /// A job finished: when the app is in the background, say so with a Windows notification.
@@ -370,7 +506,12 @@ namespace FileConverter
         }
         public void ShowStudio(string[] files) { Go(1); studio.AcceptFiles(files); }
 
-        void Go(int i)
+        public int PageCount { get { return pages.Count; } }
+        public Page PageAt(int i) { return pages[i]; }
+        /// The self-test is done: close without questions.
+        public void CloseForTest() { reallyExit = true; Close(); }
+
+        public void Go(int i)
         {
             if (i == current) return;
             int was = current;
@@ -480,6 +621,20 @@ namespace FileConverter
                 catch { }
             }
             if (keyData == (Keys.Control | Keys.K)) { ShowPalette(); return true; }
+            // Ctrl+Alt+Shift+S: pictures of every page (with made-up example files) for the project page
+            if (keyData == (Keys.Control | Keys.Alt | Keys.Shift | Keys.S))
+            {
+                string dir = System.IO.Path.Combine(Paths.Downloads, "Fadi Tools screenshots");
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Application.ExecutablePath, "/screenshots " + Tools.Quote(dir)) { UseShellExecute = false }); toast.Show(L.T("shots_started"), true, null, null); }
+                catch (Exception ex) { toast.Show(ex.Message, false, null, null); }
+                return true;
+            }
+            // Ctrl+1…8: the pages, in the order of the side list
+            if ((keyData & Keys.Modifiers) == Keys.Control && (keyData & Keys.KeyCode) >= Keys.D1 && (keyData & Keys.KeyCode) <= Keys.D9)
+            {
+                int i = (keyData & Keys.KeyCode) - Keys.D1;
+                if (i < pages.Count) { Go(i); return true; }
+            }
             if (keyData == (Keys.Control | Keys.Tab)) { Go((current + 1) % pages.Count); return true; }
             if (keyData == (Keys.Control | Keys.Shift | Keys.Tab)) { Go((current + pages.Count - 1) % pages.Count); return true; }
             return base.ProcessCmdKey(ref msg, keyData);
@@ -490,7 +645,17 @@ namespace FileConverter
             bool system = e.CloseReason == CloseReason.WindowsShutDown || e.CloseReason == CloseReason.TaskManagerClosing;
             bool busy = false;
             foreach (Page p in pages) if (p.Busy) busy = true;
-            if (system) Recovery.SaveNow();   // Windows is shutting down: keep the unsaved work for next time
+            // closing while something runs: keep working in the tray (unless that's turned off, or Exit was chosen there)
+            if (!system && !reallyExit && e.CloseReason == CloseReason.UserClosing && (busy || Activity.RunningCount > 0) &&
+                Settings.Get("KeepInTray", "1") == "1" && Environment.OSVersion.Platform == PlatformID.Win32NT)
+            {
+                e.Cancel = true;
+                GoToTray();
+                return;
+            }
+            if (!Visible && !system) { Show(); Activate(); }   // Exit from the tray: questions need the window
+            if (SelfTest.Active) { }   // a test run leaves the person's unsaved work alone
+            else if (system) Recovery.SaveNow();   // Windows is shutting down: keep the unsaved work for next time
             else
             {
                 if (!studio.ConfirmClose()) { e.Cancel = true; return; }
@@ -498,6 +663,8 @@ namespace FileConverter
                 // closed on purpose: nothing to bring back next time
                 Recovery.Clear(Recovery.VideoFile); Recovery.Clear(Recovery.PhotoFile);
             }
+            try { RemoveClipboardFormatListener(Handle); } catch { }
+            Notifier.ExitRequested -= ExitFromTray;
             Media.StopPreview();
             actTimer.Stop();
             Notifier.Dispose();

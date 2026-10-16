@@ -30,31 +30,60 @@ $null = [Windows.Globalization.Language, Windows.Globalization, ContentType = Wi
 $ext = [System.WindowsRuntimeSystemExtensions].GetMethods()
 $asTaskOp = $ext | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
 function Await($op, [Type]$type) { $t = $asTaskOp.MakeGenericMethod($type).Invoke($null, @($op)); $null = $t.Wait(-1); $t.Result }
-$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($In)) ([Windows.Storage.StorageFile])
-$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
-$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
 $langs = [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages
 if ($langs.Count -eq 0) { throw 'NOLANG' }
+$engines = @()
+foreach ($lang in $langs) { $e = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang); if ($e -ne $null) { $engines += ,@($lang.LanguageTag, $e) } }
+$max = [Windows.Media.Ocr.OcrEngine]::MaxImageDimension
 $sb = New-Object System.Text.StringBuilder
-foreach ($lang in $langs) {
-  $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang)
-  if ($engine -eq $null) { continue }
-  $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
-  $null = $sb.AppendLine('@@LANG ' + $lang.LanguageTag)
-  foreach ($line in $result.Lines) {
-    $null = $sb.AppendLine('@@LINE')
-    foreach ($w in $line.Words) { $null = $sb.AppendLine([string]([int]$w.BoundingRect.X) + [char]9 + $w.Text) }
+$n = 0
+foreach ($path in $In.Split('|')) {
+  $null = $sb.AppendLine('@@IMG ' + $n); $n++
+  $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
+  $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+  $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+  $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+  if ($bitmap.PixelWidth -gt $max -or $bitmap.PixelHeight -gt $max) { $stream.Dispose(); continue }
+  foreach ($pair in $engines) {
+    $result = Await ($pair[1].RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+    $null = $sb.AppendLine('@@LANG ' + $pair[0])
+    foreach ($line in $result.Lines) {
+      $null = $sb.AppendLine('@@LINE')
+      foreach ($w in $line.Words) { $r = $w.BoundingRect; $null = $sb.AppendLine([string]([int]$r.X) + [char]9 + [string]([int]$r.Y) + [char]9 + [string]([int]$r.Width) + [char]9 + [string]([int]$r.Height) + [char]9 + $w.Text) }
+    }
   }
+  $stream.Dispose()
 }
 [System.IO.File]::WriteAllText($Out, $sb.ToString(), [System.Text.Encoding]::UTF8)
 ";
 
+        /// One word found in a picture, with its box (pixels of the picture that was read).
+        public class Word { public int X, Y, W, H; public string Text; }
+        /// One reader's (language's) result for one picture.
+        public class Read { public string Lang = ""; public List<List<Word>> Lines = new List<List<Word>>(); public string Text = ""; public int Score; }
+
         /// Words come in the order they sit on the page (left to right). Arabic reads right to left, with any
         /// English or numbers inside it still left to right — this puts them back in reading order.
-        static string LogicalLine(List<KeyValuePair<int, string>> words)
+        static string LogicalLine(List<KeyValuePair<int, string>> words) { return string.Join(" ", LogicalOrder(words).ToArray()); }
+
+        /// The words of a line in reading order (see LogicalLine).
+        public static List<Word> LogicalWords(List<Word> line)
+        {
+            List<KeyValuePair<int, string>> kv = new List<KeyValuePair<int, string>>();
+            List<Word> sorted = new List<Word>(line);
+            sorted.Sort((a, b) => a.X.CompareTo(b.X));
+            foreach (Word w in sorted) kv.Add(new KeyValuePair<int, string>(w.X, w.Text));
+            List<string> order = LogicalOrder(kv);
+            List<Word> outp = new List<Word>(); List<Word> left = new List<Word>(sorted);
+            foreach (string t in order) { int k = left.FindIndex(w => w.Text == t); if (k >= 0) { outp.Add(left[k]); left.RemoveAt(k); } }
+            outp.AddRange(left);
+            return outp;
+        }
+
+        static List<string> LogicalOrder(List<KeyValuePair<int, string>> words)
         {
             List<KeyValuePair<int, string>> w = new List<KeyValuePair<int, string>>(words);
+            if (w.Count == 0) return new List<string>();
             w.Sort((a, b) => a.Key.CompareTo(b.Key));
             int ar = 0, lat = 0;
             foreach (KeyValuePair<int, string> k in w) { if (IsArabicWord(k.Value)) ar++; else if (HasLetter(k.Value)) lat++; }
@@ -73,9 +102,10 @@ foreach ($lang in $langs) {
                 for (int k = j - 1; k >= i; k--) outp.Add(w[k].Value);
                 i = j;
             }
-            return string.Join(" ", outp.ToArray());
+            return outp;
         }
         static bool IsArabicWord(string s) { foreach (char c in s) if (Arabic(c)) return true; return false; }
+        public static bool IsArabic(string s) { return IsArabicWord(s); }
         static bool HasLetter(string s) { foreach (char c in s) if (char.IsLetterOrDigit(c)) return true; return false; }
 
         static bool Arabic(char c) { return (c >= 0x0600 && c <= 0x06FF) || (c >= 0x0750 && c <= 0x077F) || (c >= 0xFB50 && c <= 0xFEFF); }
@@ -97,6 +127,97 @@ foreach ($lang in $langs) {
         /// Reads the text in a picture. rotation = how the picture is turned on screen (0/90/180/270).
         public static string Recognize(string imagePath, int rotation) { return Recognize(imagePath, rotation, new RectangleF(0, 0, 1, 1)); }
 
+        static string PowerShell { get { return Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"); } }
+
+        /// Reads several pictures at once (one start of the reader for all of them): for each picture, every
+        /// installed reading language's result.
+        public static List<List<Read>> ReadPictures(IList<string> pngs, string workDir)
+        {
+            if (!IsWindows) throw new UserError(L.T("ocr_windows"));
+            string ps1 = Path.Combine(workDir, "ocr.ps1"), outp = Path.Combine(workDir, "out_" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".txt");
+            File.WriteAllText(ps1, Script, new UTF8Encoding(true));
+            string o;
+            Tools.RunHidden(PowerShell, "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + Tools.Quote(ps1) + " -In " + Tools.Quote(string.Join("|", new List<string>(pngs).ToArray())) + " -Out " + Tools.Quote(outp), 600000, out o);
+            if (!File.Exists(outp))
+            {
+                if ((o ?? "").Contains("NOLANG")) throw new UserError(L.T("ocr_no_lang"));
+                throw new UserError(L.T("ocr_failed") + " " + Tools.LastLines(o ?? "", 1));
+            }
+            List<List<Read>> all = new List<List<Read>>();
+            for (int i = 0; i < pngs.Count; i++) all.Add(new List<Read>());
+            List<Read> cur = null; Read rd = null; List<Word> line = null;
+            foreach (string ln in File.ReadAllLines(outp, Encoding.UTF8))
+            {
+                if (ln.StartsWith("@@IMG ")) { int k; cur = int.TryParse(ln.Substring(6).Trim(), out k) && k < all.Count ? all[k] : null; rd = null; line = null; continue; }
+                if (ln.StartsWith("@@LANG ")) { if (cur == null) continue; rd = new Read { Lang = ln.Substring(7).Trim().ToLowerInvariant() }; cur.Add(rd); line = null; continue; }
+                if (rd == null) continue;
+                if (ln == "@@LINE") { line = new List<Word>(); rd.Lines.Add(line); continue; }
+                string[] f = ln.Split(new[] { '\t' }, 5);
+                int x, y, w, h;
+                if (line != null && f.Length == 5 && int.TryParse(f[0], out x) && int.TryParse(f[1], out y) && int.TryParse(f[2], out w) && int.TryParse(f[3], out h))
+                    line.Add(new Word { X = x, Y = y, W = w, H = h, Text = f[4] });
+            }
+            try { File.Delete(outp); } catch { }
+            foreach (List<Read> reads in all)
+                foreach (Read r in reads)
+                {
+                    StringBuilder sb = new StringBuilder();
+                    foreach (List<Word> l in r.Lines) sb.AppendLine(FixBrackets(LogicalLine(ToKv(l))));
+                    r.Text = sb.ToString().Trim();
+                    r.Score = Score(r.Lang, r.Text);
+                }
+            return all;
+        }
+
+        static List<KeyValuePair<int, string>> ToKv(List<Word> l) { List<KeyValuePair<int, string>> kv = new List<KeyValuePair<int, string>>(); foreach (Word w in l) kv.Add(new KeyValuePair<int, string>(w.X, w.Text)); return kv; }
+
+        /// The reader to trust for one picture: the Arabic one when there's real Arabic in it (it reads English too),
+        /// otherwise the one that read the most.
+        public static Read Best(List<Read> reads)
+        {
+            Read best = null, arabic = null; int arabicLetters = 0, arabicAll = 0;
+            foreach (Read r in reads)
+            {
+                if (r.Lang.StartsWith("ar") || r.Lang.StartsWith("fa") || r.Lang.StartsWith("ur"))
+                {
+                    int ar = 0, all = 0;
+                    foreach (char c in r.Text) { if (Arabic(c)) ar++; if (char.IsLetter(c)) all++; }
+                    if (ar > arabicLetters) { arabicLetters = ar; arabicAll = all; arabic = r; }
+                }
+                if (best == null || r.Score > best.Score) best = r;
+            }
+            if (arabic != null && arabicLetters >= 3 && arabicLetters * 100 >= arabicAll * 12) return arabic;
+            return best;
+        }
+
+        /// A closing bracket at the end of a line is easily read as "1" or "l" ("...is 8]" became "...is 81").
+        /// When the line opened a bracket and never closed it, that last character was the bracket.
+        public static string FixBrackets(string line)
+        {
+            if (line.Length < 3) return line;
+            // (only square brackets: they rarely run on to the next line, unlike round ones in sentences)
+            foreach (char[] pair in new[] { new[] { '[', ']' } })
+            {
+                int open = 0, close = 0;
+                foreach (char c in line) { if (c == pair[0]) open++; else if (c == pair[1]) close++; }
+                if (open <= close) continue;
+                char last = line[line.Length - 1];
+                int at = line.LastIndexOf(pair[0]);
+                if ((last == '1' || last == 'l' || last == 'I' || last == '|' || last == 'J' || last == 'j') && at >= 0 && at < line.Length - 2 && !char.IsWhiteSpace(line[line.Length - 2]))
+                    line = line.Substring(0, line.Length - 1) + pair[1];
+            }
+            return line;
+        }
+
+        static int MedianHeight(Read r)
+        {
+            List<int> h = new List<int>();
+            if (r != null) foreach (List<Word> l in r.Lines) foreach (Word w in l) if (w.Text.Length > 0) h.Add(w.H);
+            if (h.Count == 0) return 0;
+            h.Sort();
+            return h[h.Count / 2];
+        }
+
         /// area: the part to read, 0..1 of the picture as it's shown (after turning).
         public static string Recognize(string imagePath, int rotation, RectangleF area)
         {
@@ -105,72 +226,72 @@ foreach ($lang in $langs) {
             Directory.CreateDirectory(dir);
             try
             {
-                // any format (HEIC, WEBP...) → a PNG Windows can read, not bigger than its reader allows
-                string png = Path.Combine(dir, "in.png");
+                // any format (HEIC, WEBP...) → PNGs Windows can read: the chosen part as it's shown, and the same
+                // part twice as big (small text, like a "]" at the end of a line, is read much better bigger)
+                string p1 = Path.Combine(dir, "in.png"), p2 = Path.Combine(dir, "in2.png");
+                Bitmap part;
                 using (Image im = ViewerPage.Decode(imagePath, 4000))
                 using (Bitmap b = new Bitmap(im))
                 {
                     if (rotation == 90) b.RotateFlip(RotateFlipType.Rotate90FlipNone);
                     else if (rotation == 180) b.RotateFlip(RotateFlipType.Rotate180FlipNone);
                     else if (rotation == 270) b.RotateFlip(RotateFlipType.Rotate270FlipNone);
-                    // just the part that was chosen
                     Rectangle crop = Rectangle.FromLTRB((int)Math.Floor(Math.Max(0, area.Left) * b.Width), (int)Math.Floor(Math.Max(0, area.Top) * b.Height),
                                                         (int)Math.Ceiling(Math.Min(1, area.Right) * b.Width), (int)Math.Ceiling(Math.Min(1, area.Bottom) * b.Height));
                     if (crop.Width < 4 || crop.Height < 4) crop = new Rectangle(0, 0, b.Width, b.Height);
-                    using (Bitmap part = crop.Width == b.Width && crop.Height == b.Height ? new Bitmap(b) : b.Clone(crop, b.PixelFormat))
+                    part = crop.Width == b.Width && crop.Height == b.Height ? new Bitmap(b) : b.Clone(crop, b.PixelFormat);
+                }
+                List<string> pics = new List<string>();
+                using (part)
+                {
+                    // a little white border helps the reader with text that touches the edge of the chosen part
+                    float k1 = Math.Max(part.Width, part.Height) < 900 ? Math.Min(4f, 900f / Math.Max(part.Width, part.Height)) : 1f;
+                    SavePadded(part, k1, p1); pics.Add(p1);
+                    float k2 = k1 * 2;
+                    if (Math.Max(part.Width, part.Height) * k2 <= 7000) { SavePadded(part, k2, p2); pics.Add(p2); }
+                    List<List<Read>> res = ReadPictures(pics, dir);
+                    Read r1 = Best(res[0]), r2 = res.Count > 1 && res[1].Count > 0 ? Best(res[1]) : null;
+                    // small text: trust the bigger copy (as long as it found about as much)
+                    int mh = MedianHeight(r1);
+                    Read best = r1;
+                    if (r2 != null && (r1 == null || (mh > 0 && mh < 30 && r2.Score * 10 >= r1.Score * 8) || r2.Score > r1.Score * 1.25)) best = r2;
+                    // hardly anything: the text may be turned (a page turned in the viewer, a photo taken sideways)
+                    if (best == null || best.Score < 12)
                     {
-                        // small pictures (and small chosen parts) read better a little bigger
-                        if (Math.Max(part.Width, part.Height) < 900)
+                        List<string> turned = new List<string>();
+                        RotateFlipType[] turns = { RotateFlipType.Rotate90FlipNone, RotateFlipType.Rotate180FlipNone, RotateFlipType.Rotate270FlipNone };
+                        for (int i = 0; i < 3; i++)
                         {
-                            float k = Math.Min(4f, 900f / Math.Max(part.Width, part.Height));
-                            using (Bitmap big = EditSession.Scale(part, (int)(part.Width * k), (int)(part.Height * k))) big.Save(png, ImageFormat.Png);
+                            string pt = Path.Combine(dir, "turn" + i + ".png");
+                            using (Bitmap tb = new Bitmap(part)) { tb.RotateFlip(turns[i]); SavePadded(tb, Math.Max(k1, Math.Max(tb.Width, tb.Height) * 1.6f <= 7000 ? 1.6f * k1 : k1), pt); }
+                            turned.Add(pt);
                         }
-                        else part.Save(png, ImageFormat.Png);
+                        foreach (List<Read> rr in ReadPictures(turned, dir))
+                        {
+                            Read c = Best(rr);
+                            if (c != null && (best == null || c.Score > best.Score * 1.5 + 4)) best = c;
+                        }
                     }
+                    return best == null ? "" : best.Text.Replace("\r\n", "\n").Replace("\n", "\r\n");
                 }
-                string ps1 = Path.Combine(dir, "ocr.ps1"), outp = Path.Combine(dir, "out.txt");
-                File.WriteAllText(ps1, Script, new UTF8Encoding(true));
-                string ps = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
-                string o;
-                int code = Tools.RunHidden(ps, "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + Tools.Quote(ps1) + " -In " + Tools.Quote(png) + " -Out " + Tools.Quote(outp), 120000, out o);
-                if (!File.Exists(outp))
-                {
-                    if ((o ?? "").Contains("NOLANG")) throw new UserError(L.T("ocr_no_lang"));
-                    throw new UserError(L.T("ocr_failed") + " " + Tools.LastLines(o ?? "", 1));
-                }
-                // each reader's lines, with every word's place on the line
-                List<string> langs = new List<string>();
-                List<List<List<KeyValuePair<int, string>>>> reads = new List<List<List<KeyValuePair<int, string>>>>();
-                List<List<KeyValuePair<int, string>>> curRead = null; List<KeyValuePair<int, string>> curLine = null;
-                foreach (string line in File.ReadAllLines(outp, Encoding.UTF8))
-                {
-                    if (line.StartsWith("@@LANG ")) { langs.Add(line.Substring(7).Trim().ToLowerInvariant()); curRead = new List<List<KeyValuePair<int, string>>>(); reads.Add(curRead); curLine = null; continue; }
-                    if (curRead == null) continue;
-                    if (line == "@@LINE") { curLine = new List<KeyValuePair<int, string>>(); curRead.Add(curLine); continue; }
-                    int tab = line.IndexOf('\t'); int x;
-                    if (curLine != null && tab > 0 && int.TryParse(line.Substring(0, tab), out x)) curLine.Add(new KeyValuePair<int, string>(x, line.Substring(tab + 1)));
-                }
-                string best = ""; int bestScore = -1; string arabicRead = null; int arabicLetters = 0, arabicAll = 0;
-                for (int i = 0; i < reads.Count; i++)
-                {
-                    StringBuilder sb = new StringBuilder();
-                    foreach (List<KeyValuePair<int, string>> ln in reads[i]) sb.AppendLine(LogicalLine(ln));
-                    string t = sb.ToString().Trim();
-                    bool rtl = langs[i].StartsWith("ar") || langs[i].StartsWith("fa") || langs[i].StartsWith("ur");
-                    if (rtl)
-                    {
-                        int ar = 0, all = 0;
-                        foreach (char c in t) { if (Arabic(c)) ar++; if (char.IsLetter(c)) all++; }
-                        if (ar > arabicLetters) { arabicLetters = ar; arabicAll = all; arabicRead = t; }
-                    }
-                    int sc = Score(langs[i], t);
-                    if (sc > bestScore) { bestScore = sc; best = t; }
-                }
-                // any real Arabic in it: the Arabic reader (it reads English words too); otherwise the best reader
-                if (arabicRead != null && arabicLetters >= 3 && arabicLetters * 100 >= arabicAll * 12) best = arabicRead;
-                return best.Replace("\r\n", "\n").Replace("\n", "\r\n");
             }
             finally { ThreadPool.QueueUserWorkItem(_ => { try { Directory.Delete(dir, true); } catch { } }); }
+        }
+
+        static void SavePadded(Bitmap src, float k, string path)
+        {
+            int w = Math.Max(1, (int)(src.Width * k)), h = Math.Max(1, (int)(src.Height * k)), pad = Math.Max(8, (int)(Math.Min(w, h) * 0.02f));
+            using (Bitmap outb = new Bitmap(w + pad * 2, h + pad * 2, PixelFormat.Format24bppRgb))
+            {
+                using (Graphics g = Graphics.FromImage(outb))
+                {
+                    g.Clear(Color.White);
+                    g.InterpolationMode = k > 1.01f ? InterpolationMode.HighQualityBicubic : InterpolationMode.NearestNeighbor;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.DrawImage(src, new Rectangle(pad, pad, w, h));
+                }
+                outb.Save(path, ImageFormat.Png);
+            }
         }
 
         /// Reads a picture in the background and shows the text (already copied) in a small window.
@@ -224,6 +345,7 @@ foreach ($lang in $langs) {
 
         public TextResultForm(string title, string sub, string text)
         {
+            Movable.Make(this, () => Theme.S(70));   // drag it by the top
             this.title = title; this.sub = sub;
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;

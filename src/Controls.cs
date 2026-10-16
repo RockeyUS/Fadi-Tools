@@ -19,6 +19,47 @@ namespace FileConverter
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
                      ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
             SetStyle(ControlStyles.StandardDoubleClick, true);
+            TabStop = false;   // only things you can press or change take part in Tab (they switch it on)
+        }
+
+        bool wanted = true;
+        /// Whether the page shows this control. (Visible also reads false while the window is hidden — in the
+        /// tray — or the page is hidden, so layouts measure with this instead.)
+        public bool Wanted { get { return wanted; } }
+        protected override void SetVisibleCore(bool value) { wanted = value; base.SetVisibleCore(value); }
+
+        // ---- keyboard focus: a clear ring when you move around with Tab (not when you click)
+        protected bool KeyFocus { get { return Focused && ShowFocusCues; } }
+        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+        protected void PaintFocus(Graphics g, RectangleF r, float radius)
+        {
+            if (!KeyFocus) return;
+            RectangleF f = RectangleF.Inflate(r, -1, -1);
+            Theme.StrokeRound(g, f, radius, Theme.AccentColor, Math.Max(2f, Theme.S(2)));
+        }
+
+        // ---- what screen readers (Narrator, NVDA) say about it
+        /// Its name (e.g. a button's words).
+        protected virtual string AccName { get { return AccessibleName ?? ""; } }
+        protected virtual AccessibleRole AccRole { get { return AccessibleRole.Client; } }
+        protected virtual AccessibleStates AccState { get { return AccessibleStates.None; } }
+        protected virtual string AccValue { get { return null; } }
+        /// What "do it" does (press, switch...), or null.
+        protected virtual void AccDo() { }
+        protected virtual string AccAction { get { return null; } }
+        protected override AccessibleObject CreateAccessibilityInstance() { return new UiAccessible(this); }
+
+        public class UiAccessible : ControlAccessibleObject
+        {
+            readonly UiControl c;
+            public UiAccessible(UiControl owner) : base(owner) { c = owner; }
+            public override string Name { get { string n = c.AccName; return string.IsNullOrEmpty(n) ? base.Name : n; } set { } }
+            public override AccessibleRole Role { get { return c.AccRole; } }
+            public override AccessibleStates State { get { return base.State | c.AccState | (c.Enabled ? AccessibleStates.None : AccessibleStates.Unavailable); } }
+            public override string Value { get { return c.AccValue ?? base.Value; } set { } }
+            public override string DefaultAction { get { return c.AccAction ?? base.DefaultAction; } }
+            public override void DoDefaultAction() { if (c.AccAction != null && c.Enabled) c.AccDo(); else base.DoDefaultAction(); }
         }
 
         protected override void OnMouseEnter(EventArgs e) { hovering = true; Animator.Start(this); base.OnMouseEnter(e); }
@@ -67,8 +108,25 @@ namespace FileConverter
             return r || b;
         }
 
+        protected override string AccName { get { string t = Caption; return t.Length > 0 ? t : AccessibleName ?? ""; } }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.PushButton; } }
+        protected override string AccAction { get { return L.T("acc_press"); } }
+        protected override void AccDo() { OnClick(EventArgs.Empty); }
+        protected override bool IsInputKey(Keys k) { return k == Keys.Enter || k == Keys.Space || base.IsInputKey(k); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (Enabled && (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) && e.Modifiers == Keys.None)
+            {
+                e.Handled = true;
+                ripple.Start(new Point(Width / 2, Height / 2), ClientRectangle); Animator.Start(this);
+                OnClick(EventArgs.Empty);
+            }
+        }
+
         public Btn(Func<string> label, string glyph, BtnKind kind)
         {
+            TabStop = true;
             Label = label; Glyph = glyph; Kind = kind;
             Cursor = Cursors.Hand;
             Bold = kind == BtnKind.Primary;
@@ -141,6 +199,7 @@ namespace FileConverter
 
             if (ripple.Running)
                 ripple.Paint(g, rad, Kind == BtnKind.Primary ? Color.FromArgb(90, 255, 255, 255) : Theme.Dark ? Color.FromArgb(40, 255, 255, 255) : Color.FromArgb(34, 0, 0, 0));
+            PaintFocus(g, r, rad);
 
             string text = Caption;
             Font f = Theme.F(FontSize, Bold ? FontStyle.Bold : FontStyle.Regular);
@@ -181,7 +240,21 @@ namespace FileConverter
         /// Which part of FadeTarget (null = all of it).
         public Func<Rectangle> FadeArea;
 
-        public Segments(params Func<string>[] items) { Items = items; Cursor = Cursors.Hand; }
+        public Segments(params Func<string>[] items) { Items = items; Cursor = Cursors.Hand; TabStop = true; }
+
+        // keyboard: ← → pick the one beside it
+        protected override bool IsInputKey(Keys k) { return k == Keys.Left || k == Keys.Right || base.IsInputKey(k); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (!Enabled || Items.Length == 0) return;
+            int d = e.KeyCode == Keys.Right ? 1 : e.KeyCode == Keys.Left ? -1 : 0;
+            if (Theme.RTL) d = -d;
+            if (d != 0) { e.Handled = true; SelectedIndex = Math.Max(0, Math.Min(Items.Length - 1, selected + d)); Invalidate(); }
+        }
+        protected override string AccName { get { return AccessibleName ?? ""; } }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.PageTabList; } }
+        protected override string AccValue { get { return selected >= 0 && selected < Items.Length ? Items[selected]() : ""; } }
 
         public int SelectedIndex
         {
@@ -257,6 +330,7 @@ namespace FileConverter
                 float f0 = p - a;
                 RectangleF ra = Seg(a), rb = Seg(b);
                 RectangleF pr = new RectangleF(ra.X + (rb.X - ra.X) * f0, ra.Y, ra.Width + (rb.Width - ra.Width) * f0, ra.Height);
+                pr.Inflate(-Theme.S(1.5f), 0);   // the same small gap around every pill, so the tabs look evenly spaced
                 Theme.FillRound(g, pr, Theme.S(7), Theme.Dark ? Theme.Mix(Theme.Card, Color.White, 0.06f) : Color.White);
                 Theme.StrokeRound(g, pr, Theme.S(7), Theme.Dark ? Color.FromArgb(18, 255, 255, 255) : Color.FromArgb(26, 60, 50, 30));
             }
@@ -265,7 +339,13 @@ namespace FileConverter
                 RectangleF r = Seg(i);
                 Color fg = Theme.InkSoft;
                 if (i == selected) fg = Theme.Ink;
-                else if (i == hoverIndex && Enabled && Math.Abs(pos - i) > 0.5f) { Theme.FillRound(g, r, Theme.S(7), Color.FromArgb(Theme.Dark ? 16 : 70, Color.White)); fg = Theme.Ink; }
+                else if (i == hoverIndex && Enabled && Math.Abs(pos - i) > 0.5f)
+                {
+                    // hover: a softer pill of exactly the same size and spacing as the chosen one
+                    RectangleF hr = r; hr.Inflate(-Theme.S(1.5f), 0);
+                    Theme.FillRound(g, hr, Theme.S(7), Theme.Dark ? Color.FromArgb(22, 255, 255, 255) : Color.FromArgb(140, 255, 255, 255));
+                    fg = Theme.Ink;
+                }
                 else if (i == hoverIndex && Enabled) fg = Theme.Ink;
                 if (!Enabled) fg = Theme.InkFaint;
                 Font f = Theme.F(FontSize, i == selected ? FontStyle.Bold : FontStyle.Regular);
@@ -292,6 +372,7 @@ namespace FileConverter
                 }
                 else Theme.Text(g, Items[i](), f, fg, rr, Align.Center);
             }
+            PaintFocus(g, new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), Theme.S(9));
         }
     }
 
@@ -307,7 +388,25 @@ namespace FileConverter
         /// What a chip says (default: the item in capitals, like "PNG").
         public Func<string, string> LabelOf;
 
-        public ChipGrid() { Cursor = Cursors.Hand; }
+        public ChipGrid() { Cursor = Cursors.Hand; TabStop = true; }
+
+        // keyboard: arrows move to the chip beside / above / below
+        protected override bool IsInputKey(Keys k) { return k == Keys.Left || k == Keys.Right || k == Keys.Up || k == Keys.Down || base.IsInputKey(k); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            int i = items.IndexOf(selected);
+            if (!Enabled || items.Count == 0 || i < 0) return;
+            int d = e.KeyCode == Keys.Right ? 1 : e.KeyCode == Keys.Left ? -1 : e.KeyCode == Keys.Down ? Columns : e.KeyCode == Keys.Up ? -Columns : 0;
+            if (Theme.RTL && (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right)) d = -d;
+            if (d == 0) return;
+            e.Handled = true;
+            int j = Math.Max(0, Math.Min(items.Count - 1, i + d));
+            if (j != i && Fx.Motion) { morphFrom = morph < 1 ? PillAt(morph) : CellF(i); morph = 0; Animator.Start(this); }
+            Selected = items[j];
+        }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.List; } }
+        protected override string AccValue { get { return selected == null ? "" : LabelOf != null ? LabelOf(selected) : selected.ToUpperInvariant(); } }
 
         public void SetItems(IEnumerable<string> list, string select)
         {
@@ -392,6 +491,7 @@ namespace FileConverter
             int si = items.IndexOf(selected);
             bool moving = morph < 1 && si >= 0;
             RectangleF pill = moving ? PillAt(morph) : RectangleF.Empty;
+            if (!moving && si >= 0) PaintFocus(g, RectangleF.Inflate(CellF(si), Theme.S(3), Theme.S(3)), Theme.S(10));
             for (int i = 0; i < items.Count; i++)
             {
                 Rectangle c = Cell(i);
@@ -423,6 +523,7 @@ namespace FileConverter
                 Theme.StrokeRound(g, ring, Theme.S(8) + grow, Color.FromArgb((int)(150 * (1 - p) * (1 - p)), Theme.AccentColor), Theme.S(1.6f));
             }
             Theme.FillRound(g, pill, Theme.S(8), Enabled ? Theme.PrimaryTop : Theme.InkFaint);
+            PaintFocus(g, RectangleF.Inflate(pill, Theme.S(3), Theme.S(3)), Theme.S(10));
             // the labels under the moving chip turn white where it covers them
             GraphicsState st = g.Save();
             using (System.Drawing.Drawing2D.GraphicsPath clip = Theme.Round(pill, Theme.S(8)))
@@ -443,7 +544,17 @@ namespace FileConverter
         bool on;
         float pos;
         public event EventHandler CheckedChanged;
-        public Toggle() { Cursor = Cursors.Hand; }
+        public Toggle() { Cursor = Cursors.Hand; TabStop = true; }
+        protected override bool IsInputKey(Keys k) { return k == Keys.Space || k == Keys.Enter || base.IsInputKey(k); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (Enabled && (e.KeyCode == Keys.Space || e.KeyCode == Keys.Enter)) { e.Handled = true; Checked = !Checked; }
+        }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.CheckButton; } }
+        protected override AccessibleStates AccState { get { return on ? AccessibleStates.Checked : AccessibleStates.None; } }
+        protected override string AccAction { get { return L.T(on ? "acc_turn_off" : "acc_turn_on"); } }
+        protected override void AccDo() { Checked = !Checked; }
         public bool Checked
         {
             get { return on; }
@@ -474,6 +585,7 @@ namespace FileConverter
             RectangleF kr = new RectangleF(tr.X + Theme.S(3) + p * (w - k - Theme.S(6)), tr.Y + Theme.S(3), k, k);
             using (SolidBrush sb = new SolidBrush(Color.FromArgb(40, 0, 0, 0))) g.FillEllipse(sb, kr.X, kr.Y + 1, kr.Width, kr.Height);
             using (SolidBrush b = new SolidBrush(Color.White)) g.FillEllipse(b, kr);
+            PaintFocus(g, RectangleF.Inflate(tr, Theme.S(2), Theme.S(2)), h / 2f + Theme.S(2));
         }
     }
 
@@ -532,6 +644,7 @@ namespace FileConverter
             Box = new TextBox();
             Box.BorderStyle = BorderStyle.None;
             Box.Font = Theme.F(10.5f);
+            if (placeholder != null) Box.AccessibleName = placeholder();
             Controls.Add(Box);
             Box.GotFocus += (s, e) => { focused = true; Invalidate(); };
             Box.LostFocus += (s, e) => { focused = false; Invalidate(); };
@@ -553,6 +666,8 @@ namespace FileConverter
         public void ApplyCue()
         {
             try { if (Box.IsHandleCreated && Placeholder != null) SendMessage(Box.Handle, 0x1501, (IntPtr)1, Placeholder()); } catch { }
+            if (Placeholder != null && string.IsNullOrEmpty(AccessibleName)) Box.AccessibleName = Placeholder();
+            else if (!string.IsNullOrEmpty(AccessibleName)) Box.AccessibleName = AccessibleName;
         }
 
         public void Restyle()
@@ -610,8 +725,14 @@ namespace FileConverter
 
         public DropZone(Func<string> title, Func<string> sub)
         {
-            Title = title; Sub = sub; Cursor = Cursors.Hand; AllowDrop = true;
+            Title = title; Sub = sub; Cursor = Cursors.Hand; AllowDrop = true; TabStop = true;
         }
+        protected override bool IsInputKey(Keys k) { return k == Keys.Enter || k == Keys.Space || base.IsInputKey(k); }
+        protected override void OnKeyDown(KeyEventArgs e) { base.OnKeyDown(e); if (Enabled && (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space)) { e.Handled = true; OnClick(EventArgs.Empty); } }
+        protected override string AccName { get { return Title != null ? Title() : ""; } }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.PushButton; } }
+        protected override string AccAction { get { return L.T("acc_press"); } }
+        protected override void AccDo() { OnClick(EventArgs.Empty); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -674,6 +795,72 @@ namespace FileConverter
 
         protected int RH { get { return Theme.S(RowHeight); } }
         int ContentH { get { return Count * RH; } }
+
+        // ------------------------------------------------------------------ keyboard & screen readers
+        protected ScrollList() { TabStop = true; }
+        /// The row the keyboard is on (-1 = none yet).
+        protected int keyRow = -1;
+        /// What a screen reader says for a row (null = nothing to say).
+        protected virtual string RowText(int index) { return null; }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.List; } }
+        protected override bool IsInputKey(Keys k)
+        {
+            return k == Keys.Up || k == Keys.Down || k == Keys.PageUp || k == Keys.PageDown || k == Keys.Home || k == Keys.End || k == Keys.Enter || base.IsInputKey(k);
+        }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (Count == 0) { base.OnKeyDown(e); return; }
+            int page = Math.Max(1, Height / Math.Max(1, RH) - 1), to = keyRow < 0 ? Math.Max(0, scroll / Math.Max(1, RH)) : keyRow;
+            switch (e.KeyCode)
+            {
+                case Keys.Up: to = keyRow < 0 ? to : to - 1; break;
+                case Keys.Down: to = keyRow < 0 ? to : to + 1; break;
+                case Keys.PageUp: to -= page; break;
+                case Keys.PageDown: to += page; break;
+                case Keys.Home: to = 0; break;
+                case Keys.End: to = Count - 1; break;
+                case Keys.Enter: if (keyRow >= 0 && keyRow < Count) RowDoubleClick(keyRow); e.Handled = true; return;
+                default: base.OnKeyDown(e); return;
+            }
+            keyRow = Math.Max(0, Math.Min(Count - 1, to));
+            hoverIndex = keyRow;
+            EnsureVisible(keyRow);
+            Invalidate();
+            AccessibilityNotifyClients(AccessibleEvents.Focus, keyRow);
+            e.Handled = true;
+        }
+        protected override void OnLostFocus(EventArgs e) { if (keyRow >= 0 && hoverIndex == keyRow) hoverIndex = -1; keyRow = -1; base.OnLostFocus(e); }
+        protected override AccessibleObject CreateAccessibilityInstance() { return new ListAccessible(this); }
+
+        class ListAccessible : UiAccessible
+        {
+            readonly ScrollList l;
+            public ListAccessible(ScrollList owner) : base(owner) { l = owner; }
+            public override int GetChildCount() { return l.Count; }
+            public override AccessibleObject GetChild(int i) { return i >= 0 && i < l.Count ? new RowAccessible(l, this, i) : null; }
+            public override AccessibleObject GetFocused() { return l.Focused && l.keyRow >= 0 && l.keyRow < l.Count ? GetChild(l.keyRow) : base.GetFocused(); }
+        }
+        class RowAccessible : AccessibleObject
+        {
+            readonly ScrollList l; readonly AccessibleObject parent; readonly int row;
+            public RowAccessible(ScrollList s, AccessibleObject p, int i) { l = s; parent = p; row = i; }
+            public override string Name { get { return row < l.Count ? l.RowText(row) ?? "" : ""; } set { } }
+            public override AccessibleObject Parent { get { return parent; } }
+            public override AccessibleRole Role { get { return AccessibleRole.ListItem; } }
+            public override Rectangle Bounds { get { return l.RectangleToScreen(Rectangle.Intersect(l.RowRect(row), l.ClientRectangle)); } }
+            public override AccessibleStates State
+            {
+                get
+                {
+                    AccessibleStates st = AccessibleStates.Focusable | AccessibleStates.Selectable;
+                    Rectangle r = l.RowRect(row);
+                    if (r.Bottom <= 0 || r.Y >= l.Height) st |= AccessibleStates.Offscreen;
+                    if (l.Focused && l.keyRow == row) st |= AccessibleStates.Focused | AccessibleStates.Selected;
+                    return st;
+                }
+            }
+            public override void Select(AccessibleSelection flags) { if ((flags & AccessibleSelection.TakeFocus) != 0) { l.Focus(); l.keyRow = row; l.hoverIndex = row; l.EnsureVisible(row); l.Invalidate(); } }
+        }
         int MaxScroll { get { return Math.Max(0, ContentH - Height); } }
         protected int BarW { get { return MaxScroll > 0 ? Theme.S(12) : 0; } }
 
@@ -809,6 +996,7 @@ namespace FileConverter
                 DrawRow(g, i, r, i == hoverIndex);
                 g.Restore(st);
             }
+            if (keyRow >= first && keyRow <= last) { Theme.Smooth(g); Rectangle kr = RowRect(keyRow); kr.Inflate(-Theme.S(2), -Theme.S(2)); PaintFocus(g, kr, Theme.S(8)); }
             Rectangle th = ThumbRect();
             if (!th.IsEmpty)
             {
@@ -918,6 +1106,9 @@ namespace FileConverter
         protected List<Rectangle> cards = new List<Rectangle>();
         public Toast Toast;   // set by the main window
         public Form Owner;
+
+        protected override string AccName { get { return TitleKey != null ? L.T(TitleKey) : ""; } }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.Grouping; } }
 
         protected Page(string titleKey, string subKey)
         {

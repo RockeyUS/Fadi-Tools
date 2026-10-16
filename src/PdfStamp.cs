@@ -110,7 +110,7 @@ namespace FileConverter
         }
 
         /// zlib wrapper around .NET's deflate (what PDF's FlateDecode expects).
-        static byte[] Zlib(byte[] data)
+        internal static byte[] Zlib(byte[] data)
         {
             using (MemoryStream ms = new MemoryStream())
             {
@@ -131,17 +131,23 @@ namespace FileConverter
             try
             {
                 WriteOverlay(ov, pages);
-                // turned pages are made really upright first, so the overlay lines up with what you see
-                string flat = Path.Combine(Path.GetTempPath(), "fadi_flat_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".pdf");
-                try
-                {
-                    string src = inPdf;
-                    if (Qpdf.Run("--flatten-rotation " + Tools.Quote(inPdf) + " " + Tools.Quote(flat)) == null && File.Exists(flat)) src = flat;
-                    return Qpdf.Run(Tools.Quote(src) + " --overlay " + Tools.Quote(ov) + " -- " + Tools.Quote(outPdf));
-                }
-                finally { try { File.Delete(flat); } catch { } }
+                return ApplyFile(inPdf, outPdf, ov);
             }
             finally { try { File.Delete(ov); } catch { } }
+        }
+
+        /// Lays a ready overlay PDF (one page per page) over the PDF's pages. Returns an error or null.
+        public static string ApplyFile(string inPdf, string outPdf, string overlay)
+        {
+            // turned pages are made really upright first, so the overlay lines up with what you see
+            string flat = Path.Combine(Path.GetTempPath(), "fadi_flat_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".pdf");
+            try
+            {
+                string src = inPdf;
+                if (Qpdf.Run("--flatten-rotation " + Tools.Quote(inPdf) + " " + Tools.Quote(flat)) == null && File.Exists(flat)) src = flat;
+                return Qpdf.Run(Tools.Quote(src) + " --overlay " + Tools.Quote(overlay) + " -- " + Tools.Quote(outPdf));
+            }
+            finally { try { File.Delete(flat); } catch { } }
         }
 
         // ------------------------------------------------------------------ the pictures

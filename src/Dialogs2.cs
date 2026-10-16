@@ -25,6 +25,7 @@ namespace FileConverter
 
         public FormDialog(string title, string message, string ok)
         {
+            Movable.Make(this, () => Theme.S(64));   // drag it by the top
             this.title = title; this.message = message;
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false; KeyPreview = true;

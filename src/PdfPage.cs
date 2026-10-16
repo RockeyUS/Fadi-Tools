@@ -160,6 +160,7 @@ namespace FileConverter
         bool dragging;
 
         public OrderList() { RowHeight = 62; Surface = Surface.Card; }
+        protected override string RowText(int i) { return Items[i].Name ?? ""; }
         public override int Count { get { return Items.Count; } }
 
         Rectangle Btn(Rectangle r, int k)   // 0 up, 1 down, 2 remove (right side)
@@ -553,7 +554,7 @@ namespace FileConverter
         readonly Segments pageSize, imgFmt;
         readonly Progress progress = new Progress { Visible = false };
         Rectangle left, opts, more, headR, modeR, optLblR, optHintR, selLblR, moreLblR, fmtLblR, statusR, infoR;
-        string statusText = ""; Color statusColor;
+        string statusText = ""; Theme.LiveColor statusColor;
         bool running, cancel;
         string pdfPath; int pdfPages, created; int loadToken; string thumbsDir;
         string lastOutput;
@@ -599,14 +600,15 @@ namespace FileConverter
             bExtract = Tool("pdf_extract", "", () => Export(1));
             bSplit = Tool("pdf_split", "", () => Export(2));
             bImages = Tool("pdf_images", Ico.Photo, () => Export(3));
+            bSearchable = Tool("pdf_searchable", Ico.Search, MakeSearchable);
             bLock = Tool("pdf_lock", "\uE72E", LockOrUnlock);
             bLock.Label = () => L.T(pdfLocked ? "pdf_unlock" : "pdf_lock");
             bNums = Tool("pdf_nums", "\uE8EF", AddNumbers);
             bMark = Tool("pdf_mark", "\uE790", AddWatermark);
             bSign = Tool("pdf_sign", "\uEC87", SignIt);
             // the names show when pointed at (they're icons only when the window is short)
-            Btn[] named = { bLock, bNums, bMark, bSign, bExtract, bSplit, bImages };
-            string[] names = { "pdf_lock", "pdf_nums", "pdf_mark", "pdf_sign", "pdf_extract", "pdf_split", "pdf_images" };
+            Btn[] named = { bLock, bNums, bMark, bSign, bExtract, bSplit, bImages, bSearchable };
+            string[] names = { "pdf_lock", "pdf_nums", "pdf_mark", "pdf_sign", "pdf_extract", "pdf_split", "pdf_images", "pdf_searchable_tip" };
             for (int i = 0; i < named.Length; i++)
             {
                 Btn k = named[i]; string key = names[i];
@@ -624,7 +626,7 @@ namespace FileConverter
             imgFmt.SetSilently(Settings.Get("PdfImgFmt", "jpg") == "png" ? 1 : 0);
             imgFmt.SelectedChanged += (s, e) => Settings.Set("PdfImgFmt", imgFmt.SelectedIndex == 1 ? "png" : "jpg");
 
-            Controls.AddRange(new Control[] { mode, list, grid, dropC, dropP, bAdd, bClear, bOpen, bGo, bContent, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bShow, pageSize, imgFmt, progress, bLock, bNums, bMark, bSign });
+            Controls.AddRange(new Control[] { mode, list, grid, dropC, dropP, bAdd, bClear, bOpen, bGo, bContent, bSearchable, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bShow, pageSize, imgFmt, progress, bLock, bNums, bMark, bSign });
             EnableDrop(list, grid, dropC, dropP);
             UpdateState();
         }
@@ -642,7 +644,32 @@ namespace FileConverter
         public event Action<string, int> EditContent;
         /// The PDF open in "Edit pages", or null.
         public string PdfPath { get { return Combine ? null : pdfPath; } }
-        Btn bContent;
+        Btn bContent, bSearchable;
+        ActJob workAct;   // the job a SaveWith transform is part of (to show its progress)
+
+        /// Reads the text on every page (Windows' own reader, offline) and lays it invisibly over the pages:
+        /// the PDF can then be searched, and its text selected and copied.
+        void MakeSearchable()
+        {
+            if (pdfPath == null || running) return;
+            SaveWith("pdf_searchable_suffix", "act_k_pdf_ocr", (w, r, pg) =>
+            {
+                string dir = Path.Combine(Path.GetTempPath(), "FadiPdfOcr_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+                Directory.CreateDirectory(dir);
+                try
+                {
+                    ActJob a = workAct;
+                    PdfText.MakeSearchable(w, r, dir, (done, total, what) =>
+                    {
+                        string label = what == "render" ? L.T("pdf_ocr_pages", done, total) : L.T("pdf_ocr_reading", done, total);
+                        Activity.Update(a, total > 0 ? (what == "render" ? 0.25 : 1.0) * done / total * (what == "render" ? 1 : 0.75) + (what == "render" ? 0 : 0.25) : -1, label);
+                        Post(() => SetStatus(label, Theme.InkSoft));
+                    }, () => cancel);
+                    return null;
+                }
+                finally { try { Directory.Delete(dir, true); } catch { } }
+            }, pg => L.T("pdf_done_searchable"));
+        }
         string[] modeGlyphs;
 
         void OpenContent()
@@ -750,7 +777,7 @@ namespace FileConverter
             }
             else statusR = Rectangle.Empty;
             int oy = y + Theme.S(16);
-            foreach (Control k in new Control[] { pageSize, bContent, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, imgFmt, bLock, bNums, bMark, bSign }) k.Visible = false;
+            foreach (Control k in new Control[] { pageSize, bContent, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bSearchable, imgFmt, bLock, bNums, bMark, bSign }) k.Visible = false;
             stampCard = Rectangle.Empty;
             if (c)
             {
@@ -767,7 +794,7 @@ namespace FileConverter
                 int ry = oy;
                 // rows get a little tighter when the window is short, so all three cards still fit
                 int tools = Edited ? 6 : 5;
-                int need = (oy - Top0) + tools * Theme.S(38) + Theme.S(10) + gap + Theme.S(42) + 3 * Theme.S(38) + Theme.S(44) + gap + Theme.S(42) + Theme.S(38) + Theme.S(8);
+                int need = (oy - Top0) + tools * Theme.S(38) + Theme.S(10) + gap + Theme.S(42) + 4 * Theme.S(38) + Theme.S(44) + gap + Theme.S(42) + Theme.S(38) + Theme.S(8);
                 int rh = need <= H - p - Top0 ? Theme.S(38) : need - (tools + 4) * Theme.S(5) <= H - p - Top0 ? Theme.S(33) : Theme.S(30);
                 int bh2 = rh - Theme.S(2);
                 foreach (Btn b in new[] { bContent, bRotL, bRotR, bDel, bAll, bReset })
@@ -785,20 +812,20 @@ namespace FileConverter
                 {
                     moreLblR = new Rectangle(x, my + Theme.S(16), cw, Theme.S(18));
                     Btn[] st = { bLock, bNums, bMark, bSign };
-                    Btn[] mo = { bExtract, bSplit, bImages };
+                    Btn[] mo = { bExtract, bSplit, bImages, bSearchable };
                     // a short window: "More" and "Protect & stamp" share one card of icons (names show when pointed at)
-                    bool shortWin = my + Theme.S(42) + 3 * rh + Theme.S(44) + gap + Theme.S(42) + Theme.S(38) + Theme.S(8) > H - p + Theme.S(4);
+                    bool shortWin = my + Theme.S(42) + 4 * rh + Theme.S(44) + gap + Theme.S(42) + Theme.S(38) + Theme.S(8) > H - p + Theme.S(4);
                     int qw = (w - Theme.S(16) - Theme.S(12)) / 4;
                     if (shortWin)
                     {
                         int by = my + Theme.S(42);
-                        for (int i = 0; i < 3; i++)
+                        for (int i = 0; i < 4; i++)
                         {
                             Btn b = mo[i]; b.Visible = true; b.AlignStart = false; b.Label = () => "";
                             Place(b, new Rectangle(rx + Theme.S(8) + i * (qw + Theme.S(4)), by, qw, Theme.S(34)));
                         }
-                        imgFmt.Visible = true;
-                        Place(imgFmt, new Rectangle(rx + Theme.S(8) + 3 * (qw + Theme.S(4)), by + Theme.S(1), qw, Theme.S(32)));
+                        // (the pictures' format stays as last chosen; the choice shows when there's more room)
+                        imgFmt.Visible = false;
                         fmtLblR = Rectangle.Empty;
                         by += Theme.S(38);
                         for (int i = 0; i < 4; i++)
@@ -814,8 +841,8 @@ namespace FileConverter
                     else
                     {
                         int by = my + Theme.S(42);
-                        string[] mk = { "pdf_extract", "pdf_split", "pdf_images" };
-                        for (int i = 0; i < 3; i++)
+                        string[] mk = { "pdf_extract", "pdf_split", "pdf_images", "pdf_searchable" };
+                        for (int i = 0; i < 4; i++)
                         {
                             Btn b = mo[i]; string k = mk[i];
                             b.Visible = true; b.AlignStart = true; b.Label = () => L.T(k);
@@ -916,7 +943,7 @@ namespace FileConverter
             bDel.Enabled = sel > 0 && sel < grid.Pages.Count && !running;
             bExtract.Enabled = sel > 0 && !running;
             bAll.Label = () => grid.SelectedCount == grid.Pages.Count && grid.Pages.Count > 0 ? L.T("pdf_select_none") : L.T("pdf_select_all");
-            foreach (Btn b in new[] { bContent, bAll, bReset, bSplit, bImages, bAdd, bOpen, bClear, bLock, bNums, bMark, bSign }) b.Enabled = !running;
+            foreach (Btn b in new[] { bContent, bAll, bReset, bSplit, bImages, bSearchable, bAdd, bOpen, bClear, bLock, bNums, bMark, bSign }) b.Enabled = !running;
             pageSize.Enabled = imgFmt.Enabled = !running;
             DoLayout();
             foreach (Control k in Controls) k.Invalidate();
@@ -1268,6 +1295,7 @@ namespace FileConverter
             string src = pdfPath;
             BeginWork("", "");
             ActJob act = Activity.Begin(this, L.T(kindKey), Path.GetFileName(shownPath ?? src), () => cancel = true);
+            workAct = act;
             Thread t = new Thread(() =>
             {
                 string err = null, done = null;

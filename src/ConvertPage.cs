@@ -21,7 +21,7 @@ namespace FileConverter
         FolderButton folder;
         Progress progress;
 
-        string statusText = ""; Color statusColor;
+        string statusText = ""; Theme.LiveColor statusColor;
         bool running, cancel, userPicked;
         string lastOutputFile, lastOutputDir;
         int doneCount;

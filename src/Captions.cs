@@ -135,6 +135,7 @@ namespace FileConverter
 
         public CaptionsForm()
         {
+            Movable.Make(this, () => Theme.S(64));   // drag it by the top
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             KeyPreview = true;

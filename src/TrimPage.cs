@@ -429,7 +429,7 @@ namespace FileConverter
         readonly List<Clip> clips = new List<Clip>();
         int cur;
         bool running, cancel;
-        string statusText = ""; Color statusColor;
+        string statusText = ""; Theme.LiveColor statusColor;
         string lastOutput;
         readonly PreviewPlayer player = new PreviewPlayer();
         bool framePending;

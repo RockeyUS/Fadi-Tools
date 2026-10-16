@@ -212,18 +212,42 @@ namespace FileConverter
         public static bool Enabled { get { return Settings.Get("Notify", "1") == "1"; } set { Settings.Set("Notify", value ? "1" : "0"); } }
         static bool IsWindows { get { return Environment.OSVersion.Platform == PlatformID.Win32NT; } }
 
+        /// "Exit" in the tray icon's menu.
+        public static event Action ExitRequested;
+
+        static void Make(Form f)
+        {
+            if (icon != null) return;
+            icon = new NotifyIcon { Icon = f.Icon ?? SystemIcons.Application, Text = L.T("app_name") };
+            icon.BalloonTipClicked += (s, e) => { Bring(); Action a = onClick; if (a != null) try { a(); } catch { } };
+            icon.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) Bring(); };
+            ContextMenuStrip menu = new ContextMenuStrip();
+            menu.Items.Add(L.T("tray_open"), null, (s, e) => Bring());
+            menu.Items.Add(L.T("tray_exit"), null, (s, e) => { if (ExitRequested != null) ExitRequested(); });
+            menu.Opening += (s, e) => { menu.Items[0].Text = L.T("tray_open"); menu.Items[1].Text = L.T("tray_exit"); menu.RightToLeft = Theme.RTL ? RightToLeft.Yes : RightToLeft.No; };
+            icon.ContextMenuStrip = menu;
+        }
+
+        /// The icon by the clock while the window is hidden and work goes on (on = show it, off = hide it).
+        public static void Tray(Form f, bool on)
+        {
+            if (!IsWindows || f == null) return;
+            try
+            {
+                owner = f;
+                if (on) { Make(f); icon.Text = L.T("app_name") + " — " + L.T("tray_still"); icon.Visible = true; }
+                else if (icon != null) { icon.Visible = false; icon.Text = L.T("app_name"); }
+            }
+            catch { }
+        }
+
         public static void Show(Form f, string title, string text, bool ok, Action click)
         {
             if (!Enabled || !IsWindows || f == null) return;
             try
             {
                 owner = f; onClick = click;
-                if (icon == null)
-                {
-                    icon = new NotifyIcon { Icon = f.Icon ?? SystemIcons.Application, Text = L.T("app_name") };
-                    icon.BalloonTipClicked += (s, e) => { Bring(); Action a = onClick; if (a != null) try { a(); } catch { } };
-                    icon.MouseClick += (s, e) => Bring();
-                }
+                Make(f);
                 icon.Visible = true;
                 icon.ShowBalloonTip(8000, title, string.IsNullOrEmpty(text) ? " " : (text.Length > 240 ? text.Substring(0, 237) + "…" : text), ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
             }

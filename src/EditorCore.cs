@@ -16,6 +16,8 @@ namespace FileConverter
         public string Text = "";
         public string FontName = "Segoe UI";
         public float SizePx = 64;        // text: font size · photo: its longest side
+        /// Photo: how much it's been stretched wider (>1) or taller (<1) than its own shape, by the side handles.
+        public float Stretch = 1f;
         public Color Color = Color.White;
         public bool Bold = true, Italic, Outline = true, Shadow = true, Box;
         public Color BoxColor = Color.Empty;       // empty = automatic (dark behind light text, light behind dark text)
@@ -89,8 +91,8 @@ namespace FileConverter
                 if (path != null) return path;
                 if (IsPicture)
                 {
-                    float big = Math.Max(1, SizePx), pw = Math.Max(1, Picture.Width), ph = Math.Max(1, Picture.Height);
-                    float w = pw >= ph ? big : big * pw / ph, h = pw >= ph ? big * ph / pw : big;
+                    float big = Math.Max(1, SizePx), ar = Math.Max(1, Picture.Width) / (float)Math.Max(1, Picture.Height) * Math.Max(0.02f, Stretch);
+                    float w = ar >= 1 ? big : big * ar, h = ar >= 1 ? big / ar : big;
                     glyphs = new RectangleF(-w / 2, -h / 2, w, h);
                     path = new GraphicsPath();
                     path.AddRectangle(glyphs);
@@ -168,6 +170,22 @@ namespace FileConverter
                 x0 = Math.Min(x0, x); y0 = Math.Min(y0, y); x1 = Math.Max(x1, x); y1 = Math.Max(y1, y);
             }
             return RectangleF.FromLTRB(x0, y0, x1, y1);
+        }
+
+        /// Photo: its width and height on the output (before turning).
+        public SizeF PictureSize
+        {
+            get { GraphicsPath p = LocalPath; return glyphs.Size; }
+        }
+        /// Photo: gives it this width and height (stretching it if that's not its own shape).
+        public void SetPictureSize(float w, float h)
+        {
+            if (!IsPicture) return;
+            w = Math.Max(4, w); h = Math.Max(4, h);
+            float natural = Math.Max(1, Picture.Width) / (float)Math.Max(1, Picture.Height);
+            Stretch = Math.Max(0.02f, Math.Min(50f, (w / h) / natural));
+            SizePx = Math.Max(w, h);
+            SizeChanging();
         }
 
         /// Selection/hit area in output coordinates.

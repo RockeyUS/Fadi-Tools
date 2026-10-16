@@ -31,7 +31,98 @@ namespace FileConverter
         public bool Collapsed;
         float spin;
 
-        public Sidebar() { Surface = Surface.Background; Cursor = Cursors.Hand; }
+        public Sidebar() { Surface = Surface.Background; Cursor = Cursors.Hand; TabStop = true; AccessibleName = "Navigation"; }
+
+        // ------------------------------------------------------------------ keyboard & screen readers
+        // the stops, in order: fold button, search, the tools, Activity, Settings
+        int keyStop = 2;
+        int StopCount { get { return Items.Count + 4; } }
+        Rectangle StopRect(int s) { return s == 0 ? ToggleRect : s == 1 ? SearchRect : s < Items.Count + 2 ? ItemRect(s - 2) : FootRect(s - Items.Count - 2); }
+        string StopName(int s)
+        {
+            if (s == 0) return L.T(Collapsed ? "nav_expand" : "nav_collapse");
+            if (s == 1) return L.T("search_ph");
+            if (s < Items.Count + 2) return L.T(Items[s - 2].Key);
+            return s == Items.Count + 2 ? L.T("act_title") : L.T("nav_settings");
+        }
+        bool StopIsPage(int s) { return (s >= 2 && s < Items.Count + 2) || s == Items.Count + 3; }
+        int StopPage(int s) { return s == Items.Count + 3 ? SettingsIndex : s - 2; }
+        void DoStop(int s)
+        {
+            Rectangle r = M(StopRect(s));
+            if (StopIsPage(s)) { ripple.Start(new Point(r.X + r.Width / 2, r.Y + r.Height / 2), r); Animator.Start(this); if (Navigate != null) Navigate(StopPage(s)); }
+            else if (s == 0) { if (ToggleCollapse != null) ToggleCollapse(); }
+            else if (s == 1) { if (OpenSearch != null) OpenSearch(); }
+            else if (OpenActivity != null) { if (Fx.Motion && !ActivityOpen) { actPulse = 0; Animator.Start(this); } OpenActivity(r); }
+        }
+        protected override bool IsInputKey(Keys k)
+        {
+            return k == Keys.Up || k == Keys.Down || k == Keys.Home || k == Keys.End || k == Keys.Enter || k == Keys.Space || base.IsInputKey(k);
+        }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            int to = keyStop;
+            if (e.KeyCode == Keys.Up) to--;
+            else if (e.KeyCode == Keys.Down) to++;
+            else if (e.KeyCode == Keys.Home) to = 0;
+            else if (e.KeyCode == Keys.End) to = StopCount - 1;
+            else if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { DoStop(keyStop); e.Handled = true; return; }
+            else { base.OnKeyDown(e); return; }
+            to = Math.Max(0, Math.Min(StopCount - 1, to));
+            if (to != keyStop) { keyStop = to; Invalidate(); AccessibilityNotifyClients(AccessibleEvents.Focus, keyStop); }
+            e.Handled = true;
+        }
+        protected override void OnEnter(EventArgs e)
+        {
+            // arriving with Tab: start on the page that is showing
+            keyStop = selected == SettingsIndex ? Items.Count + 3 : selected + 2;
+            base.OnEnter(e);
+        }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.PageTabList; } }
+        protected override AccessibleObject CreateAccessibilityInstance() { return new SideAccessible(this); }
+
+        class SideAccessible : UiAccessible
+        {
+            readonly Sidebar sb;
+            public SideAccessible(Sidebar owner) : base(owner) { sb = owner; }
+            public override int GetChildCount() { return sb.StopCount; }
+            public override AccessibleObject GetChild(int index) { return index >= 0 && index < sb.StopCount ? new StopAccessible(sb, this, index) : null; }
+            public override AccessibleObject GetFocused() { return sb.Focused ? GetChild(sb.keyStop) : base.GetFocused(); }
+            public override AccessibleObject HitTest(int x, int y)
+            {
+                Point p = sb.MP(sb.PointToClient(new Point(x, y)));
+                for (int i = 0; i < sb.StopCount; i++) if (sb.StopRect(i).Contains(p)) return GetChild(i);
+                return base.HitTest(x, y);
+            }
+        }
+
+        class StopAccessible : AccessibleObject
+        {
+            readonly Sidebar sb; readonly AccessibleObject parent; readonly int stop;
+            public StopAccessible(Sidebar s, AccessibleObject p, int i) { sb = s; parent = p; stop = i; }
+            public override string Name { get { return sb.StopName(stop); } set { } }
+            public override AccessibleObject Parent { get { return parent; } }
+            public override AccessibleRole Role { get { return sb.StopIsPage(stop) ? AccessibleRole.PageTab : AccessibleRole.PushButton; } }
+            public override Rectangle Bounds { get { return sb.RectangleToScreen(sb.M(sb.StopRect(stop))); } }
+            public override AccessibleStates State
+            {
+                get
+                {
+                    AccessibleStates st = AccessibleStates.Focusable;
+                    if (sb.StopIsPage(stop)) { st |= AccessibleStates.Selectable; if (sb.StopPage(stop) == sb.selected) st |= AccessibleStates.Selected; }
+                    if (sb.Focused && sb.keyStop == stop) st |= AccessibleStates.Focused;
+                    return st;
+                }
+            }
+            public override string DefaultAction { get { return L.T("acc_press"); } }
+            public override void DoDefaultAction() { sb.DoStop(stop); }
+            public override void Select(AccessibleSelection flags) { if ((flags & AccessibleSelection.TakeFocus) != 0) { sb.Focus(); sb.keyStop = stop; sb.Invalidate(); } }
+            public override AccessibleObject Navigate(AccessibleNavigation dir)
+            {
+                int to = dir == AccessibleNavigation.Next || dir == AccessibleNavigation.Down ? stop + 1 : dir == AccessibleNavigation.Previous || dir == AccessibleNavigation.Up ? stop - 1 : -1;
+                return to >= 0 && to < sb.StopCount ? new StopAccessible(sb, parent, to) : null;
+            }
+        }
 
         public int Selected
         {
@@ -114,7 +205,7 @@ namespace FileConverter
             if (Fx.Ease(ref toggleHot, hoverToggle ? 1 : 0, 0.28f)) more = true;
             if (ripple.Step()) more = true;
             if (Fx.Ease(ref actOpenT, ActivityOpen ? 1 : 0, 0.25f)) more = true;
-            if (actPulse < 1) { actPulse = Math.Min(1, actPulse + 0.028f * Animator.K); more = true; }
+            if (actPulse < 1) { actPulse = Math.Min(1, actPulse + 0.05f * Animator.K); more = true; }
             float ty = SelRect(selected).Y;
             if (pillY < 0 || !Fx.Motion) pillY = ty;
             pillY += (ty - pillY) * Animator.Rate(0.22f);
@@ -309,6 +400,7 @@ namespace FileConverter
                 }
             }
             if (ripple.Running) ripple.Paint(g, Theme.S(9), Theme.Dark ? Color.FromArgb(34, 255, 255, 255) : Color.FromArgb(30, 0, 0, 0));
+            if (keyStop >= 0 && keyStop < StopCount) PaintFocus(g, M(StopRect(keyStop)), Theme.S(9));
         }
 
         void Pulse(Graphics g, Rectangle r)

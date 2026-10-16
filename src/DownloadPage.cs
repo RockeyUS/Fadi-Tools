@@ -14,6 +14,8 @@ namespace FileConverter
     public class ThumbView : UiControl
     {
         Image image;
+        /// Width ÷ height of the picture shown (0 = none).
+        public float Aspect { get { return image == null || image.Height == 0 ? 0 : image.Width / (float)image.Height; } }
         public string Badge = "", Corner = "";
         bool animating;
         public ThumbView() { }
@@ -95,6 +97,7 @@ namespace FileConverter
         int hoverAct;   // 0 none, 1 main action, 2 remove
         public event Action<DlItem> Act, Remove;
         public DlQueue() { RowHeight = 78; }
+        protected override string RowText(int i) { return Items[i].Title ?? ""; }
         public override int Count { get { return Items.Count; } }
         protected override string[] DragFiles(int i) { return Items[i].Files.Count > 0 ? Items[i].Files.ToArray() : null; }
 
@@ -182,7 +185,7 @@ namespace FileConverter
             switch (it.State)
             {
                 case ItemState.Working:
-                    if (p.Finishing) sub = p.Stage == "gif" ? L.T("dl_making_gif") : p.Stage == "convert" ? L.T("dl_converting") : L.T("yt_finishing");
+                    if (p.Finishing) sub = p.Stage == "gif" ? L.T("dl_making_gif") + (it.Info != null ? "  ·  " + DownloadPage.GifGuess(it.Options, it.Info.Duration) : "") : p.Stage == "convert" ? L.T("dl_converting") : L.T("yt_finishing");
                     else if (p.Done <= 0) sub = L.T("yt_starting");
                     else
                     {
@@ -242,7 +245,7 @@ namespace FileConverter
         ThumbView thumbView;
         YtInfo info; Image thumb;
         bool fetching, settingUp, worker;
-        string statusText = ""; Color statusColor;
+        string statusText = ""; Theme.LiveColor statusColor;
         List<int> heights = new List<int> { 0 };
         List<SaveAs> modes = new List<SaveAs>();
         int fetchToken;
@@ -270,10 +273,10 @@ namespace FileConverter
             qualityV.SelectedChanged += (s, e) => UpdateSize();
             qualityA = new Segments(() => "MP3", () => "M4A", () => "OPUS", () => "WAV");
             gifSize = new Segments(() => L.T("gif_small"), () => L.T("gif_medium"), () => L.T("gif_large"));
-            gifSize.SelectedChanged += (s, e) => { Settings.Set("GifSize", gifSize.SelectedIndex.ToString()); UpdateSize(); };
+            gifSize.SelectedChanged += (s, e) => { Settings.Set("GifSize", gifSize.SelectedIndex.ToString()); UpdateSize(); Invalidate(); };
             gifLen = new Segments(() => L.T("gif_5s"), () => L.T("gif_10s"), () => L.T("gif_30s"), () => L.T("gif_full"));
             gifLen.FontSize = 8.75f;
-            gifLen.SelectedChanged += (s, e) => Settings.Set("GifLen", gifLen.SelectedIndex.ToString());
+            gifLen.SelectedChanged += (s, e) => { Settings.Set("GifLen", gifLen.SelectedIndex.ToString()); UpdateSize(); Invalidate(); };
             int v;
             int.TryParse(Settings.Get("GifSize", "1"), out v); gifSize.SetSilently(Math.Max(0, Math.Min(2, v)));
             int.TryParse(Settings.Get("GifLen", "1"), out v); gifLen.SetSilently(Math.Max(0, Math.Min(3, v)));
@@ -355,13 +358,13 @@ namespace FileConverter
             sitesR = new Rectangle(x, y + Theme.S(60), w, Theme.S(30));
             int sw = Math.Max(Theme.S(250), btnSetup.PreferredWidth);
             Place(btnSetup, new Rectangle(x, y + Theme.S(104), sw, Theme.S(40)));
-            statusR = new Rectangle(x + (btnSetup.Visible ? sw + Theme.S(14) : 0), y + Theme.S(104), w - (btnSetup.Visible ? sw + Theme.S(14) : 0), Theme.S(40));
+            statusR = new Rectangle(x + (btnSetup.Wanted ? sw + Theme.S(14) : 0), y + Theme.S(104), w - (btnSetup.Wanted ? sw + Theme.S(14) : 0), Theme.S(40));
 
             int thW = Theme.S(288), thH = Theme.S(162);
             Place(thumbView, new Rectangle(x, y, thW, thH));
             int cx = x + thW + Theme.S(22), cw = w - thW - Theme.S(22);
             int sy = y + Theme.S(70);
-            int kw = saveAs.Visible ? Math.Min(Theme.S(300), cw / 2 - Theme.S(5)) : 0;
+            int kw = saveAs.Wanted ? Math.Min(Theme.S(300), cw / 2 - Theme.S(5)) : 0;
             Place(saveAs, new Rectangle(cx, sy, kw, Theme.S(34)));
             int qx = cx + (kw > 0 ? kw + Theme.S(10) : 0), qw = cw - (kw > 0 ? kw + Theme.S(10) : 0);
             Place(qualityV, new Rectangle(qx, sy, qw, Theme.S(34)));
@@ -380,13 +383,44 @@ namespace FileConverter
             Invalidate();
         }
 
-        string sizeText = "";
+        string sizeText = "", gifSizeText = "";
+
+        /// A rough size for the GIF that will be made (GIFs are big: about a tenth of a byte per pixel per frame).
+        long GifEstimate()
+        {
+            if (info == null) return -1;
+            double dur = info.Duration;
+            int secs = new[] { 5, 10, 30, 0 }[Math.Max(0, Math.Min(3, gifLen.SelectedIndex))];
+            if (secs > 0 && (dur <= 0 || secs < dur)) dur = secs;
+            if (dur <= 0) return -1;
+            int w = new[] { 320, 480, 720 }[Math.Max(0, Math.Min(2, gifSize.SelectedIndex))];
+            float aspect = thumbView.Aspect > 0.2f ? thumbView.Aspect : 16f / 9f;
+            double h = w / aspect;
+            int fps = w >= 720 ? 15 : 12;
+            return (long)(w * h * fps * dur * 0.085);
+        }
+        /// Shown on a GIF in the list while it's being made.
+        public static string GifGuess(YtOptions o, double duration)
+        {
+            double dur = duration;
+            if (o.GifSeconds > 0 && (dur <= 0 || o.GifSeconds < dur)) dur = o.GifSeconds;
+            if (dur <= 0) return "";
+            double h = o.GifWidth * 9.0 / 16;
+            return "≈ " + Theme.HumanSize((long)(o.GifWidth * h * (o.GifWidth >= 720 ? 15 : 12) * dur * 0.085));
+        }
+
         void UpdateSize()
         {
             if (info == null) { sizeText = ""; return; }
             long est = YtDlp.Estimate(info, Options());
             SaveAs m = CurrentMode;
-            if (m == SaveAs.Gif && info.Kind == MediaKind.Video) sizeText = est > 0 ? L.T("dl_source_size", Theme.HumanSize(est)) : "";
+            if (m == SaveAs.Gif && info.Kind == MediaKind.Video)
+            {
+                // how big the GIF itself will be (roughly): its size, length and frame rate decide it
+                long gif = GifEstimate();
+                gifSizeText = gif > 0 ? "≈ " + Theme.HumanSize(gif) : L.T("dl_size_unknown");
+                sizeText = est > 0 ? L.T("dl_source_size", Theme.HumanSize(est)) : "";
+            }
             else sizeText = est > 0 ? "≈ " + Theme.HumanSize(est) : L.T("dl_size_unknown");
             if (m == SaveAs.Video && !info.IsDirect && info.Heights.Count > 0)
             {
@@ -424,7 +458,18 @@ namespace FileConverter
                     string dest = L.T("saves_to", Settings.OutputIsDefault ? L.T("downloads") : Settings.OutputDir);
                     Label(g, dest, Theme.F(8.5f), Theme.InkFaint, new Rectangle(b.X, b.Y + Theme.S(22), b.Width, Theme.S(20)));
                 }
-                else Label(g, L.T("gif_length") + "   " + sizeText, Theme.F(8.5f), Theme.InkFaint, new Rectangle(bottomR.X, infoR.Y + Theme.S(162) - Theme.S(52), bottomR.Width + Theme.S(200), Theme.S(18)));
+                else
+                {
+                    // GIF: its length on the left, the GIF's own (estimated) size in bold, then what's downloaded for it
+                    Rectangle lr = new Rectangle(bottomR.X, infoR.Y + Theme.S(162) - Theme.S(54), bottomR.Width + Theme.S(200), Theme.S(20));
+                    Font lf = Theme.F(8.5f), bf = Theme.F(10f, FontStyle.Bold);
+                    string head = L.T("gif_length") + "   ·   " + L.T("gif_label");
+                    int hw = Theme.Measure(head, lf) + Theme.S(8);
+                    Label(g, head, lf, Theme.InkFaint, new Rectangle(lr.X, lr.Y, hw, lr.Height));
+                    int sw2 = Theme.Measure(gifSizeText, bf) + Theme.S(10);
+                    Label(g, gifSizeText, bf, Theme.Ink, new Rectangle(lr.X + hw, lr.Y, sw2, lr.Height));
+                    Label(g, sizeText, lf, Theme.InkFaint, new Rectangle(lr.X + hw + sw2, lr.Y, Math.Max(10, lr.Width - hw - sw2), lr.Height));
+                }
             }
             else if (!fetching)
             {
@@ -477,6 +522,21 @@ namespace FileConverter
                 });
             });
             t.IsBackground = true; t.Start();
+        }
+
+        /// A link from a site videos are downloaded from (for the "you copied a link" offer).
+        public static bool IsVideoLink(string u)
+        {
+            if (!u.StartsWith("http", StringComparison.OrdinalIgnoreCase) || !YtDlp.LooksLikeUrl(u)) return false;
+            return System.Text.RegularExpressions.Regex.IsMatch(u, @"^https?://([\w-]+\.)*(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|twitter\.com|x\.com|reddit\.com|redd\.it|pinterest\.[a-z.]+|pin\.it|vimeo\.com|giphy\.com|tenor\.com|imgur\.com|facebook\.com|fb\.watch|twitch\.tv|dailymotion\.com|soundcloud\.com|streamable\.com|bilibili\.com)/", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                || Resolver.IsDirectMedia(u);
+        }
+
+        /// Puts a link in the box and gets its details (from the "you copied a link" offer).
+        public void FetchLink(string u)
+        {
+            url.Box.Text = u.Trim();
+            Fetch();
         }
 
         // ------------------------------------------------------------------ fetch details

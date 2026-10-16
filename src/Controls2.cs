@@ -15,7 +15,23 @@ namespace FileConverter
         public event EventHandler Committed;          // mouse released / wheel: good moment for expensive work
         bool dragging;
         float shown = float.NaN, press;
-        public Slider() { Cursor = Cursors.Hand; }
+        public Slider() { Cursor = Cursors.Hand; TabStop = true; }
+        // keyboard: ← → (and Page Up / Down for bigger steps)
+        protected override bool IsInputKey(Keys k) { return k == Keys.Left || k == Keys.Right || k == Keys.Up || k == Keys.Down || base.IsInputKey(k); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (!Enabled) return;
+            int d = e.KeyCode == Keys.Right || e.KeyCode == Keys.Up ? 1 : e.KeyCode == Keys.Left || e.KeyCode == Keys.Down ? -1 : e.KeyCode == Keys.PageUp ? 5 : e.KeyCode == Keys.PageDown ? -5 : 0;
+            if (Theme.RTL && (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right)) d = -d;
+            if (d == 0) return;
+            e.Handled = true;
+            float f = Math.Max(0, Math.Min(1, FracOf(Value) + d / 50f));
+            SetValue(ValueAt(f), true);
+            if (Committed != null) Committed(this, EventArgs.Empty);
+        }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.Slider; } }
+        protected override string AccValue { get { return Format(Value); } }
 
         /// Sizes: equal steps feel the same at 20 px and at 800 px (each step is a share of the value, not a fixed amount).
         public bool Curved;
@@ -116,7 +132,24 @@ namespace FileConverter
         public bool LivePreview = true;      // the custom picker updates the picture while you drag
         public event EventHandler SelectedChanged;
         int hoverIndex = -1;
-        public Swatches() { Cursor = Cursors.Hand; }
+        public Swatches() { Cursor = Cursors.Hand; TabStop = true; }
+        // keyboard: ← → pick the colour beside it
+        protected override bool IsInputKey(Keys k) { return k == Keys.Left || k == Keys.Right || base.IsInputKey(k); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (!Enabled || Palette.Length == 0) return;
+            int d = e.KeyCode == Keys.Right ? 1 : e.KeyCode == Keys.Left ? -1 : 0;
+            if (Theme.RTL) d = -d;
+            if (d == 0) return;
+            e.Handled = true;
+            int i = Math.Max(0, Array.FindIndex(Palette, c => c.ToArgb() == Selected.ToArgb()));
+            Selected = Palette[Math.Max(0, Math.Min(Palette.Length - 1, i + d))];
+            Invalidate();
+            if (SelectedChanged != null) SelectedChanged(this, EventArgs.Empty);
+        }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.List; } }
+        protected override string AccValue { get { return "#" + Selected.R.ToString("X2") + Selected.G.ToString("X2") + Selected.B.ToString("X2"); } }
 
         Rectangle Cell(int i)
         {
@@ -317,18 +350,18 @@ namespace FileConverter
 
         public static Font FontFor(string name, float size)
         {
-            string key = name + "|" + size;
+            string key = name + "|" + size + "@" + Theme.Scale;
             Font f;
             if (fontCache.TryGetValue(key, out f)) return f;
             FontFamily pf = FontPack.Find(name);
             if (pf != null)
             {
                 FontStyle st = pf.IsStyleAvailable(FontStyle.Regular) ? FontStyle.Regular : FontStyle.Bold;
-                try { f = new Font(pf, size, st); } catch { f = null; }
+                try { f = new Font(pf, Theme.Px(size), st, GraphicsUnit.Pixel); } catch { f = null; }
                 fontCache[key] = f;
                 return f;
             }
-            try { f = new Font(name, size); if (!string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)) { f.Dispose(); f = null; } } catch { f = null; }
+            try { f = new Font(name, Theme.Px(size), FontStyle.Regular, GraphicsUnit.Pixel); if (!string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)) { f.Dispose(); f = null; } } catch { f = null; }
             if (fontCache.Count > 600) fontCache.Clear();
             fontCache[key] = f;
             return f;

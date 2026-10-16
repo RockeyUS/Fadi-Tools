@@ -35,6 +35,8 @@ namespace FileConverter
         public event Action<int> LayerPicked;
         public event Action LayerEdit, LayerMoved, LayerResized;
         int resizeCorner = -1; float resizeStartDist, resizeStartSize; PointF resizeCenter;
+        int resizeSide = -1;   // a photo's side handle being dragged: 0 left, 1 right, 2 top, 3 bottom
+        SizeF resizeStartBox;
         bool layerDrag; PointF layerFrom, layerPosFrom; bool snapX, snapY;
 
         // crop mode: a rectangle in output coordinates with corner handles
@@ -257,6 +259,27 @@ namespace FileConverter
             return -1;
         }
 
+        /// The side handle of the selected photo under the mouse (0 left, 1 right, 2 top, 3 bottom), or -1.
+        /// (Sides stretch a photo wider or taller; corners keep its shape.)
+        int SideAt(Point p)
+        {
+            if (Layers == null || Image == null || SelectedLayer < 0 || SelectedLayer >= Layers.Count || CropMode || Brushing || !Shown(SelectedLayer)) return -1;
+            TextLayer l = Layers[SelectedLayer];
+            if (!l.IsPicture || Math.Abs(l.Angle) > 0.5f) return -1;
+            RectangleF sr = SelScreen();
+            PointF[] c = { new PointF(sr.X, sr.Y + sr.Height / 2), new PointF(sr.Right, sr.Y + sr.Height / 2), new PointF(sr.X + sr.Width / 2, sr.Y), new PointF(sr.X + sr.Width / 2, sr.Bottom) };
+            float grab = Theme.S(9);
+            for (int i = 0; i < 4; i++) if (Math.Abs(p.X - c[i].X) <= grab && Math.Abs(p.Y - c[i].Y) <= grab) return i;
+            return -1;
+        }
+        RectangleF SelScreen()
+        {
+            float sc; RectangleF r = ImageRect(out sc);
+            float k = r.Width / Math.Max(1, Logical.Width);
+            RectangleF b = Layers[SelectedLayer].Bounds;
+            return new RectangleF(r.X + b.X * k, r.Y + b.Y * k, b.Width * k, b.Height * k);
+        }
+
         int HitLayer(Point p)
         {
             if (Layers == null || Image == null) return -1;
@@ -307,6 +330,18 @@ namespace FileConverter
             {
                 cropDrag = CropHit(e.Location);
                 if (cropDrag >= 0) { cropFrom = ToImage(e.Location); cropStart = CropRect; Capture = true; return; }
+            }
+            if (e.Button == MouseButtons.Left && SideAt(e.Location) >= 0)
+            {
+                // drag a side: the photo gets wider or narrower (taller or shorter) around its middle
+                TextLayer l = Layers[SelectedLayer];
+                resizeSide = SideAt(e.Location);
+                RectangleF b = l.Bounds;
+                resizeCenter = new PointF(b.X + b.Width / 2, b.Y + b.Height / 2);
+                resizeStartBox = l.PictureSize;
+                animLayer = null;
+                Capture = true;
+                return;
             }
             if (e.Button == MouseButtons.Left && CornerAt(e.Location) >= 0)
             {
@@ -360,6 +395,18 @@ namespace FileConverter
                 Cursor = h == 0 || h == 3 ? Cursors.SizeNWSE : h == 1 || h == 2 ? Cursors.SizeNESW : h == 4 ? Cursors.SizeAll : Cursors.Default;
                 return;
             }
+            if (resizeSide >= 0 && SelectedLayer >= 0 && SelectedLayer < Layers.Count)
+            {
+                PointF ip = ToImage(e.Location);
+                TextLayer l = Layers[SelectedLayer];
+                float w = resizeStartBox.Width, h = resizeStartBox.Height;
+                if (resizeSide <= 1) w = Math.Max(8, Math.Min(Logical.Width * 4, 2 * Math.Abs(ip.X - resizeCenter.X)));
+                else h = Math.Max(8, Math.Min(Logical.Height * 4, 2 * Math.Abs(ip.Y - resizeCenter.Y)));
+                l.SetPictureSize(w, h);
+                if (LayerResized != null) LayerResized();
+                Invalidate();
+                return;
+            }
             if (resizeCorner >= 0 && SelectedLayer >= 0 && SelectedLayer < Layers.Count)
             {
                 PointF ip = ToImage(e.Location);
@@ -391,6 +438,8 @@ namespace FileConverter
             if (dragging) { pan = new PointF(panFrom.X + e.X - dragFrom.X, panFrom.Y + e.Y - dragFrom.Y); DropBg(); Invalidate(); return; }
             int corner = CornerAt(e.Location);
             if (corner >= 0) { Cursor = corner == 0 || corner == 3 ? Cursors.SizeNWSE : Cursors.SizeNESW; return; }
+            int side = SideAt(e.Location);
+            if (side >= 0) { Cursor = side <= 1 ? Cursors.SizeWE : Cursors.SizeNS; return; }
             if (Layers != null) Cursor = HitLayer(e.Location) >= 0 ? Cursors.SizeAll : (Zoom > 0 ? Cursors.Hand : Cursors.Default);
         }
         protected override void OnMouseUp(MouseEventArgs e)
@@ -416,6 +465,12 @@ namespace FileConverter
                 return;
             }
             if (cropDrag >= 0) { cropDrag = -1; Capture = false; }
+            if (resizeSide >= 0)
+            {
+                resizeSide = -1; Capture = false;
+                if (SelectedLayer >= 0 && SelectedLayer < Layers.Count) Layers[SelectedLayer].Touch();
+                Invalidate();
+            }
             if (resizeCorner >= 0)
             {
                 resizeCorner = -1; Capture = false;
@@ -611,6 +666,20 @@ namespace FileConverter
                     g.FillEllipse(Brushes.White, hr);
                     using (Pen p = new Pen(Color.FromArgb(160, 0, 0, 0))) g.DrawEllipse(p, hr);
                 }
+                // a photo also has a handle on each side: stretch it wider or taller
+                TextLayer sel = Layers[SelectedLayer];
+                if (sel.IsPicture && Math.Abs(sel.Angle) <= 0.5f && sr.Width > hs * 4 && sr.Height > hs * 4)
+                {
+                    float lw = Theme.S(16), lt = Theme.S(6);
+                    RectangleF[] bars = {
+                        new RectangleF(sr.X - lt / 2, sr.Y + sr.Height / 2 - lw / 2, lt, lw), new RectangleF(sr.Right - lt / 2, sr.Y + sr.Height / 2 - lw / 2, lt, lw),
+                        new RectangleF(sr.X + sr.Width / 2 - lw / 2, sr.Y - lt / 2, lw, lt), new RectangleF(sr.X + sr.Width / 2 - lw / 2, sr.Bottom - lt / 2, lw, lt) };
+                    foreach (RectangleF br in bars)
+                    {
+                        Theme.FillRound(g, br, lt / 2, Color.White);
+                        Theme.StrokeRound(g, br, lt / 2, Color.FromArgb(160, 0, 0, 0));
+                    }
+                }
             }
         }
     }
@@ -638,28 +707,27 @@ namespace FileConverter
         readonly RecentStrip recents = new RecentStrip();
         string DropText { get { return L.T(InStudio ? "studio_drop_any" : "v_drop"); } }
 
-        /// The Studio's PDF tab: opens PDFs (and only documents), with a button to the page tools.
-        public readonly bool PdfTab;
-        /// Photos: a PDF was chosen (it opens in the PDF tab instead).
-        public event Action<string> OpenPdf;
-        /// PDF tab: something that isn't a document was chosen (it goes to the right tab).
-        public event Action<string[]> OpenOther;
-        /// PDF tab: "Pages" was clicked (reorder, rotate, sign... this PDF).
+        /// Studio: "PDF tools" / "Pages" was clicked: the PDF page tools, with this PDF (null = nothing open).
         public event Action<string> OrganizePages;
         /// The PDF (or other document) open now, or null.
         public string DocPath { get { return docSource; } }
         public int PageIndex { get { return index; } }
         readonly Btn bPages;
+        bool DocIsPdf { get { return Doc && Formats.Ext(docSource) == "pdf"; } }
 
         public ViewerPage() : this(false) { }
-        public ViewerPage(bool studio) : this(studio, false) { }
-        public ViewerPage(bool studio, bool pdfTab) : base(studio ? "studio_title" : "viewer_title", studio ? (pdfTab ? "studio_pdf_sub" : "studio_sub") : "viewer_sub")
+        public ViewerPage(bool studio) : base(studio ? "studio_title" : "viewer_title", studio ? "studio_sub" : "viewer_sub")
         {
             InStudio = studio;
-            PdfTab = pdfTab;
-            bPages = new Btn(() => L.T("v_pages"), "", BtnKind.Secondary) { Visible = false };
-            bPages.MouseEnter += (s, e) => tips.SetToolTip(bPages, L.T("v_pages_tip"));
-            bPages.Click += (s, e) => { if (Doc && OrganizePages != null && ConfirmDiscard()) OrganizePages(docSource); };
+            // Studio: "PDF tools" when nothing is open (combine PDFs, ...), "Pages" with a PDF open (reorder, sign... it)
+            bPages = new Btn(() => L.T(DocIsPdf ? "v_pages" : "v_pdf_tools"), "", BtnKind.Secondary) { Visible = false };
+            bPages.MouseEnter += (s, e) => tips.SetToolTip(bPages, L.T(DocIsPdf ? "v_pages_tip" : "v_pdf_tools_tip"));
+            bPages.Click += (s, e) =>
+            {
+                if (OrganizePages == null) return;
+                if (DocIsPdf) { if (ConfirmDiscard()) OrganizePages(docSource); }
+                else if (files.Count == 0) OrganizePages(null);
+            };
             bPrev = IconBtn(Ico.Left, "v_prev", () => Go(-1));
             bNext = IconBtn(Ico.Right, "v_next", () => Go(1));
             bRotL = IconBtn("\uE7A8", "v_rotate_l", () => Rotate(270));
@@ -694,7 +762,7 @@ namespace FileConverter
                 if (file != null) { if (InStudio) Recovery.Clear(Recovery.PhotoFile); ShowToast(msg, true, () => L.T("show_file"), () => { try { Process.Start("explorer.exe", "/select,\"" + file + "\""); } catch { } }); }
                 else ShowToast(msg, ok, null, null);
             };
-            if (studio && !pdfTab)
+            if (studio)
             {
                 // the photo edit is backed up every half minute, and once more if the app crashes
                 autoTimer = new System.Windows.Forms.Timer { Interval = 30000 };
@@ -714,7 +782,7 @@ namespace FileConverter
             recents.Visible = false;
             recents.Open += f => { if (OpenProjectFile != null) OpenProjectFile(f); };
             recents.Browse += () => { if (BrowseProjects != null) BrowseProjects(); };
-            if (studio && !pdfTab) { Controls.Add(recents); recents.BringToFront(); }
+            if (studio) { Controls.Add(recents); recents.BringToFront(); }
             EnableDrop(canvas);
             try
             {
@@ -837,15 +905,22 @@ namespace FileConverter
             t.IsBackground = true; t.Start();
         }
 
+        /// Whether the buttons were last laid out for a PDF (Pages button, "Save as PDF").
+        int layoutDoc;
+        int DocState { get { return (Doc ? 1 : 0) | (DocIsPdf ? 2 : 0); } }
+
         public override void DoLayout()
         {
             int W = Width, H = Height, p = Pad;
+            layoutDoc = DocState;
+            bSave.Invalidate(); bPages.Invalidate();
             cards.Clear();
             bar = new Rectangle(p, Top0, W - p * 2, Theme.S(68));
             cards.Add(bar);
             int y = bar.Y + Theme.S(16), h = Theme.S(36), x = bar.Right - Theme.S(16);
             foreach (Control c in new Control[] { bPrev, bNext, bRotL, bRotR, bOpen, bEdit, bText, bSave, bConvert, bFolder }) c.Visible = !editing;
-            bPages.Visible = PdfTab && Doc && !editing;
+            bool showPages = InStudio && !editing && (DocIsPdf || files.Count == 0);
+            bPages.Visible = showPages;
             bUndoH.Visible = bRedoH.Visible = editing && !editor.S.Video;
             if (editing && !editor.S.Video)
             {
@@ -866,16 +941,17 @@ namespace FileConverter
                 bFolder.Label = compact ? (Func<string>)(() => "") : () => L.T("v_folder");
                 bConvert.Label = compact ? (Func<string>)(() => "") : () => L.T("v_convert");
                 bText.Label = tiny ? (Func<string>)(() => "") : () => L.T("ocr_btn");
-                bPages.Label = compact ? (Func<string>)(() => "") : () => L.T("v_pages");
-                bool openIcon = compact && PdfTab;   // the PDF tab has one more button: make room for the file name
+                bool pagesIcon = compact && files.Count > 0;   // nothing open: "PDF tools" keeps its name, so it's easy to find
+                bPages.Label = pagesIcon ? (Func<string>)(() => "") : () => L.T(DocIsPdf ? "v_pages" : "v_pdf_tools");
+                bool openIcon = compact && showPages;   // one more button: make room for the file name
                 bOpen.Label = openIcon ? (Func<string>)(() => "") : () => L.T("v_open");
                 List<Btn> right = new List<Btn> { bFolder, bConvert, bSave, bText, bEdit };
-                if (bPages.Visible) right.Add(bPages);
+                if (showPages) right.Add(bPages);
                 right.Add(bOpen);
                 foreach (Btn b in right)
                 {
                     int w = Math.Max(Theme.S(70), b.PreferredWidth);
-                    if ((compact && (b == bFolder || b == bConvert || b == bPages)) || (tiny && b == bText) || (openIcon && b == bOpen)) w = h;
+                    if ((compact && (b == bFolder || b == bConvert)) || (pagesIcon && b == bPages) || (tiny && b == bText) || (openIcon && b == bOpen)) w = h;
                     x -= w; Place(b, new Rectangle(x, y, w, h)); x -= Theme.S(8);
                 }
                 x -= Theme.S(8);
@@ -909,7 +985,7 @@ namespace FileConverter
             if (ShowStrip) { strip.Count = files.Count; strip.Current = index; }
             editor.Visible = editing;
             // the empty Studio: recent video projects along the bottom
-            if (InStudio && !PdfTab)
+            if (InStudio)
             {
                 List<string> rp = files.Count == 0 && !editing ? TrimPage.RecentProjects : new List<string>();
                 recents.Paths = rp;
@@ -1159,9 +1235,7 @@ namespace FileConverter
                 List<string> pats = new List<string>();
                 foreach (string e in Formats.ImageExt) pats.Add("*." + e);
                 d.Filter = L.T("images") + "|" + string.Join(";", pats.ToArray()) + "|" + L.T("all_files") + "|*.*";
-                if (PdfTab)
-                    d.Filter = L.T("documents") + "|*.pdf;*.doc;*.docx;*.odt;*.rtf;*.ppt;*.pptx;*.odp|" + L.T("all_files") + "|*.*";
-                else if (InStudio)
+                if (InStudio)
                     d.Filter = L.T("photos_videos") + "|" + string.Join(";", pats.ToArray()) + ";*.mp4;*.mov;*.mkv;*.avi;*.webm;*.wmv;*.m4v;*.mpg;*.3gp;*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.opus;*.flac;*.pdf;*.doc;*.docx;*.odt;*.rtf;*.ppt;*.pptx;*.odp|" +
                                L.T("documents") + "|*.pdf;*.doc;*.docx;*.odt;*.rtf;*.ppt;*.pptx;*.odp|" + d.Filter;
                 if (LastDir.Show(d, FindForm(), "studio") == DialogResult.OK) LoadFiles(new[] { d.FileName });
@@ -1246,8 +1320,6 @@ namespace FileConverter
                 Category c = Formats.CategoryOf(Formats.Ext(paths[0]));
                 if (c == Category.Video || c == Category.Audio) { OpenMedia(paths[0]); return; }
             }
-            if (!docLoading && InStudio && OpenPdf != null && paths != null && paths.Length == 1 && Formats.Ext(paths[0]) == "pdf" && File.Exists(paths[0])) { OpenPdf(paths[0]); return; }
-            if (!docLoading && PdfTab && OpenOther != null && paths != null && paths.Length > 0 && !(paths.Length == 1 && DocPages.IsDoc(paths[0]))) { OpenOther(paths); return; }
             if (InStudio && paths != null && paths.Length == 1 && DocPages.IsDoc(paths[0]) && File.Exists(paths[0])) { OpenDocument(paths[0]); return; }
             if (!docLoading && !editing && DocChanged && !ConfirmDiscard()) return;
             if (editing)
@@ -1304,7 +1376,7 @@ namespace FileConverter
             string path = files[i];
             bool edited = Doc && pageRender.ContainsKey(i);
             strip.Count = files.Count; strip.Reveal(i);
-            if (strip.Visible != ShowStrip) DoLayout();   // a document just opened: make room for its pages
+            if (strip.Wanted != ShowStrip || layoutDoc != DocState) DoLayout();   // a document just opened: room for its pages, the Pages button
             string shown = edited ? pageRender[i] : path;
             int token = ++loadToken;
             title = Doc ? Path.GetFileName(docSource) : Path.GetFileName(path); info = L.T("v_loading");

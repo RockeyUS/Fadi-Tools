@@ -99,20 +99,39 @@ namespace FileConverter
     public static class Program
     {
         [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+        [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+        [DllImport("shcore.dll")] static extern int SetProcessDpiAwareness(int value);
+
+        /// Sharp on every screen: the app follows each screen's own size setting (per-monitor, Windows 10 1703+),
+        /// and falls back to the older ways on older Windows.
+        static void DpiAware()
+        {
+            try { if (SetProcessDpiAwarenessContext(new IntPtr(-4))) return; } catch { }   // per monitor (v2)
+            try { if (SetProcessDpiAwareness(2) == 0) return; } catch { }                  // per monitor (8.1)
+            try { SetProcessDPIAware(); } catch { }                                         // whole system (7)
+        }
 
         [STAThread]
         public static int Main(string[] args)
         {
-            try { SetProcessDPIAware(); } catch { }
+            DpiAware();
             // an update: let the old window finish closing before its folder is moved
             if (args.Length > 0 && args[0].Equals("/update", StringComparison.OrdinalIgnoreCase))
                 for (int i = 0; i < 100 && SingleInstance.MainRunning; i++) Thread.Sleep(150);
-            Paths.MoveOldFolder();
+            // "/selftest folder" (the build check) and "/screenshots folder" (pictures for the project page)
+            bool test = args.Length > 0 && (args[0].Equals("/selftest", StringComparison.OrdinalIgnoreCase) || args[0].Equals("/screenshots", StringComparison.OrdinalIgnoreCase));
+            if (!test) Paths.MoveOldFolder();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Theme.Init();
             Net.Init();
             FontPack.Load();
+            if (test)
+            {
+                bool shots = args[0].Equals("/screenshots", StringComparison.OrdinalIgnoreCase);
+                string dir = args.Length > 1 ? args[1] : Path.Combine(shots ? Paths.Downloads : Path.GetTempPath(), shots ? "Fadi Tools screenshots" : "Fadi Tools self-test");
+                return SelfTest.Run(Path.GetFullPath(dir), shots);
+            }
             Application.ThreadException += (s, e) => Crash.Report(e.Exception, false);
             AppDomain.CurrentDomain.UnhandledException += (s, e) => Crash.Report(e.ExceptionObject as Exception, e.IsTerminating);
 

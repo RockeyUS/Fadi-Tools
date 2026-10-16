@@ -137,7 +137,7 @@ namespace FileConverter
     {
         static readonly bool noAnim = Environment.GetEnvironmentVariable("FADI_NO_ANIM") != null;
         /// Movement on (Settings > Animations; off = everything jumps straight to where it ends).
-        public static bool Motion { get { return !noAnim && Settings.Get("Animations", "1") != "0"; } }
+        public static bool Motion { get { return !noAnim && !SelfTest.Active && Settings.Get("Animations", "1") != "0"; } }
 
         class TweenRun : IAnimated
         {

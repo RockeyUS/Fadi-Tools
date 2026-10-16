@@ -62,7 +62,7 @@ namespace FileConverter
                    ",\"boxColor\":" + (l.BoxColor.IsEmpty ? "null" : l.BoxColor.ToArgb().ToString()) + ",\"opacity\":" + N(l.Opacity) + ",\"align\":" + (int)l.Align +
                    ",\"x\":" + N(l.Pos.X) + ",\"y\":" + N(l.Pos.Y) + ",\"from\":" + N(l.From) + ",\"to\":" + N(l.To) +
                    ",\"angle\":" + N(l.Angle) + ",\"outlineColor\":" + (l.OutlineColor.IsEmpty ? "null" : l.OutlineColor.ToArgb().ToString()) + ",\"outlineWidth\":" + N(l.OutlineWidth) +
-                   (l.IsPicture ? ",\"picture\":" + Q(l.PicturePath ?? "") : "") + "}";
+                   (l.IsPicture ? ",\"picture\":" + Q(l.PicturePath ?? "") + (Math.Abs(l.Stretch - 1) > 0.001f ? ",\"stretch\":" + N(l.Stretch) : "") : "") + "}";
         }
         public static TextLayer Layer(object o)
         {
@@ -78,6 +78,7 @@ namespace FileConverter
             object oc = Get(o, "outlineColor");
             l.OutlineColor = oc is long ? Color.FromArgb((int)(long)oc) : Color.Empty;
             l.Angle = (float)D(o, "angle", 0);
+            l.Stretch = (float)D(o, "stretch", 1);
             l.OutlineWidth = (float)D(o, "outlineWidth", 1);
             string pic = S(o, "picture");
             if (pic != null)

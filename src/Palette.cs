@@ -43,7 +43,7 @@ namespace FileConverter
             p.owner = owner;
             p.from = from.IsEmpty ? new Rectangle(p.Left + w / 2, p.Top, 1, 1) : from;
             IntPtr hh = p.Handle;   // made now, so its picture can be taken before it shows
-            Fx.PopIn(p, owner, p.from, Theme.S(10), 220, () =>
+            Fx.PopIn(p, owner, p.from, Theme.S(10), 160, () =>
             {
                 if (p.IsDisposed) return;
                 p.Show(owner);
@@ -58,7 +58,7 @@ namespace FileConverter
         {
             if (closing || IsDisposed) return;
             closing = true;
-            Fx.PopOut(this, owner, from, Theme.S(10), 140, () => { if (!IsDisposed) Close(); });
+            Fx.PopOut(this, owner, from, Theme.S(10), 110, () => { if (!IsDisposed) Close(); });
         }
 
         CommandPalette(List<PaletteItem> items)

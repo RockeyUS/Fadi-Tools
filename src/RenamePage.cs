@@ -18,23 +18,32 @@ namespace FileConverter
         List<KeyValuePair<string, string>> undo;          // new path → old path, from the last rename
 
         DropZone drop;
-        Segments mode, order, letters;
+        Segments mode, order, letters, infoKind, infoStyle;
+        bool reading;   // dates / song tags are being read
         TextField fName, fStart, fFind, fReplace, fBefore, fAfter;
         Btn bAdd, bClear, bRename, bUndo;
         RenameList list;
         Rectangle optCard, listCard, modeLbl, l1, l2, l3, countR, statusR, emptyCard;
-        string status; Color statusColor;
+        string status; Theme.LiveColor statusColor;
 
         public RenamePage() : base("ren_title", "ren_sub")
         {
             drop = new DropZone(() => L.T("ren_drop"), () => L.T("ren_drop_sub")) { Glyph = "", Tips = new[] { "tip_ren_folder", "tip_ren_undo", "tip_palette" } };
             drop.Click += (s, e) => Browse();
-            mode = new Segments(() => L.T("ren_m_number"), () => L.T("ren_m_replace"), () => L.T("ren_m_add"), () => L.T("ren_m_case")) { FontSize = 8.75f };
+            mode = new Segments(() => L.T("ren_m_number"), () => L.T("ren_m_replace"), () => L.T("ren_m_add"), () => L.T("ren_m_case"), () => L.T("ren_m_info")) { FontSize = 8.75f };
             int m0; int.TryParse(Settings.Get("RenameMode", "0"), out m0);
-            mode.SetSilently(Math.Max(0, Math.Min(3, m0)));
+            mode.SetSilently(Math.Max(0, Math.Min(4, m0)));
+            // date taken / song info: what to use, and how the name looks
+            infoKind = new Segments(() => L.T("ren_k_date"), () => L.T("ren_k_song")) { FontSize = 9f };
+            infoKind.Glyphs = new[] { Ico.Clock, Ico.Music };
+            infoStyle = new Segments(() => L.T(infoKind.SelectedIndex == 0 ? "ren_s_date" : "ren_s_artist"), () => L.T(infoKind.SelectedIndex == 0 ? "ren_s_datetime" : "ren_s_track"), () => L.T(infoKind.SelectedIndex == 0 ? "ren_s_datename" : "ren_s_title")) { FontSize = 8.75f };
+            int k0, s0; int.TryParse(Settings.Get("RenameInfo", "0"), out k0); int.TryParse(Settings.Get("RenameInfoStyle", "0"), out s0);
+            infoKind.SetSilently(Math.Max(0, Math.Min(1, k0))); infoStyle.SetSilently(Math.Max(0, Math.Min(2, s0)));
+            infoKind.SelectedChanged += (s, e) => { Settings.Set("RenameInfo", infoKind.SelectedIndex.ToString()); infoStyle.Invalidate(); status = null; Preview(); };
+            infoStyle.SelectedChanged += (s, e) => { Settings.Set("RenameInfoStyle", infoStyle.SelectedIndex.ToString()); status = null; Preview(); };
             mode.FadeTarget = this;
             mode.FadeArea = () => new Rectangle(optCard.X, mode.Bottom + Theme.S(4), optCard.Width, Math.Max(0, optCard.Bottom - mode.Bottom - Theme.S(80)));
-            mode.SelectedChanged += (s, e) => { Settings.Set("RenameMode", mode.SelectedIndex.ToString()); status = null; ShowFields(); Preview(); };
+            mode.SelectedChanged += (s, e) => { Settings.Set("RenameMode", mode.SelectedIndex.ToString()); status = null; ShowFields(); ReadFacts(); Preview(); };
             order = new Segments(() => L.T("ren_by_name"), () => L.T("ren_by_date")) { FontSize = 8.75f };
             order.SelectedChanged += (s, e) => { Sort(); Preview(); };
             letters = new Segments(() => "abc", () => "ABC", () => "Abc") { FontSize = 9f };
@@ -56,7 +65,7 @@ namespace FileConverter
             bUndo = new Btn(() => L.T("ren_undo"), "", BtnKind.Ghost) { FontSize = 9f };
             bUndo.Click += (s, e) => Undo();
             list = new RenameList(this);
-            Controls.AddRange(new Control[] { drop, mode, order, letters, fName, fStart, fFind, fReplace, fBefore, fAfter, bAdd, bClear, bRename, bUndo, list });
+            Controls.AddRange(new Control[] { drop, mode, order, letters, infoKind, infoStyle, fName, fStart, fFind, fReplace, fBefore, fAfter, bAdd, bClear, bRename, bUndo, list });
             EnableDrop(drop, list);
             ShowState();
         }
@@ -88,6 +97,55 @@ namespace FileConverter
             }
             Sort(); status = null; undo = null;
             ShowState();
+            ReadFacts();
+        }
+
+        /// "Date & tags": reads every file's date taken / song tags in the background, then shows the new names.
+        void ReadFacts()
+        {
+            if (mode.SelectedIndex != 4 || reading) return;
+            List<string> todo = new List<string>();
+            foreach (string f in files) if (FileFacts.Cached(f) == null) todo.Add(f);
+            if (todo.Count == 0) return;
+            reading = true; Preview();
+            System.Threading.Thread t = new System.Threading.Thread(() =>
+            {
+                foreach (string f in todo) { try { FileFacts.Read(f); } catch { } }
+                Post(() => { reading = false; Preview(); ReadFacts(); });
+            }) { IsBackground = true };
+            t.Start();
+        }
+
+        static string Clean(string s)
+        {
+            foreach (char c in Path.GetInvalidFileNameChars()) s = s.Replace(c.ToString(), c == ':' || c == '/' || c == '\\' ? "-" : "");
+            return s.Trim().TrimEnd('.');
+        }
+
+        /// Date & tags: for files sharing a date, their place among them (1, 2, 3...), 0 when the date is unique.
+        Dictionary<string, int> dateRank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        int dateDigits = 1;
+        void RankDates()
+        {
+            dateRank.Clear();
+            Dictionary<string, List<KeyValuePair<DateTime, string>>> byKey = new Dictionary<string, List<KeyValuePair<DateTime, string>>>();
+            bool withTime = infoStyle.SelectedIndex == 1;
+            foreach (string f in files)
+            {
+                Facts ft = FileFacts.Cached(f); if (ft == null) continue;
+                string key = ft.Taken.ToString(withTime ? "yyyy-MM-dd HH.mm.ss" : "yyyy-MM-dd", CultureInfo.InvariantCulture);
+                List<KeyValuePair<DateTime, string>> l;
+                if (!byKey.TryGetValue(key, out l)) { l = new List<KeyValuePair<DateTime, string>>(); byKey[key] = l; }
+                l.Add(new KeyValuePair<DateTime, string>(ft.Taken, f));
+            }
+            dateDigits = 1;
+            foreach (List<KeyValuePair<DateTime, string>> l in byKey.Values)
+            {
+                if (l.Count < 2) continue;
+                l.Sort((a, b) => a.Key != b.Key ? a.Key.CompareTo(b.Key) : NaturalCompare(Path.GetFileName(a.Value), Path.GetFileName(b.Value)));
+                for (int i = 0; i < l.Count; i++) dateRank[l[i].Value] = i + 1;
+                dateDigits = Math.Max(dateDigits, l.Count.ToString(CultureInfo.InvariantCulture).Length);
+            }
         }
 
         void Add(string f)
@@ -161,6 +219,31 @@ namespace FileConverter
                     else if (letters.SelectedIndex == 1) name = name.ToUpper(CultureInfo.CurrentCulture);
                     else name = CultureInfo.CurrentCulture.TextInfo.ToTitleCase(name.ToLower(CultureInfo.CurrentCulture));
                     break;
+                case 4:
+                    {
+                        Facts f = FileFacts.Cached(path);
+                        if (f == null) break;   // still reading
+                        int st = infoStyle.SelectedIndex;
+                        if (infoKind.SelectedIndex == 0)
+                        {
+                            // 2026-03-14 · 2026-03-14 18.42.05 · 2026-03-14 IMG_2231 (files sharing a date get 1, 2, 3...)
+                            string d = f.Taken.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                            if (st == 1) d += " " + f.Taken.ToString("HH.mm.ss", CultureInfo.InvariantCulture);
+                            int rank;
+                            if (st == 2) name = d + " " + name;
+                            else name = dateRank.TryGetValue(path, out rank) ? d + " " + rank.ToString(CultureInfo.InvariantCulture).PadLeft(Math.Max(2, dateDigits), '0') : d;
+                        }
+                        else
+                        {
+                            // Artist - Title · 03. Title · Title (files without tags keep their name)
+                            if (f.Title.Length == 0) break;
+                            if (st == 0) name = f.Artist.Length > 0 ? f.Artist + " - " + f.Title : f.Title;
+                            else if (st == 1) name = f.Track > 0 ? f.Track.ToString("00", CultureInfo.InvariantCulture) + ". " + f.Title : f.Title;
+                            else name = f.Title;
+                        }
+                        name = Clean(name);
+                        break;
+                    }
             }
             return name.Trim() + ext;
         }
@@ -182,6 +265,7 @@ namespace FileConverter
         void Preview()
         {
             newNames.Clear(); problems.Clear();
+            if (mode.SelectedIndex == 4 && infoKind.SelectedIndex == 0) RankDates();
             HashSet<string> taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             HashSet<string> mine = new HashSet<string>(files, StringComparer.OrdinalIgnoreCase);
             char[] bad = Path.GetInvalidFileNameChars();
@@ -302,6 +386,7 @@ namespace FileConverter
             fFind.Visible = fReplace.Visible = has && m == 1;
             fBefore.Visible = fAfter.Visible = has && m == 2;
             letters.Visible = has && m == 3;
+            infoKind.Visible = infoStyle.Visible = has && m == 4;
             DoLayout();
         }
 
@@ -331,6 +416,14 @@ namespace FileConverter
             {
                 Place(letters, new Rectangle(x, y + Theme.S(24), w, Theme.S(36)));
                 l2 = l3 = Rectangle.Empty;
+            }
+            else if (m == 4)
+            {
+                Place(infoKind, new Rectangle(x, y + Theme.S(24), w, Theme.S(36)));
+                y += Theme.S(74);
+                l2 = new Rectangle(x, y, w, Theme.S(20));
+                Place(infoStyle, new Rectangle(x, y + Theme.S(24), w, Theme.S(36)));
+                l3 = Rectangle.Empty;
             }
             else
             {
@@ -367,14 +460,16 @@ namespace FileConverter
             Font lf = Theme.F(9f, FontStyle.Bold);
             Label(g, L.T("ren_how"), lf, Theme.InkSoft, modeLbl);
             int m = mode.SelectedIndex;
-            string[] k1 = { "ren_name", "ren_find", "ren_before", "ren_letters" };
-            string[] k2 = { "ren_start", "ren_replace", "ren_after", null };
+            string[] k1 = { "ren_name", "ren_find", "ren_before", "ren_letters", "ren_info_use" };
+            string[] k2 = { "ren_start", "ren_replace", "ren_after", null, "ren_info_look" };
             Label(g, L.T(k1[m]), lf, Theme.InkSoft, l1);
             if (k2[m] != null && !l2.IsEmpty) Label(g, L.T(k2[m]), lf, Theme.InkSoft, l2);
             if (m == 0 && !l3.IsEmpty) Label(g, L.T("ren_order"), lf, Theme.InkSoft, l3);
             int changes = ChangeCount, probs = 0; foreach (int pr in problems) if (pr >= 2) probs++;
             Label(g, L.T("ren_count", files.Count, changes), Theme.F(10.5f, FontStyle.Bold), Theme.Ink, countR);
             string st = status; Color sc = statusColor;
+            if (st == null && reading) { st = L.T("ren_reading"); sc = Theme.InkSoft; }
+            if (st == null && m == 4 && infoKind.SelectedIndex == 1 && changes == 0 && files.Count > 0) { st = L.T("ren_no_tags"); sc = Theme.InkSoft; }
             if (st == null && probs > 0) { st = L.T("ren_problems", probs); sc = Theme.Error; }
             if (st == null && files.Count > 0) { st = L.T("ren_hint"); sc = Theme.InkFaint; }
             if (st != null) Label(g, st, Theme.F(9f), sc, statusR, Align.Start, true, true);
@@ -387,6 +482,7 @@ namespace FileConverter
         {
             readonly RenamePage page;
             public RenameList(RenamePage p) { page = p; RowHeight = 50; }
+            protected override string RowText(int i) { string a = System.IO.Path.GetFileName(page.files[i]); return i < page.newNames.Count ? a + " → " + page.newNames[i] : a; }
             public override int Count { get { return page.files.Count; } }
 
             protected override void DrawRow(Graphics g, int i, Rectangle r, bool hover)

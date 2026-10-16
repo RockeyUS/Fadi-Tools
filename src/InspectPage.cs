@@ -96,6 +96,7 @@ namespace FileConverter
         int hoverCopy = -1;
         public event Action<string> Copied;
         public DetailsView() { RowHeight = 40; }
+        protected override string RowText(int i) { string[] r = Rows[i]; return r.Length > 1 ? r[0] + ": " + r[1] : r[0]; }
         public override int Count { get { return Rows.Count; } }
         Rectangle CopyRect(Rectangle r)
         {

@@ -30,6 +30,7 @@ namespace FileConverter
         public event Action<FileItem> Opened;
 
         public FileList() { RowHeight = 64; }
+        protected override string RowText(int i) { FileItem f = Items[i]; return f.Message.Length > 0 ? f.Name + ", " + f.Message : f.Name; }
         /// Big rows with a picture of each file instead of an icon.
         public bool Previews { get { return previews; } set { previews = value; RowHeight = value ? 112 : 64; ClampScroll(); Invalidate(); } }
         bool previews;
@@ -77,6 +78,7 @@ namespace FileConverter
         protected override void DrawRow(Graphics g, int i, Rectangle b, bool hover)
         {
             FileItem it = Items[i];
+            Rectangle whole = b;   // the full row (b becomes the text area beside a preview)
             Theme.Smooth(g);
             if (hover) Theme.FillRound(g, new Rectangle(b.X + Theme.S(4), b.Y + Theme.S(2), b.Width - Theme.S(8), b.Height - Theme.S(4)), Theme.S(10), Theme.Hover);
 
@@ -155,7 +157,7 @@ namespace FileConverter
                 Theme.Glyph(g, Ico.Close, 8.5f, Theme.InkSoft, xr);
             }
             if (i < Items.Count - 1)
-                using (Pen lp = new Pen(Theme.Line)) g.DrawLine(lp, b.X + Theme.S(16), b.Bottom - 1, b.Right - Theme.S(16), b.Bottom - 1);
+                using (Pen lp = new Pen(Theme.Line)) g.DrawLine(lp, whole.X + Theme.S(16), whole.Bottom - 1, whole.Right - Theme.S(16), whole.Bottom - 1);
         }
 
         static Rectangle Mir(Rectangle r, Rectangle b)
@@ -169,7 +171,17 @@ namespace FileConverter
     public class FolderButton : UiControl
     {
         public event EventHandler Picked;
-        public FolderButton() { Cursor = Cursors.Hand; }
+        public FolderButton() { Cursor = Cursors.Hand; TabStop = true; }
+        protected override string AccName { get { return L.T("change") + ": " + (Settings.OutputIsDefault ? L.T("downloads") : Settings.OutputDir); } }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.PushButton; } }
+        protected override string AccAction { get { return L.T("acc_press"); } }
+        protected override void AccDo() { OnClick(EventArgs.Empty); }
+        protected override bool IsInputKey(Keys k) { return k == Keys.Enter || k == Keys.Space || base.IsInputKey(k); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { e.Handled = true; OnClick(EventArgs.Empty); return; }
+            base.OnKeyDown(e);
+        }
 
         protected override void OnClick(EventArgs e)
         {
@@ -204,6 +216,7 @@ namespace FileConverter
             Theme.Text(g, dir, Theme.F(8.25f), Theme.InkSoft, Theme.Mirror(new Rectangle(tx, Height / 2, Width - tx - cw, Height / 2 - Theme.S(6)), Width), Align.Start, false, false, true);
             Rectangle ch = Theme.Mirror(new Rectangle(Width - cw, 0, cw - Theme.S(10), Height), Width);
             Theme.Text(g, L.T("change"), Theme.F(9f, FontStyle.Bold), Theme.Mix(Theme.InkSoft, Theme.Ink, hot), ch, Align.End);
+            PaintFocus(g, r, Theme.S(11));
         }
     }
 
@@ -214,6 +227,8 @@ namespace FileConverter
         public string Glyph = Ico.Info;
         public int Kind; // 0 info, 1 warn, 2 error, 3 success
         public Notice(Func<string> msg) { Message = msg; }
+        protected override string AccName { get { return Message != null ? Message() : ""; } }
+        protected override AccessibleRole AccRole { get { return AccessibleRole.StaticText; } }
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
