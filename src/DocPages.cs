@@ -47,7 +47,7 @@ namespace FileConverter
             return named;
         }
 
-        const string Script = @"param([string]$In, [string]$Out, [int]$MaxPx = 2400)
+        const string Script = @"param([string]$In, [string]$Out, [int]$MaxPx = 2400, [int]$Only = -1, [double]$MaxK = 2.0)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
@@ -63,9 +63,10 @@ $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($In)) ([Windo
 $doc = Await ([Windows.Data.Pdf.PdfDocument]::LoadFromFileAsync($file)) ([Windows.Data.Pdf.PdfDocument])
 [Console]::Out.WriteLine('PAGES ' + $doc.PageCount)
 for ($i = 0; $i -lt $doc.PageCount; $i++) {
+  if ($Only -ge 0 -and $i -ne $Only) { continue }
   $page = $doc.GetPage([uint32]$i)
   $w = $page.Size.Width; $h = $page.Size.Height
-  $k = [Math]::Min(2.0, $MaxPx / [Math]::Max($w, $h))
+  $k = [Math]::Min($MaxK, $MaxPx / [Math]::Max($w, $h))
   $opt = New-Object Windows.Data.Pdf.PdfPageRenderOptions
   $opt.DestinationWidth = [uint32][Math]::Round($w * $k)
   $opt.DestinationHeight = [uint32][Math]::Round($h * $k)
@@ -85,17 +86,32 @@ for ($i = 0; $i -lt $doc.PageCount; $i++) {
         public static List<string> RenderTo(string pdf, string dir, int maxPx, Action<int, int> progress, Func<bool> cancelled)
         {
             Directory.CreateDirectory(dir);
-            return IsWindows ? WindowsPdf(pdf, dir, progress, cancelled, maxPx) : Poppler(pdf, dir, maxPx, progress);
+            // (sharp enough for reading the text: no 2× limit on small pages)
+            return IsWindows ? WindowsPdf(pdf, dir, progress, cancelled, maxPx, -1, 6.0) : Poppler(pdf, dir, maxPx, progress);
         }
 
-        static List<string> WindowsPdf(string pdf, string dir, Action<int, int> progress, Func<bool> cancelled, int maxPx = 2400)
+        /// One page of a PDF as a sharp picture (longest side about maxPx) — what copy text reads.
+        /// Returns null when it couldn't be made.
+        public static string RenderPage(string pdf, int index, int maxPx, string dir)
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                List<string> got = IsWindows ? WindowsPdf(pdf, dir, null, null, maxPx, index, 6.0) : null;
+                return got != null && got.Count == 1 && File.Exists(got[0]) ? got[0] : null;
+            }
+            catch { return null; }
+        }
+
+        static List<string> WindowsPdf(string pdf, string dir, Action<int, int> progress, Func<bool> cancelled, int maxPx = 2400, int only = -1, double maxK = 2.0)
         {
             string ps1 = Path.Combine(dir, "render.ps1");
             File.WriteAllText(ps1, Script, new UTF8Encoding(true));
             string ps = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
             int total = 0;
             StringBuilder err = new StringBuilder();
-            int code = Tools.Stream(ps, "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + Tools.Quote(ps1) + " -In " + Tools.Quote(pdf) + " -Out " + Tools.Quote(dir) + " -MaxPx " + maxPx,
+            int code = Tools.Stream(ps, "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + Tools.Quote(ps1) + " -In " + Tools.Quote(pdf) + " -Out " + Tools.Quote(dir) + " -MaxPx " + maxPx +
+                " -Only " + only + " -MaxK " + maxK.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 line =>
                 {
                     Match m = Regex.Match(line ?? "", "^PAGES (\\d+)");
@@ -107,7 +123,7 @@ for ($i = 0; $i -lt $doc.PageCount; $i++) {
             try { File.Delete(ps1); } catch { }
             List<string> pages = new List<string>(Directory.GetFiles(dir, "page*.png"));
             pages.Sort(StringComparer.OrdinalIgnoreCase);
-            if (pages.Count == 0 && code != -2)
+            if (pages.Count == 0 && code != -2 && only < 0)
             {
                 // older Windows without the PDF engine: LibreOffice can still show the first page
                 if (Tools.Soffice != null)

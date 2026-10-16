@@ -95,6 +95,8 @@ namespace FileConverter
             Shown += (s, e) =>
             {
                 if (SelfTest.Active) return;   // a test run: no tour, questions or update check
+                // the icon by the clock, for as long as the app is open
+                if (Settings.Get("KeepInTray", "1") == "1") Notifier.ShowResident(this, true);
                 BeginInvoke((Action)(() =>
                 {
                     bool tour = false;
@@ -214,7 +216,7 @@ namespace FileConverter
                 {
                     Go(pages.IndexOf(studio));
                     if (video) { studio.Show(studio.Videos); studio.Videos.OpenProject(f, true); }
-                    else { studio.Show(studio.Photos); studio.Photos.RestoreEdit(f); }
+                    else studio.RestorePhotoEdit(f);
                     return;   // one at a time: the other one is offered next time
                 }
                 Recovery.Clear(f);
@@ -277,7 +279,7 @@ namespace FileConverter
             int i = PageIndexOf(c);
             if (i < 0) return;
             Go(i);
-            if (pages[i] == studio && (c == studio.Videos || c == studio.Photos || c == studio.Pdf)) studio.Show((Page)c);
+            if (pages[i] == studio) studio.ShowPart(c);
             if (pages[i] == inspector && (c == inspector.Inspect || c == inspector.Re)) inspector.Show((Page)c);
         }
 
@@ -459,7 +461,7 @@ namespace FileConverter
             add("pal_discord", "\uE73F", "discord 20 mb compress ضغط ديسكورد", () => { Go(pages.IndexOf(compress)); compress.UsePreset("Discord"); compress.Browse2(); });
             add("pal_email", "\uE73F", "email mail gmail outlook 25 mb attach بريد ايميل", () => { Go(pages.IndexOf(compress)); compress.UsePreset("email"); compress.Browse2(); });
             add("pal_avatar", "\uE73F", "avatar profile picture photo pfp github 1 mb صورة شخصية بروفايل", () => { Go(pages.IndexOf(compress)); compress.UsePreset("avatar"); compress.Browse2(); });
-            add("pal_studio_open", Ico.Photo, "edit photo video open studio تعديل صورة فيديو", () => { Go(pages.IndexOf(studio)); studio.Photos.PickFile(); });
+            add("pal_studio_open", Ico.Photo, "edit photo video open studio تعديل صورة فيديو", () => { Go(pages.IndexOf(studio)); studio.PickPhoto(); });
             add("pal_proj_open", "\uE7C4", "open video project capcut timeline فتح مشروع فيديو", () => { string f = TrimPage.PickProject(this); if (f != null) { Go(pages.IndexOf(studio)); studio.Show(studio.Videos); studio.Videos.OpenProject(f, false); } });
             foreach (string rp in TrimPage.RecentProjects)
             {

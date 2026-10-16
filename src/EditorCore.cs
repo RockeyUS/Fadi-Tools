@@ -18,6 +18,11 @@ namespace FileConverter
         public float SizePx = 64;        // text: font size · photo: its longest side
         /// Photo: how much it's been stretched wider (>1) or taller (<1) than its own shape, by the side handles.
         public float Stretch = 1f;
+        /// Photo: shown mirrored (left ↔ right).
+        public bool FlipX;
+        /// Photo: its own light / contrast / color / warmth (null = as it is). Replaced, never changed in place
+        /// (undo keeps the old one).
+        public Adjust PicAdj;
         public Color Color = Color.White;
         public bool Bold = true, Italic, Outline = true, Shadow = true, Box;
         public Color BoxColor = Color.Empty;       // empty = automatic (dark behind light text, light behind dark text)
@@ -41,7 +46,7 @@ namespace FileConverter
 
         GraphicsPath path;
         RectangleF glyphs;
-        Bitmap cache; float cacheScale = -1, cacheSize; PointF cacheOrigin;
+        Bitmap cache; float cacheScale = -1, cacheSize, cacheStretch = 1; PointF cacheOrigin;
         bool live;   // size being dragged: the last picture is stretched until the drag settles
 
         public TextLayer CloneStyle()
@@ -172,6 +177,13 @@ namespace FileConverter
             return RectangleF.FromLTRB(x0, y0, x1, y1);
         }
 
+        /// A photo's box for a size and stretch (the same sums as LocalPath).
+        SizeF BoxFor(float size, float stretch)
+        {
+            float big = Math.Max(1, size), ar = Math.Max(1, Picture.Width) / (float)Math.Max(1, Picture.Height) * Math.Max(0.02f, stretch);
+            return ar >= 1 ? new SizeF(big, big / ar) : new SizeF(big * ar, big);
+        }
+
         /// Photo: its width and height on the output (before turning).
         public SizeF PictureSize
         {
@@ -237,6 +249,8 @@ namespace FileConverter
                     using (ImageAttributes ia = new ImageAttributes())
                     {
                         ia.SetWrapMode(WrapMode.TileFlipXY);   // no grey seam at the edges
+                        if (PicAdj != null && !PicAdj.None) ia.SetColorMatrix(new ColorMatrix(PicAdj.Matrix()));
+                        if (FlipX) g.ScaleTransform(-1, 1);
                         g.DrawImage(Picture, Rectangle.Round(glyphs), 0, 0, Picture.Width, Picture.Height, GraphicsUnit.Pixel, ia);
                     }
                 }
@@ -320,20 +334,28 @@ namespace FileConverter
         {
             if (!Visible) return;
             GraphicsState st = g.Save();
-            float k = cacheSize > 0 ? SizePx / cacheSize : 1;
-            if (live && cache != null && Math.Abs(cacheScale - scale) <= 0.0005f && k > 0.4f && k < 2.5f)
+            float k = cacheSize > 0 ? SizePx / cacheSize : 1, kx = k, ky = k;
+            if (IsPicture && cacheSize > 0 && Math.Abs(Angle) < 0.01f)
+            {
+                // a photo stretched from a side: wider or taller on its own, as the mouse moves
+                SizeF was = BoxFor(cacheSize, cacheStretch), now = BoxFor(SizePx, Stretch);
+                kx = now.Width / Math.Max(0.01f, was.Width); ky = now.Height / Math.Max(0.01f, was.Height);
+            }
+            if (live && cache != null && Math.Abs(cacheScale - scale) <= 0.0005f && kx > 0.4f && kx < 2.5f && ky > 0.4f && ky < 2.5f)
             {
                 // being resized: stretch the last picture (smooth), it's drawn sharp again when the drag settles
                 g.InterpolationMode = InterpolationMode.Bilinear;
                 g.PixelOffsetMode = PixelOffsetMode.Half;
-                Blit(g, cache, new RectangleF(ox + (Pos.X + cacheOrigin.X * k) * scale, oy + (Pos.Y + cacheOrigin.Y * k) * scale, cache.Width * k, cache.Height * k), Opacity);
+                Blit(g, cache, new RectangleF(ox + (Pos.X + cacheOrigin.X * kx) * scale, oy + (Pos.Y + cacheOrigin.Y * ky) * scale, cache.Width * kx, cache.Height * ky), Opacity);
                 g.Restore(st);
                 return;
             }
-            if (cache == null || Math.Abs(cacheScale - scale) > 0.0005f || Math.Abs(cacheSize - SizePx) > 0.001f)
+            if (cache == null || Math.Abs(cacheScale - scale) > 0.0005f || Math.Abs(cacheSize - SizePx) > 0.001f || Math.Abs(cacheStretch - Stretch) > 0.0001f)
             {
+                bool wasLive = live;
                 DropCache();
-                try { cache = RenderAt(scale, out cacheOrigin); cacheScale = scale; cacheSize = SizePx; } catch { g.Restore(st); return; }
+                try { cache = RenderAt(scale, out cacheOrigin); cacheScale = scale; cacheSize = SizePx; cacheStretch = Stretch; } catch { g.Restore(st); return; }
+                live = wasLive;   // (a big jump mid-drag: drawn again, and the drag carries on from this picture)
             }
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
             g.PixelOffsetMode = PixelOffsetMode.Half;
@@ -409,6 +431,36 @@ namespace FileConverter
             }
         }
 
+        Bitmap quickBase, quickFrom, quickAdj; Adjust quickFor;
+        /// While a slider moves: the adjustments on a smaller copy (fast enough to follow the mouse);
+        /// Shown has the full-quality picture once the slider stops.
+        public Bitmap QuickShown
+        {
+            get
+            {
+                if (Video || Preview == null || Adj.None) return Preview;
+                const int max = 1000;
+                if (quickBase == null || quickFrom != Preview)
+                {
+                    DropQuick();
+                    quickFrom = Preview;
+                    float k = Math.Min(1f, Math.Min(max / (float)Preview.Width, max / (float)Preview.Height));
+                    quickBase = k >= 0.999f ? Preview : Scale(Preview, Math.Max(1, (int)(Preview.Width * k)), Math.Max(1, (int)(Preview.Height * k)));
+                }
+                if (quickAdj != null && Adj.Same(quickFor)) return quickAdj;
+                Bitmap old = quickAdj;
+                quickAdj = Adj.Apply(quickBase); quickFor = Adj.Clone();
+                if (old != null) old.Dispose();
+                return quickAdj;
+            }
+        }
+        void DropQuick()
+        {
+            if (quickAdj != null) { quickAdj.Dispose(); quickAdj = null; }
+            if (quickBase != null && quickBase != quickFrom) quickBase.Dispose();
+            quickBase = null; quickFrom = null; quickFor = null;
+        }
+
         public TextLayer Current { get { return Selected >= 0 && Selected < Layers.Count ? Layers[Selected] : null; } }
         public int ShortSide { get { return W <= 0 ? 1000 : Math.Min(W, H); } }
         public bool Active { get { return W > 0; } }
@@ -477,6 +529,7 @@ namespace FileConverter
         void DisposeImages()
         {
             if (adjPreview != null) { adjPreview.Dispose(); adjPreview = null; adjBase = null; }
+            DropQuick();
             HashSet<Bitmap> all = new HashSet<Bitmap>();
             foreach (Bitmap b in new[] { Preview, Work, Original, Source }) if (b != null) all.Add(b);
             foreach (Bitmap b in all) b.Dispose();

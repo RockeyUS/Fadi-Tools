@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 
 namespace FileConverter
@@ -25,6 +26,9 @@ namespace FileConverter
             Controls.Add(tabs);
             // "Open in reverse engineer" from the details
             Inspect.SendToRe += f => { Show(Re); Re.AcceptFiles(new[] { f }); };
+            // both tabs look at the same file: one opened in either is ready in the other
+            Inspect.FileShown += f => { pendingInspect = f; if (!SamePath(Re.Target, f)) Re.AcceptFiles(new[] { f }); };
+            Re.TargetChanged += f => { if (File.Exists(f) && !SamePath(Inspect.ShownFile, f) && !SamePath(pendingInspect, f)) { pendingInspect = f; Inspect.AcceptFiles(new[] { f }); } };
         }
 
         public void Show(Page p)
@@ -39,6 +43,8 @@ namespace FileConverter
         }
 
         public override bool Busy { get { return Inspect.Busy || Re.Busy; } }
+        string pendingInspect;
+        static bool SamePath(string a, string b) { return a != null && b != null && string.Equals(a.Trim().Trim('"').TrimEnd('\\'), b.Trim().Trim('"').TrimEnd('\\'), StringComparison.OrdinalIgnoreCase); }
 
         public override void DoLayout()
         {
@@ -62,7 +68,10 @@ namespace FileConverter
         public override void AcceptFiles(string[] paths)
         {
             if (paths == null || paths.Length == 0) return;
-            if (active == Re) Re.AcceptFiles(paths); else Inspect.AcceptFiles(paths);
+            // a file goes to both tabs (a folder only to Reverse engineer, which can look at app folders)
+            if (Directory.Exists(paths[0])) { Show(Re); Re.AcceptFiles(paths); return; }
+            Inspect.AcceptFiles(paths);
+            if (!SamePath(Re.Target, paths[0])) Re.AcceptFiles(paths);
         }
 
         protected override void OnPaint(PaintEventArgs e) { PaintBg(e.Graphics); }

@@ -635,6 +635,10 @@ namespace FileConverter
         public string Glyph;
         public bool ForceLtr;
         bool focused;
+        /// An × at the end of the box that empties it (shown while there's text).
+        public bool Clearable;
+        public event Action Cleared;
+        float xShown, xHot; bool overX;
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, string l);
 
@@ -647,6 +651,7 @@ namespace FileConverter
             if (placeholder != null) Box.AccessibleName = placeholder();
             Controls.Add(Box);
             Box.GotFocus += (s, e) => { focused = true; Invalidate(); };
+            Box.TextChanged += (s, e) => { if (Clearable) Animator.Start(this); };
             Box.LostFocus += (s, e) => { focused = false; Invalidate(); };
             // the direction is set before Windows creates the box: changing it while the box is being created
             // makes Windows rebuild it mid-way, which fails ("Error creating window handle") — Arabic search window
@@ -680,15 +685,46 @@ namespace FileConverter
             Invalidate();
         }
 
-        protected override void OnClick(EventArgs e) { Box.Focus(); base.OnClick(e); }
+        protected override void OnClick(EventArgs e) { if (!overX) Box.Focus(); base.OnClick(e); }
         protected override void OnResize(EventArgs e) { base.OnResize(e); LayoutBox(); }
+
+        bool Rtl { get { return Theme.RTL && !ForceLtr; } }
+        Rectangle XRect { get { int s = Theme.S(26); return new Rectangle(Rtl ? Theme.S(10) : Width - Theme.S(10) - s, (Height - s) / 2, s, s); } }
+        public override bool Step()
+        {
+            bool more = base.Step();
+            if (Fx.Ease(ref xShown, Clearable && Box.Text.Length > 0 ? 1 : 0, 0.3f)) more = true;
+            if (Fx.Ease(ref xHot, overX ? 1 : 0, 0.3f)) more = true;
+            Invalidate();
+            return more;
+        }
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            bool o = Clearable && Box.Text.Length > 0 && XRect.Contains(e.Location);
+            if (o != overX) { overX = o; Cursor = o ? Cursors.Hand : Cursors.IBeam; Animator.Start(this); }
+            base.OnMouseMove(e);
+        }
+        protected override void OnMouseLeave(EventArgs e) { if (overX) { overX = false; Animator.Start(this); } base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (overX && e.Button == MouseButtons.Left)
+            {
+                // × : empty the box (and whatever was found for it)
+                Box.Text = "";
+                Box.Focus();
+                if (Cleared != null) Cleared();
+                overX = false; Animator.Start(this);
+                return;
+            }
+            base.OnMouseDown(e);
+        }
 
         void LayoutBox()
         {
-            int pad = Theme.S(14), gw = string.IsNullOrEmpty(Glyph) ? 0 : Theme.S(26);
+            int pad = Theme.S(14), gw = string.IsNullOrEmpty(Glyph) ? 0 : Theme.S(26), xw = Clearable ? Theme.S(30) : 0;
             int h = Box.PreferredHeight;
-            int x = Theme.RTL && !ForceLtr ? pad : pad + gw;
-            Box.SetBounds(x, (Height - h) / 2, Math.Max(10, Width - pad * 2 - gw), h);
+            int x = Rtl ? pad + xw : pad + gw;
+            Box.SetBounds(x, (Height - h) / 2, Math.Max(10, Width - pad * 2 - gw - xw), h);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -703,6 +739,15 @@ namespace FileConverter
             {
                 int gx = Theme.RTL && !ForceLtr ? Width - Theme.S(12) - Theme.S(20) : Theme.S(12);
                 Theme.Glyph(g, Glyph, 11f, Theme.InkFaint, new Rectangle(gx, 0, Theme.S(20), Height));
+            }
+            if (Clearable && xShown > 0.02f)
+            {
+                // the × grows in when there's text, and gets a soft circle under the mouse
+                RectangleF xr = XRect;
+                float k = 0.6f + 0.4f * xShown;
+                RectangleF xs = new RectangleF(xr.X + xr.Width * (1 - k) / 2, xr.Y + xr.Height * (1 - k) / 2, xr.Width * k, xr.Height * k);
+                if (xHot > 0) Theme.FillRound(g, xs, xs.Width / 2, Color.FromArgb((int)(255 * xHot * xShown), Theme.Hover));
+                Theme.Glyph(g, Ico.Close, 7.5f, Color.FromArgb((int)(255 * xShown), Theme.Mix(Theme.InkFaint, Theme.Ink, xHot)), Rectangle.Round(xs));
             }
         }
     }
@@ -1118,7 +1163,9 @@ namespace FileConverter
         }
 
         /// Top of the content area below the title (moves up when a long page is scrolled).
-        protected int Top0 { get { return Theme.S(96) - ScrollY; } }
+        protected int Top0 { get { return Theme.S(96) + TopExtra - ScrollY; } }
+        /// Room taken above the content by something the page sits under (the Studio's file tabs).
+        public int TopExtra;
         /// How far a long page (Settings) has been scrolled down.
         protected int ScrollY;
         /// Room kept free at the end of the title row (for the tabs of a page that holds several tools).

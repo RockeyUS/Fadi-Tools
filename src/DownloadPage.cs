@@ -255,9 +255,10 @@ namespace FileConverter
 
         public DownloadPage() : base("dl_title", "dl_sub")
         {
-            url = new TextField(() => L.T("dl_paste_hint"), Ico.Link) { ForceLtr = true };
+            url = new TextField(() => L.T("dl_paste_hint"), Ico.Link) { ForceLtr = true, Clearable = true };
+            url.Cleared += ClearLink;
             url.Box.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Fetch(); } };
-            url.Box.TextChanged += (s, e) => { string t = url.Box.Text.Trim(); if (t.Length > 12 && t != lastFetched && !fetching && t.StartsWith("http") && YtDlp.LooksLikeUrl(t)) Fetch(); };
+            url.Box.TextChanged += (s, e) => { string t = url.Box.Text.Trim(); if (t.Length == 0) { ClearLink(); return; } if (t.Length > 12 && t != lastFetched && !fetching && t.StartsWith("http") && YtDlp.LooksLikeUrl(t)) Fetch(); };
             btnPaste = new Btn(() => L.T("paste"), Ico.Paste, BtnKind.Secondary);
             btnPaste.Click += (s, e) => { try { if (Clipboard.ContainsText()) { url.Box.Text = Clipboard.GetText().Trim(); Fetch(); } } catch { } };
             btnGet = new Btn(() => L.T("fetch"), Ico.Search, BtnKind.Primary);
@@ -537,6 +538,18 @@ namespace FileConverter
         {
             url.Box.Text = u.Trim();
             Fetch();
+        }
+
+        /// The link was removed (× or deleted): the video found for it goes too.
+        void ClearLink()
+        {
+            if (info == null && !fetching && statusText.Length == 0 && lastFetched.Length == 0) return;
+            fetchToken++;                       // a fetch still on its way is dropped
+            fetching = false; busy.SetIndeterminate(false);
+            info = null; thumb = null; thumbView.Image = null;
+            lastFetched = "";
+            SetStatus("", Theme.InkSoft);
+            UpdateView();
         }
 
         // ------------------------------------------------------------------ fetch details

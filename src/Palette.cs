@@ -276,27 +276,61 @@ namespace FileConverter
 
 namespace FileConverter
 {
-    /// A small floating menu (Claude-style): icon + text rows, optional section titles and dividers.
+    /// A small floating menu (Claude-style): icon + text rows, optional section titles, dividers and shortcuts.
+    /// It grows out of the spot it was opened from and shrinks back when it closes; the row under the mouse
+    /// lights up softly. Arrow keys move, Enter picks, Esc closes.
     public class MenuPopup : Form
     {
-        public class Item { public string Text, Sub, Glyph, Header; public Action Run; public bool Divider, Disabled; }
+        public class Item { public string Text, Sub, Glyph, Header, Shortcut; public Action Run; public bool Divider, Disabled, Danger; }
         readonly List<Item> items;
         readonly MenuRows rows;
+        Rectangle from;
+        Form owner;
+        bool closing;
         [System.Runtime.InteropServices.DllImport("gdi32.dll")] static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
+        static MenuPopup open;
 
+        /// Under (or above) a button.
         public static void Show(Control anchor, List<Item> items, int width = 300)
         {
-            MenuPopup m = new MenuPopup(items);
             Rectangle a = anchor.RectangleToScreen(anchor.ClientRectangle);
-            Rectangle wa = Screen.FromControl(anchor).WorkingArea;
+            Open(anchor, items, width, a, false);
+        }
+
+        /// At the mouse (a right click).
+        public static void ShowAt(Control over, Point screen, List<Item> items, int width = 270)
+        {
+            Open(over, items, width, new Rectangle(screen, new Size(1, 1)), true);
+        }
+
+        static void Open(Control anchor, List<Item> items, int width, Rectangle a, bool atPoint)
+        {
+            if (open != null && !open.IsDisposed) { try { open.Close(); } catch { } }
+            MenuPopup m = new MenuPopup(items);
+            Rectangle wa = Screen.FromPoint(a.Location).WorkingArea;
             int w = Theme.S(width), h = m.rows.ContentHeight + Theme.S(12);
-            h = Math.Min(h, Theme.S(480));
-            int x = Theme.RTL ? a.Right - w : a.X, y = a.Bottom + Theme.S(4);
-            if (y + h > wa.Bottom) y = Math.Max(wa.Top, a.Top - h - Theme.S(4));
+            h = Math.Min(h, Theme.S(520));
+            int x, y;
+            if (atPoint)
+            {
+                x = Theme.RTL ? a.X - w : a.X; y = a.Y;
+                if (x + w > wa.Right) x = a.X - w;
+                if (x < wa.Left) x = a.X;
+                if (y + h > wa.Bottom) y = a.Y - h;
+            }
+            else
+            {
+                x = Theme.RTL ? a.Right - w : a.X; y = a.Bottom + Theme.S(4);
+                if (y + h > wa.Bottom) y = Math.Max(wa.Top, a.Top - h - Theme.S(4));
+            }
             x = Math.Max(wa.Left, Math.Min(wa.Right - w, x));
+            y = Math.Max(wa.Top, Math.Min(wa.Bottom - h, y));
             m.Bounds = new Rectangle(x, y, w, h);
             m.rows.SetBounds(Theme.S(6), Theme.S(6), w - Theme.S(12), h - Theme.S(12));
-            m.Show(anchor.FindForm());
+            m.from = a; m.owner = anchor.FindForm();
+            open = m;
+            IntPtr hh = m.Handle;   // made now, so its picture can be taken before it shows
+            Fx.PopIn(m, m.owner, a, Theme.S(12), 140, () => { if (!m.IsDisposed) { m.Show(m.owner); m.rows.Focus(); } });
         }
 
         MenuPopup(List<Item> items)
@@ -308,10 +342,25 @@ namespace FileConverter
             KeyPreview = true;
             AutoScaleMode = AutoScaleMode.None;
             BackColor = Theme.Card;
+            RightToLeft = Theme.RTL ? RightToLeft.Yes : RightToLeft.No;
             rows = new MenuRows(items);
-            rows.Picked += it => { Close(); Form o = Owner; try { if (o != null && o.IsHandleCreated) o.BeginInvoke(it.Run); else it.Run(); } catch { } };
+            rows.Picked += it =>
+            {
+                Form o = owner;
+                Dismiss(true);
+                try { if (o != null && o.IsHandleCreated) o.BeginInvoke(it.Run); else it.Run(); } catch { }
+            };
             Controls.Add(rows);
-            Deactivate += (s, e) => Close();
+            Deactivate += (s, e) => Dismiss(false);
+        }
+
+        /// Shrinks back towards where it came from and closes (quickly when something was picked).
+        void Dismiss(bool picked)
+        {
+            if (closing || IsDisposed) return;
+            closing = true;
+            if (open == this) open = null;
+            Fx.PopOut(this, owner, from, Theme.S(12), picked ? 80 : 110, () => { if (!IsDisposed) Close(); });
         }
 
         protected override CreateParams CreateParams { get { CreateParams cp = base.CreateParams; cp.ClassStyle |= 0x20000; return cp; } }
@@ -321,7 +370,13 @@ namespace FileConverter
             int r = Theme.S(16);
             try { Region = Region.FromHrgn(CreateRoundRectRgn(0, 0, Width + 1, Height + 1, r, r)); } catch { }
         }
-        protected override bool ProcessCmdKey(ref Message msg, Keys k) { if (k == Keys.Escape) { Close(); return true; } return base.ProcessCmdKey(ref msg, k); }
+        protected override bool ProcessCmdKey(ref Message msg, Keys k)
+        {
+            if (k == Keys.Escape) { Dismiss(false); return true; }
+            if (k == Keys.Down || k == Keys.Up) { rows.MoveCursor(k == Keys.Down ? 1 : -1); return true; }
+            if (k == Keys.Enter || k == Keys.Space) { rows.PickCursor(); return true; }
+            return base.ProcessCmdKey(ref msg, k);
+        }
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.Clear(Theme.Card);
@@ -333,22 +388,43 @@ namespace FileConverter
         class MenuRows : UiControl
         {
             readonly List<Item> items;
+            readonly float[] rowHot;
             int hover = -1;
             public event Action<Item> Picked;
-            public MenuRows(List<Item> items) { this.items = items; Surface = Surface.Card; Cursor = Cursors.Hand; }
-            int H(Item it) { return it.Divider ? Theme.S(11) : it.Header != null ? Theme.S(28) : it.Sub != null ? Theme.S(48) : Theme.S(38); }
+            public MenuRows(List<Item> items) { this.items = items; rowHot = new float[items.Count]; Surface = Surface.Card; Cursor = Cursors.Hand; TabStop = true; }
+            int H(Item it) { return it.Divider ? Theme.S(11) : it.Header != null ? Theme.S(28) : it.Sub != null ? Theme.S(48) : Theme.S(36); }
             public int ContentHeight { get { int h = 0; foreach (Item it in items) h += H(it); return h; } }
             Rectangle R(int i) { int y = 0; for (int k = 0; k < i; k++) y += H(items[k]); return new Rectangle(0, y, Width, H(items[i])); }
             int At(Point p) { for (int i = 0; i < items.Count; i++) if (R(i).Contains(p)) return i; return -1; }
+            bool Pickable(int i) { return i >= 0 && i < items.Count && !items[i].Divider && items[i].Header == null && !items[i].Disabled; }
+            void SetHover(int h) { if (h != hover) { hover = h; Animator.Start(this); } }
+            public void MoveCursor(int d)
+            {
+                int i = hover;
+                for (int n = 0; n < items.Count; n++)
+                {
+                    i = i < 0 ? (d > 0 ? 0 : items.Count - 1) : (i + d + items.Count) % items.Count;
+                    if (Pickable(i)) { SetHover(i); return; }
+                }
+            }
+            public void PickCursor() { if (Pickable(hover) && Picked != null) Picked(items[hover]); }
+            public override bool Step()
+            {
+                bool more = false;
+                for (int i = 0; i < rowHot.Length; i++) if (Fx.Ease(ref rowHot[i], i == hover ? 1 : 0, 0.35f)) more = true;
+                Invalidate();
+                return more;
+            }
             protected override void OnMouseMove(MouseEventArgs e)
             {
                 int h = At(e.Location);
-                if (h >= 0 && (items[h].Divider || items[h].Header != null || items[h].Disabled)) h = -1;
-                if (h != hover) { hover = h; Invalidate(); }
+                SetHover(Pickable(h) ? h : -1);
                 base.OnMouseMove(e);
             }
-            protected override void OnMouseLeave(EventArgs e) { hover = -1; Invalidate(); base.OnMouseLeave(e); }
-            protected override void OnMouseClick(MouseEventArgs e) { base.OnMouseClick(e); int i = At(e.Location); if (i >= 0 && i == hover && Picked != null) Picked(items[i]); }
+            protected override void OnMouseLeave(EventArgs e) { SetHover(-1); base.OnMouseLeave(e); }
+            protected override void OnMouseClick(MouseEventArgs e) { base.OnMouseClick(e); int i = At(e.Location); if (Pickable(i) && Picked != null) Picked(items[i]); }
+            protected override AccessibleRole AccRole { get { return AccessibleRole.MenuPopup; } }
+            protected override string AccValue { get { return Pickable(hover) ? items[hover].Text : ""; } }
             protected override void OnPaint(PaintEventArgs e)
             {
                 Graphics g = e.Graphics;
@@ -363,10 +439,27 @@ namespace FileConverter
                         Theme.Text(g, it.Header.ToUpper(CultureInfo.CurrentCulture), Theme.F(7.5f, FontStyle.Bold), Theme.InkFaint, Theme.Mirror(new Rectangle(r.X + Theme.S(10), r.Y + Theme.S(8), r.Width - Theme.S(20), r.Height - Theme.S(8)), Width), Align.Start);
                         continue;
                     }
-                    if (i == hover) Theme.FillRound(g, r, Theme.S(8), Theme.Hover);
-                    Color ink = it.Disabled ? Theme.InkFaint : Theme.Ink;
-                    Theme.Glyph(g, it.Glyph ?? "", 10f, it.Disabled ? Theme.InkFaint : Theme.InkSoft, Theme.Mirror(new Rectangle(r.X + Theme.S(8), r.Y, Theme.S(24), it.Sub != null ? Theme.S(30) + Theme.S(4) : r.Height), Width));
-                    int tx = r.X + Theme.S(40), tw = r.Width - Theme.S(48);
+                    if (rowHot[i] > 0.01f)
+                    {
+                        Color hc = it.Danger ? Theme.ErrorBg : Theme.Hover;
+                        Theme.FillRound(g, r, Theme.S(8), Color.FromArgb((int)(255 * rowHot[i]), hc));
+                    }
+                    Color ink = it.Disabled ? Theme.InkFaint : it.Danger ? Theme.Error : Theme.Ink;
+                    Color gl = it.Disabled ? Theme.InkFaint : it.Danger ? Theme.Error : Theme.Mix(Theme.InkSoft, Theme.Ink, rowHot[i]);
+                    // the icon nudges a little to the side as the row lights up
+                    int nudge = (int)Math.Round(Theme.S(2) * rowHot[i]);
+                    Theme.Glyph(g, it.Glyph ?? "", 10f, gl, Theme.Mirror(new Rectangle(r.X + Theme.S(8) + nudge, r.Y, Theme.S(24), it.Sub != null ? Theme.S(30) + Theme.S(4) : r.Height), Width));
+                    int sw = 0;
+                    if (!string.IsNullOrEmpty(it.Shortcut))
+                    {
+                        Font kf = Theme.F(7.75f, FontStyle.Bold);
+                        sw = Theme.Measure(it.Shortcut, kf) + Theme.S(12);
+                        Rectangle kr = Theme.Mirror(new Rectangle(r.Right - sw - Theme.S(8), r.Y + (r.Height - Theme.S(20)) / 2, sw, Theme.S(20)), Width);
+                        Theme.FillRound(g, kr, Theme.S(5), Theme.Selected);
+                        Theme.Text(g, it.Shortcut, kf, Theme.InkFaint, kr, Align.Center, true, false, true);
+                        sw += Theme.S(12);
+                    }
+                    int tx = r.X + Theme.S(40), tw = r.Width - Theme.S(48) - sw;
                     if (it.Sub != null)
                     {
                         Theme.Text(g, it.Text, Theme.F(9.5f), ink, Theme.Mirror(new Rectangle(tx, r.Y + Theme.S(6), tw, Theme.S(20)), Width), Align.Start, true, false);

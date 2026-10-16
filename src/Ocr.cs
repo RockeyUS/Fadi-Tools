@@ -226,56 +226,105 @@ foreach ($path in $In.Split('|')) {
             Directory.CreateDirectory(dir);
             try
             {
-                // any format (HEIC, WEBP...) → PNGs Windows can read: the chosen part as it's shown, and the same
-                // part twice as big (small text, like a "]" at the end of a line, is read much better bigger)
-                string p1 = Path.Combine(dir, "in.png"), p2 = Path.Combine(dir, "in2.png");
+                // any format (HEIC, WEBP...) → the chosen part, as it's shown
                 Bitmap part;
-                using (Image im = ViewerPage.Decode(imagePath, 4000))
+                using (Image im = ViewerPage.Decode(imagePath, 5000))
                 using (Bitmap b = new Bitmap(im))
                 {
-                    if (rotation == 90) b.RotateFlip(RotateFlipType.Rotate90FlipNone);
-                    else if (rotation == 180) b.RotateFlip(RotateFlipType.Rotate180FlipNone);
-                    else if (rotation == 270) b.RotateFlip(RotateFlipType.Rotate270FlipNone);
+                    Turn(b, rotation);
                     Rectangle crop = Rectangle.FromLTRB((int)Math.Floor(Math.Max(0, area.Left) * b.Width), (int)Math.Floor(Math.Max(0, area.Top) * b.Height),
                                                         (int)Math.Ceiling(Math.Min(1, area.Right) * b.Width), (int)Math.Ceiling(Math.Min(1, area.Bottom) * b.Height));
                     if (crop.Width < 4 || crop.Height < 4) crop = new Rectangle(0, 0, b.Width, b.Height);
                     part = crop.Width == b.Width && crop.Height == b.Height ? new Bitmap(b) : b.Clone(crop, b.PixelFormat);
                 }
-                List<string> pics = new List<string>();
                 using (part)
                 {
-                    // a little white border helps the reader with text that touches the edge of the chosen part
-                    float k1 = Math.Max(part.Width, part.Height) < 900 ? Math.Min(4f, 900f / Math.Max(part.Width, part.Height)) : 1f;
-                    SavePadded(part, k1, p1); pics.Add(p1);
-                    float k2 = k1 * 2;
-                    if (Math.Max(part.Width, part.Height) * k2 <= 7000) { SavePadded(part, k2, p2); pics.Add(p2); }
-                    List<List<Read>> res = ReadPictures(pics, dir);
-                    Read r1 = Best(res[0]), r2 = res.Count > 1 && res[1].Count > 0 ? Best(res[1]) : null;
-                    // small text: trust the bigger copy (as long as it found about as much)
-                    int mh = MedianHeight(r1);
-                    Read best = r1;
-                    if (r2 != null && (r1 == null || (mh > 0 && mh < 30 && r2.Score * 10 >= r1.Score * 8) || r2.Score > r1.Score * 1.25)) best = r2;
-                    // hardly anything: the text may be turned (a page turned in the viewer, a photo taken sideways)
-                    if (best == null || best.Score < 12)
+                    // the ways round to try: as it's shown, and — when it was turned in the viewer — the way the
+                    // picture itself stands (a page turned on screen still has its text the right way up in the file)
+                    List<int> turns = new List<int> { 0 };
+                    if (rotation % 360 != 0) turns.Add((360 - rotation % 360) % 360);
+                    Read best = ReadTurns(part, turns, dir);
+                    // hardly anything that looks like words: the text may stand another way (a photo taken sideways)
+                    if (best == null || Quality(best) < 12)
                     {
-                        List<string> turned = new List<string>();
-                        RotateFlipType[] turns = { RotateFlipType.Rotate90FlipNone, RotateFlipType.Rotate180FlipNone, RotateFlipType.Rotate270FlipNone };
-                        for (int i = 0; i < 3; i++)
-                        {
-                            string pt = Path.Combine(dir, "turn" + i + ".png");
-                            using (Bitmap tb = new Bitmap(part)) { tb.RotateFlip(turns[i]); SavePadded(tb, Math.Max(k1, Math.Max(tb.Width, tb.Height) * 1.6f <= 7000 ? 1.6f * k1 : k1), pt); }
-                            turned.Add(pt);
-                        }
-                        foreach (List<Read> rr in ReadPictures(turned, dir))
-                        {
-                            Read c = Best(rr);
-                            if (c != null && (best == null || c.Score > best.Score * 1.5 + 4)) best = c;
-                        }
+                        List<int> rest = new List<int>();
+                        foreach (int t in new[] { 90, 180, 270 }) if (!turns.Contains(t)) rest.Add(t);
+                        Read other = ReadTurns(part, rest, dir);
+                        if (other != null && (best == null || Quality(other) > Quality(best) * 1.5 + 4)) best = other;
                     }
                     return best == null ? "" : best.Text.Replace("\r\n", "\n").Replace("\n", "\r\n");
                 }
             }
             finally { ThreadPool.QueueUserWorkItem(_ => { try { Directory.Delete(dir, true); } catch { } }); }
+        }
+
+        static void Turn(Bitmap b, int degrees)
+        {
+            degrees = ((degrees % 360) + 360) % 360;
+            if (degrees == 90) b.RotateFlip(RotateFlipType.Rotate90FlipNone);
+            else if (degrees == 180) b.RotateFlip(RotateFlipType.Rotate180FlipNone);
+            else if (degrees == 270) b.RotateFlip(RotateFlipType.Rotate270FlipNone);
+        }
+
+        /// Reads the picture turned each of the given ways (all in one go) and keeps the read with the most real words.
+        /// Small text is also read twice as big (a "]" at the end of a line is read much better bigger).
+        static Read ReadTurns(Bitmap part, List<int> turns, string dir)
+        {
+            if (turns.Count == 0) return null;
+            List<string> pics = new List<string>();
+            List<int[]> slots = new List<int[]>();   // per turn: index of the 1× picture, index of the 2× picture (or -1)
+            int side = Math.Max(part.Width, part.Height);
+            float k1 = side < 900 ? Math.Min(4f, 900f / side) : 1f;
+            bool big = side * k1 * 2 <= 7000 && side * k1 < 2600;
+            foreach (int t in turns)
+            {
+                using (Bitmap tb = new Bitmap(part))
+                {
+                    Turn(tb, t);
+                    string p1 = Path.Combine(dir, "t" + t + "_1.png"); SavePadded(tb, k1, p1); pics.Add(p1);
+                    int i2 = -1;
+                    if (big) { string p2 = Path.Combine(dir, "t" + t + "_2.png"); SavePadded(tb, k1 * 2, p2); pics.Add(p2); i2 = pics.Count - 1; }
+                    slots.Add(new[] { pics.Count - (i2 >= 0 ? 2 : 1), i2 });
+                }
+            }
+            List<List<Read>> res = ReadPictures(pics, dir);
+            Read best = null; int bestQ = -1;
+            foreach (int[] sl in slots)
+            {
+                Read r1 = res[sl[0]].Count > 0 ? Best(res[sl[0]]) : null, r2 = sl[1] >= 0 && res[sl[1]].Count > 0 ? Best(res[sl[1]]) : null;
+                Read pick = r1;
+                int mh = MedianHeight(r1), q1 = r1 == null ? 0 : Quality(r1), q2 = r2 == null ? 0 : Quality(r2);
+                // small text: trust the bigger copy (as long as it found about as many real words)
+                if (r2 != null && (r1 == null || (mh > 0 && mh < 30 && q2 * 10 >= q1 * 8) || q2 > q1 * 1.25)) pick = r2;
+                int q = pick == null ? 0 : Quality(pick);
+                if (q > bestQ) { bestQ = q; best = pick; }   // ties: the first way (as it's shown)
+            }
+            return best;
+        }
+
+        /// How much of a read looks like real words: letters in words of 2+ letters that have a vowel (English…),
+        /// Arabic words, and numbers. Text read the wrong way round comes out as scraps ("l", "—", "Ii") and scores low.
+        public static int Quality(Read r)
+        {
+            if (r == null) return 0;
+            int q = 0;
+            foreach (List<Word> line in r.Lines)
+                foreach (Word w in line)
+                {
+                    string t = w.Text ?? "";
+                    int letters = 0, digits = 0, arabic = 0, vowels = 0;
+                    foreach (char c in t)
+                    {
+                        if (Arabic(c)) arabic++;
+                        else if (char.IsDigit(c)) digits++;
+                        else if (char.IsLetter(c)) { letters++; if ("aeiouyAEIOUYéèàáíóúÉ".IndexOf(c) >= 0) vowels++; }
+                    }
+                    if (arabic >= 2) q += arabic;
+                    else if (letters >= 2 && vowels > 0 && vowels < letters) q += letters + digits;
+                    else if (letters >= 2 && letters <= 4 && t.ToUpperInvariant() == t) q += letters;   // IT, PDF, CLO
+                    else if (digits >= 1 && letters == 0) q += digits;
+                }
+            return q;
         }
 
         static void SavePadded(Bitmap src, float k, string path)
@@ -300,13 +349,30 @@ foreach ($path in $In.Split('|')) {
         /// again: "Read another part" in the result window.
         public static void Run(Control page, string imagePath, int rotation, RectangleF area, Action<string, bool> toast, Action again)
         {
+            Run(page, imagePath, rotation, area, toast, again, null);
+        }
+
+        /// sharper = makes a sharper picture of the same thing to read instead (a PDF page drawn again at 300 dpi),
+        /// or returns null to read imagePath.
+        public static void Run(Control page, string imagePath, int rotation, RectangleF area, Action<string, bool> toast, Action again, Func<string> sharper)
+        {
             Form owner = page.FindForm();
             ActJob act = Activity.Begin(page, L.T("act_k_ocr"), Path.GetFileName(imagePath), null);
             if (toast != null) toast(L.T("ocr_reading"), true);
             Thread t = new Thread(() =>
             {
                 string text = null, err = null;
-                try { text = Recognize(imagePath, rotation, area); }
+                try
+                {
+                    string src = null;
+                    if (sharper != null) try { src = sharper(); } catch { src = null; }
+                    try { text = Recognize(src != null && File.Exists(src) ? src : imagePath, rotation, area); }
+                    finally
+                    {
+                        // the sharper picture was only for reading
+                        if (src != null) try { string d = Path.GetDirectoryName(src); if (Path.GetFileName(d).StartsWith("FadiOcrPage_")) Directory.Delete(d, true); } catch { }
+                    }
+                }
                 catch (Exception ex) { err = ex.Message; }
                 if (err == null && string.IsNullOrWhiteSpace(text)) err = L.T("ocr_nothing");
                 Activity.End(act, err, false, err == null ? L.T("ocr_found", text.Length) : null, null);

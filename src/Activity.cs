@@ -228,18 +228,39 @@ namespace FileConverter
             icon.ContextMenuStrip = menu;
         }
 
-        /// The icon by the clock while the window is hidden and work goes on (on = show it, off = hide it).
+        /// The icon by the clock all the time the app is open (Settings: "Show Fadi Tools by the clock").
+        public static bool Resident;
+
+        /// Shows (or hides) the app's icon by the clock for as long as it runs.
+        public static void ShowResident(Form f, bool on)
+        {
+            Resident = on;
+            if (!IsWindows || f == null) return;
+            try
+            {
+                owner = f;
+                if (on) { Make(f); icon.Text = L.T("app_name"); icon.Visible = true; }
+                else if (icon != null && f.Visible) icon.Visible = false;
+            }
+            catch { }
+        }
+
+        /// The icon by the clock while the window is hidden and work goes on (on = show it, off = hide it,
+        /// unless it's shown all the time anyway).
         public static void Tray(Form f, bool on)
         {
             if (!IsWindows || f == null) return;
             try
             {
                 owner = f;
-                if (on) { Make(f); icon.Text = L.T("app_name") + " — " + L.T("tray_still"); icon.Visible = true; }
-                else if (icon != null) { icon.Visible = false; icon.Text = L.T("app_name"); }
+                if (on) { Make(f); icon.Text = Clip(L.T("app_name") + " — " + L.T("tray_still")); icon.Visible = true; }
+                else if (icon != null) { icon.Visible = Resident; icon.Text = L.T("app_name"); }
             }
             catch { }
         }
+
+        /// (Windows refuses tray tips longer than 63 characters)
+        static string Clip(string s) { return s.Length > 63 ? s.Substring(0, 62) + "…" : s; }
 
         public static void Show(Form f, string title, string text, bool ok, Action click)
         {

@@ -1,0 +1,44 @@
+# Builds Fadi Tools on Windows and runs its self-test on every push and pull request.
+# The self-test opens every page (light, dark and Arabic), checks the translations and a few features,
+# and saves a picture of each page: download them from the run's "Artifacts" box.
+name: Build and test
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ '*' ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Self-test
+        shell: pwsh
+        run: |
+          $out = Join-Path $PWD 'selftest'
+          $p = Start-Process -FilePath 'build\Fadi Tools.exe' -ArgumentList '/selftest', "`"$out`"" -Wait -PassThru
+          if (Test-Path "$out\selftest.log") { Get-Content "$out\selftest.log" }
+          if ($p.ExitCode -ne 0) { throw "The self-test failed (exit code $($p.ExitCode))" }
+
+      - name: Pictures of every page
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-test
+          path: selftest
+          if-no-files-found: ignore
+
+      - name: The app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fadi Tools
+          path: build/Fadi Tools.exe

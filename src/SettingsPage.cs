@@ -99,7 +99,7 @@ namespace FileConverter
             integ[3] = new Toggle();
             integ[3].CheckedChanged += (s, e) => Notifier.Enabled = integ[3].Checked;
             integ[4] = new Toggle();
-            integ[4].CheckedChanged += (s, e) => Settings.Set("KeepInTray", integ[4].Checked ? "1" : "0");
+            integ[4].CheckedChanged += (s, e) => { Settings.Set("KeepInTray", integ[4].Checked ? "1" : "0"); Notifier.ShowResident(FindForm(), integ[4].Checked); };
             integ[5] = new Toggle();
             integ[5].CheckedChanged += (s, e) => Settings.Set("WatchLinks", integ[5].Checked ? "1" : "0");
             anim.CheckedChanged += (s, e) => Settings.Set("Animations", anim.Checked ? "1" : "0");

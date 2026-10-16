@@ -496,6 +496,12 @@ namespace FileConverter
         string nodeVer; bool nodeOk, checkedNode, running, cancel;
         string status = ""; Theme.LiveColor statusColor;
         string lastJson, lastSummary, lastName;
+        /// One analysis's result for the current file (each kind is run once; picking it again just shows it).
+        class Result { public string Json, Summary, Name, Err; }
+        readonly Dictionary<string, Result> done = new Dictionary<string, Result>();
+        string doneFor;
+        /// The analysis being run right now (its key), while Analyze works through all of them.
+        string runningKey;
 
         public RePage() : base("re_title", "re_sub")
         {
@@ -519,6 +525,7 @@ namespace FileConverter
             view.FadeTarget = this;
             view.FadeArea = () => output.Bounds;
             view.SelectedChanged += (s, e) => ShowOutput();
+            what.SelectedChanged += (s, e) => ShowSelected();
             view.Visible = false;
             output.Font = Theme.Mono(9.5f);
             output.Visible = false;
@@ -546,7 +553,10 @@ namespace FileConverter
 
         public override void AcceptFiles(string[] paths) { if (paths != null && paths.Length > 0) SetTarget(paths[0]); }
 
-        void SetTarget(string p) { path.Box.Text = p; RefreshChoices(); }
+        void SetTarget(string p) { if (path.Box.Text != p) path.Box.Text = p; else RefreshChoices(); }
+        /// The file or folder chosen for analysis.
+        public string Target { get { return path.Box.Text.Trim().Trim('"'); } }
+        public event Action<string> TargetChanged;
 
         void PickFile()
         {
@@ -561,6 +571,14 @@ namespace FileConverter
         void RefreshChoices()
         {
             string p = path.Box.Text.Trim().Trim('"');
+            if (!string.Equals(p, doneFor, StringComparison.OrdinalIgnoreCase) && !running)
+            {
+                // another file: earlier results are for the old one
+                done.Clear(); doneFor = null;
+                lastJson = null; view.Visible = bSave.Visible = bCopy.Visible = output.Visible = false;
+                SetStatus("", Theme.InkSoft);
+            }
+            if (TargetChanged != null && p.Length > 0) TargetChanged(p);
             fits = new List<Analysis>();
             if (p.Length > 0) foreach (Analysis a in All) { bool ok = false; try { ok = a.Fits(p); } catch { } if (ok) fits.Add(a); }
             List<string> names = new List<string>();
@@ -710,67 +728,122 @@ namespace FileConverter
 
         void SetStatus(string s, Color c) { status = s; statusColor = c; Invalidate(M(statusR)); }
 
+        Analysis SelectedAnalysis()
+        {
+            int idx = what.Selected != null ? fits.FindIndex(x => L.T(x.Key) == what.Selected) : 0;
+            return fits.Count == 0 ? null : fits[Math.Max(0, idx)];
+        }
+
+        /// Shows the result of the analysis picked above (already run), or says it's still on its way.
+        void ShowSelected()
+        {
+            Analysis a = SelectedAnalysis();
+            Result r;
+            if (a != null && done.TryGetValue(a.Key, out r) && r.Json != null)
+            {
+                lastJson = r.Json; lastSummary = r.Summary; lastName = r.Name;
+                view.Visible = bSave.Visible = bCopy.Visible = output.Visible = true;
+                ShowOutput();
+                if (!running) SetStatus(r.Err ?? L.T("re_all_done", done.Count), r.Err == null ? Theme.Success : Theme.Warn);
+            }
+            else if (a != null && done.TryGetValue(a.Key, out r))
+            {
+                output.Visible = view.Visible = bSave.Visible = bCopy.Visible = false;
+                if (!running) SetStatus(r.Err ?? "?", Theme.Error);
+            }
+            else
+            {
+                output.Visible = view.Visible = bSave.Visible = bCopy.Visible = false;
+                if (running) SetStatus(L.T(a.Key == runningKey ? "re_now" : "re_waiting", L.T(a.Key)), Theme.InkSoft);
+            }
+            DoLayout();
+        }
+
+        /// Analyze: runs every kind of analysis that fits the file, one after another (the one picked first),
+        /// so each choice above is ready to look at without pressing Analyze again.
         void Run()
         {
             string target = path.Box.Text.Trim().Trim('"');
-            int idx = Math.Max(0, (what.Selected != null ? fits.FindIndex(x => L.T(x.Key) == what.Selected) : 0));
             if (fits.Count == 0 || (!File.Exists(target) && !Directory.Exists(target))) { SetStatus(L.T("re_choose_first"), Theme.Warn); return; }
             if (Rea.NodeExe == null || !nodeOk) { SetStatus(nodeVer == null ? L.T("re_node_missing") : L.T("re_node_old", nodeVer), Theme.Warn); return; }
-            Analysis a = fits[idx];
+            if (!string.Equals(doneFor, target, StringComparison.OrdinalIgnoreCase)) { done.Clear(); doneFor = target; }
+            List<Analysis> queue = new List<Analysis>();
+            Analysis first = SelectedAnalysis();
+            if (first != null && (!done.ContainsKey(first.Key) || done[first.Key].Json == null)) queue.Add(first);
+            foreach (Analysis x in fits) if (x != first && (!done.ContainsKey(x.Key) || done[x.Key].Json == null)) queue.Add(x);
+            if (queue.Count == 0) { done.Clear(); Run(); return; }   // all there already: Analyze again from the start
             running = true; cancel = false;
             bRun.Kind = BtnKind.Secondary; bRun.Glyph = Ico.Stop; bRun.Invalidate();
             busy.Visible = true; busy.SetIndeterminate(true);
-            SetStatus(L.T("re_running"), Theme.InkSoft);
-            string outFile = Path.Combine(Path.GetTempPath(), "fadi_rea_" + Guid.NewGuid().ToString("N") + ".json");
             string vtext = VersionText();
             DateTime started = DateTime.Now;
             ActJob act = Activity.Begin(this, L.T("act_k_analyse"), Path.GetFileName(target.TrimEnd('\\', '/')), () => cancel = true);
+            int total = queue.Count;
             Thread t = new Thread(() =>
             {
-                string err = null, json = null, summary = null; StringBuilder errText = new StringBuilder();
-                try
+                int okCount = 0; string lastErr = null;
+                for (int qi = 0; qi < queue.Count && !cancel && !IsDisposed; qi++)
                 {
-                    int code = Rea.Run(a.Command + " \"" + target + "\" --format json", outFile,
-                        line => { lock (errText) if (errText.Length < 20000) errText.AppendLine(line); Ui(() => SetStatus(L.T("re_running_t", (int)(DateTime.Now - started).TotalSeconds), Theme.InkSoft)); },
-                        () => cancel || IsDisposed);
-                    if (code == -2) err = L.T("cancelled");
-                    if (File.Exists(outFile))
+                    Analysis a = queue[qi];
+                    int n = qi + 1;
+                    Ui(() => { runningKey = a.Key; SetStatus(L.T("re_running_n", n, total, L.T(a.Key)), Theme.InkSoft); Activity.Update(act, (n - 1) / (double)total, L.T(a.Key)); });
+                    string outFile = Path.Combine(Path.GetTempPath(), "fadi_rea_" + Guid.NewGuid().ToString("N") + ".json");
+                    string err = null, json = null, summary = null; StringBuilder errText = new StringBuilder();
+                    try
                     {
-                        FileInfo fi = new FileInfo(outFile);
-                        if (fi.Length > 60L * 1024 * 1024) err = L.T("re_too_big", Theme.HumanSize(fi.Length));
-                        else json = File.ReadAllText(outFile, Encoding.UTF8);
+                        int code = Rea.Run(a.Command + " \"" + target + "\" --format json", outFile,
+                            line => { lock (errText) if (errText.Length < 20000) errText.AppendLine(line); },
+                            () => cancel || IsDisposed);
+                        if (code == -2) err = L.T("cancelled");
+                        if (File.Exists(outFile))
+                        {
+                            FileInfo fi = new FileInfo(outFile);
+                            if (fi.Length > 60L * 1024 * 1024) err = L.T("re_too_big", Theme.HumanSize(fi.Length));
+                            else json = File.ReadAllText(outFile, Encoding.UTF8);
+                        }
+                        if (err == null && string.IsNullOrWhiteSpace(json)) err = Tools.LastLines(errText.ToString(), 3);
+                        if (err == null)
+                        {
+                            object root = null;
+                            try { root = new JsonParser(json).Parse(); } catch { }
+                            summary = (vtext + (root != null ? Rea.Outline(root) : json));
+                            if (code != 0) err = L.T("re_partial");
+                        }
                     }
-                    if (err == null && string.IsNullOrWhiteSpace(json)) err = Tools.LastLines(errText.ToString(), 3);
-                    if (err == null)
+                    catch (Exception ex) { err = ex.Message; }
+                    try { File.Delete(outFile); } catch { }
+                    if (summary != null) okCount++; else lastErr = err;
+                    Result r = new Result { Json = summary != null ? json : null, Summary = summary, Err = err, Name = Path.GetFileName(target.TrimEnd('\\', '/')) + " - " + a.Command };
+                    if (IsCancelled(err)) break;
+                    Ui(() =>
                     {
-                        object root = null;
-                        try { root = new JsonParser(json).Parse(); } catch { }
-                        summary = (vtext + (root != null ? Rea.Outline(root) : json));
-                        if (code != 0) err = L.T("re_partial");
-                    }
+                        if (!string.Equals(doneFor, target, StringComparison.OrdinalIgnoreCase)) return;
+                        done[a.Key] = r;
+                        // the one being looked at is ready: show it
+                        Analysis sel = SelectedAnalysis();
+                        if (sel != null && sel.Key == a.Key) ShowSelected();
+                    });
                 }
-                catch (Exception ex) { err = ex.Message; }
-                try { File.Delete(outFile); } catch { }
                 Ui(() =>
                 {
-                    running = false;
+                    running = false; runningKey = null;
                     bRun.Kind = BtnKind.Primary; bRun.Glyph = Ico.Play; bRun.Invalidate();
                     busy.SetIndeterminate(false); busy.Visible = false;
-                    if (json != null && summary != null)
-                    {
-                        lastJson = json; lastSummary = summary;
-                        lastName = Path.GetFileName(target.TrimEnd('\\', '/')) + " - " + a.Command;
-                        view.Visible = bSave.Visible = bCopy.Visible = output.Visible = true;
-                        ShowOutput();
-                    }
-                    SetStatus(err ?? L.T("re_done", (int)(DateTime.Now - started).TotalSeconds), err == null ? Theme.Success : (summary != null ? Theme.Warn : Theme.Error));
-                    if (summary != null) Activity.Done(act, err ?? L.T("re_done", (int)(DateTime.Now - started).TotalSeconds), null);
-                    else Activity.End(act, err ?? "?", cancel, null, null);
-                    DoLayout();
+                    int secs = (int)(DateTime.Now - started).TotalSeconds;
+                    if (cancel) SetStatus(L.T("cancelled"), Theme.Warn);
+                    else if (okCount == total) SetStatus(L.T("re_all_ready", total, secs), Theme.Success);
+                    else SetStatus(okCount > 0 ? L.T("re_some_ready", okCount, total) : (lastErr ?? "?"), okCount > 0 ? Theme.Warn : Theme.Error);
+                    if (okCount > 0) Activity.Done(act, L.T("re_all_ready", okCount, secs), null);
+                    else Activity.End(act, lastErr ?? "?", cancel, null, null);
+                    ShowSelected();
+                    if (cancel) SetStatus(L.T("cancelled"), Theme.Warn);
+                    else if (okCount == total) SetStatus(L.T("re_all_ready", total, secs), Theme.Success);
                 });
             });
             t.IsBackground = true; t.Start();
         }
+
+        static bool IsCancelled(string err) { return err != null && err == L.T("cancelled"); }
 
         void ShowOutput()
         {

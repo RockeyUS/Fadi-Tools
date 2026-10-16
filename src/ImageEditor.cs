@@ -504,7 +504,97 @@ namespace FileConverter
             if (Changed != null) Changed();
         }
 
-        void DeleteSelected()
+        // ------------------------------------------------------------------ the right-click menu's actions
+        public void AddTextLayer() { AddText(); }
+        public void PickPictureLayer() { AddPicture(); }
+        public TextLayer SelectedLayer { get { return S.Current; } }
+        /// A copy of the selected text or photo, a little down and to the side.
+        public void DuplicateSelected()
+        {
+            TextLayer c = S.Current;
+            if (c == null) return;
+            TextLayer t = c.CloneStyle();
+            float step = Math.Max(8, S.ShortSide * 0.04f);
+            t.Pos = new PointF(Math.Min(S.W, c.Pos.X + step), Math.Min(S.H, c.Pos.Y + step));
+            t.Touch();
+            S.Layers.Insert(S.Selected + 1, t);
+            S.Dirty = true;
+            Select(S.Selected + 1);
+            if (Changed != null) Changed();
+        }
+
+        /// On top of everything (front) or under everything (back).
+        public void OrderSelected(bool front)
+        {
+            TextLayer c = S.Current;
+            if (c == null || S.Layers.Count < 2) return;
+            S.Layers.RemoveAt(S.Selected);
+            if (front) S.Layers.Add(c); else S.Layers.Insert(0, c);
+            S.Dirty = true;
+            Select(S.Layers.IndexOf(c));
+            if (Changed != null) Changed();
+        }
+
+        public void FlipSelected()
+        {
+            TextLayer c = S.Current;
+            if (c == null || !c.IsPicture) return;
+            c.FlipX = !c.FlipX;
+            Touch(true);
+        }
+
+        /// A quarter turn to the right (on from where it is).
+        public void TurnSelected()
+        {
+            TextLayer c = S.Current;
+            if (c == null) return;
+            float a = c.Angle + 90;
+            while (a > 180) a -= 360;
+            c.Angle = a; rotate.SetValue(a, false);
+            Touch(true);
+        }
+
+        /// A photo back to its own shape (after being stretched from a side), not turned.
+        public void ResetShapeSelected()
+        {
+            TextLayer c = S.Current;
+            if (c == null || !c.IsPicture) return;
+            c.Stretch = 1; c.Angle = 0; rotate.SetValue(0, false);
+            Touch(true);
+        }
+
+        /// Another picture in the same place and size.
+        public void ReplacePictureSelected()
+        {
+            TextLayer c = S.Current;
+            if (c == null || !c.IsPicture) return;
+            using (OpenFileDialog d = new OpenFileDialog())
+            {
+                d.Title = L.T("lm_replace");
+                List<string> pats = new List<string>();
+                foreach (string e in Formats.ImageExt) pats.Add("*." + e);
+                d.Filter = L.T("images") + "|" + string.Join(";", pats.ToArray());
+                if (LastDir.Show(d, FindForm(), "studio") != DialogResult.OK) return;
+                Bitmap pic;
+                try { pic = TextLayer.LoadPicture(d.FileName); }
+                catch (Exception ex) { if (Notify != null) Notify(L.T("ed_photo_failed") + " " + ex.Message, false, null); return; }
+                SizeF was = c.PictureSize;
+                c.Picture = pic; c.PicturePath = Path.GetFullPath(d.FileName); c.Stretch = 1;
+                c.SizePx = Math.Max(was.Width, was.Height);
+                Touch(true);
+            }
+        }
+
+        /// The selected photo's own light and color.
+        public void SetPictureAdjust(Adjust a)
+        {
+            TextLayer c = S.Current;
+            if (c == null || !c.IsPicture) return;
+            c.PicAdj = a == null || a.None ? null : a;
+            Touch(true);
+        }
+
+        public void DeleteSelected()
         {
             if (S.Current == null) return;
             S.Current.Touch();
@@ -638,7 +728,8 @@ namespace FileConverter
                  .Append(l.Bold).Append(l.Italic).Append(l.Outline).Append(l.Shadow).Append(l.Box).Append(l.BoxColor.ToArgb()).Append('|')
                  .Append(l.OutlineColor.ToArgb()).Append(Math.Round(l.OutlineWidth, 2)).Append(Math.Round(l.Angle, 1)).Append(l.PicturePath).Append('|')
                  .Append(Math.Round(l.Opacity, 2)).Append((int)l.Align).Append('|').Append(Math.Round(l.Pos.X)).Append(',').Append(Math.Round(l.Pos.Y))
-                 .Append('@').Append(Math.Round(l.From, 2)).Append('-').Append(Math.Round(l.To, 2)).Append(';');
+                 .Append('@').Append(Math.Round(l.From, 2)).Append('-').Append(Math.Round(l.To, 2))
+                 .Append('~').Append(Math.Round(l.Stretch, 3)).Append(l.FlipX).Append(l.PicAdj == null ? "" : l.PicAdj.Key()).Append(';');
             k.Append('#').Append(S.W).Append('x').Append(S.H).Append(S.Crop).Append(S.Mask == null ? 0 : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(S.Mask))
              .Append(S.BgMode).Append(S.BgColor.ToArgb()).Append(Math.Round(S.BgBlur)).Append('#').Append(S.Adj.Key());
             if (ExtraKey != null) k.Append('#').Append(ExtraKey());
@@ -1329,8 +1420,14 @@ namespace FileConverter
             bAdjReset.Click += (s, e) => { S.Adj = new Adjust(); LoadAdjust(); AdjChanged(); };
             adjCtl = new Control[] { filters, aBright, aContrast, aSat, aWarm, aBlur, aSharp, bCompare, bAdjReset };
             body.Controls.AddRange(adjCtl);
-            adjTimer = new System.Windows.Forms.Timer { Interval = 35 };
-            adjTimer.Tick += (s, e) => { adjTimer.Stop(); ShowAdjusted(); };
+            // while a slider moves the picture follows it (a smaller copy, about 25 times a second);
+            // a moment after it stops, the full-quality picture
+            adjTimer = new System.Windows.Forms.Timer { Interval = 40 };
+            adjTimer.Tick += (s, e) => { adjTimer.Stop(); ShowAdjustedQuick(); };
+            adjSettle = new System.Windows.Forms.Timer { Interval = 220 };
+            adjSettle.Tick += (s, e) => { adjSettle.Stop(); adjTimer.Stop(); ShowAdjusted(); };
+            foreach (Slider sl in new[] { aBright, aContrast, aSat, aWarm, aBlur, aSharp })
+                sl.Committed += (s, e) => { if (loadingAdj) return; adjSettle.Stop(); adjTimer.Stop(); ShowAdjusted(); };
         }
 
         bool loadingAdj;
@@ -1355,11 +1452,21 @@ namespace FileConverter
             ShowAdjusted();
         }
 
+        System.Windows.Forms.Timer adjSettle;
+
         void AdjChanged()
         {
             S.Dirty = true;
-            adjTimer.Stop(); adjTimer.Start();
+            if (!adjTimer.Enabled) adjTimer.Start();   // (not restarted: it keeps up while the slider keeps moving)
+            adjSettle.Stop(); adjSettle.Start();
             if (bAdjReset != null) bAdjReset.Enabled = !S.Adj.None;
+        }
+
+        void ShowAdjustedQuick()
+        {
+            if (Canvas == null || !S.Active || S.Video || comparing) return;
+            try { Canvas.Image = S.QuickShown; } catch (Exception ex) { if (Notify != null) Notify(ex is OutOfMemoryException ? L.T("ed_too_big") : ex.Message, false, null); }
+            Canvas.Invalidate(); Canvas.Update();
         }
 
         void ShowAdjusted()

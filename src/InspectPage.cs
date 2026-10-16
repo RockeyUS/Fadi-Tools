@@ -339,7 +339,11 @@ namespace FileConverter
         {
             if (paths == null || paths.Length == 0 || !File.Exists(paths[0])) return;
             Inspect(paths[0]);
+            if (FileShown != null) FileShown(paths[0]);
         }
+        /// The file being looked at now (the Reverse engineer tab gets the same one).
+        public event Action<string> FileShown;
+        public string ShownFile { get { return file; } }
 
         void Ui(Action a) { try { if (!IsDisposed && IsHandleCreated) BeginInvoke(a); } catch { } }
 

@@ -47,6 +47,9 @@ namespace FileConverter
         public event Action BackgroundClick;
         public bool ShowPlay;
         bool clickMoved; Point downAt;
+        /// A right click on the picture: which text / photo it was on (-1 = none), and where on the screen.
+        public event Action<int, Point> ContextClick;
+        bool rightDown; int rightHit = -1;
         // background brush: 0 erase, 1 keep (paint strokes), 2 magic wand (click); -1 off
         public int BrushTool = -1;
         public float BrushPx = 40;                       // brush diameter on screen
@@ -311,6 +314,14 @@ namespace FileConverter
             base.OnMouseDown(e);
             Focus();
             downAt = e.Location; clickMoved = false;
+            rightDown = false;
+            if (e.Button == MouseButtons.Right && Image != null && !AreaMode && !Brushing && !CropMode)
+            {
+                // a right click picks the text / photo under it (its menu opens when the button comes up)
+                rightDown = true;
+                rightHit = Layers != null ? HitLayer(e.Location) : -1;
+                if (rightHit >= 0 && rightHit != SelectedLayer) { SelectedLayer = rightHit; if (LayerPicked != null) LayerPicked(rightHit); Invalidate(); }
+            }
             if (AreaMode && Image != null)
             {
                 if (e.Button == MouseButtons.Left) { areaDrag = true; areaFrom = areaTo = ClampToImage(e.Location); Capture = true; Invalidate(); }
@@ -479,6 +490,7 @@ namespace FileConverter
             }
             if (layerDrag) { layerDrag = false; snapX = snapY = false; Invalidate(); }
             Cursor = Cursors.Default;
+            if (rightDown && e.Button == MouseButtons.Right && !clickMoved && ContextClick != null) { rightDown = false; ContextClick(rightHit, PointToScreen(e.Location)); }
         }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (mouseAt.X >= 0) { mouseAt = new Point(-1, -1); Invalidate(); } }
         protected override void OnMouseClick(MouseEventArgs e)
@@ -768,13 +780,15 @@ namespace FileConverter
                 autoTimer = new System.Windows.Forms.Timer { Interval = 30000 };
                 autoTimer.Tick += (s, e) => AutoSave();
                 autoTimer.Start();
-                Recovery.SaveNowRequested += () => { try { AutoSave(); } catch { } };
+                saveNow = () => { try { AutoSave(); } catch { } };
+                Recovery.SaveNowRequested += saveNow;
             }
             editor.Changed += () => { UpdateEditInfo(); Invalidate(nameR.IsEmpty ? bar : Rectangle.Union(M(nameR), M(infoR))); };
             editor.CloseRequested += () => ExitEdit(true);
             canvas.LayerPicked += i => editor.Select(i);
             canvas.LayerEdit += () => editor.FocusText();
             canvas.LayerMoved += () => editor.S.Dirty = true;
+            canvas.ContextClick += ShowContextMenu;
             Controls.AddRange(new Control[] { bPrev, bNext, bRotL, bRotR, bOpen, bEdit, bText, bSave, bConvert, bFolder, bPages, canvas, editor, strip });
             strip.PathOf = i => pageRender.ContainsKey(i) ? pageRender[i] : (i < files.Count ? files[i] : null);
             strip.Edited = i => pageState.ContainsKey(i);
@@ -1064,12 +1078,14 @@ namespace FileConverter
         }
 
         System.Windows.Forms.Timer autoTimer;
+        Action saveNow;
         int editRot;
         object pendingRestore;
 
         void AutoSave()
         {
             if (!editing || !editor.S.Dirty || !editor.S.Active || editor.S.Video) return;
+            if (!Wanted) return;   // several tabs: the one being shown keeps its backup
             Recovery.Write(Recovery.PhotoFile, EditJson());
         }
 
@@ -1238,11 +1254,41 @@ namespace FileConverter
                 if (InStudio)
                     d.Filter = L.T("photos_videos") + "|" + string.Join(";", pats.ToArray()) + ";*.mp4;*.mov;*.mkv;*.avi;*.webm;*.wmv;*.m4v;*.mpg;*.3gp;*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.opus;*.flac;*.pdf;*.doc;*.docx;*.odt;*.rtf;*.ppt;*.pptx;*.odp|" +
                                L.T("documents") + "|*.pdf;*.doc;*.docx;*.odt;*.rtf;*.ppt;*.pptx;*.odp|" + d.Filter;
-                if (LastDir.Show(d, FindForm(), "studio") == DialogResult.OK) LoadFiles(new[] { d.FileName });
+                if (LastDir.Show(d, FindForm(), "studio") == DialogResult.OK)
+                {
+                    // in the Studio a file opened over another one gets a tab of its own
+                    if (DropTo != null && HasFile && !editing) DropTo(new[] { d.FileName });
+                    else LoadFiles(new[] { d.FileName });
+                }
             }
         }
 
-        public override void AcceptFiles(string[] paths) { LoadFiles(paths); }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                if (saveNow != null) Recovery.SaveNowRequested -= saveNow;
+                if (autoTimer != null) { autoTimer.Stop(); autoTimer.Dispose(); }
+            }
+            base.Dispose(disposing);
+        }
+
+        /// Studio: files dropped on this tab go to the Studio, which decides where they open (a new tab…).
+        public Action<string[]> DropTo;
+        public override void AcceptFiles(string[] paths) { if (DropTo != null) DropTo(paths); else LoadFiles(paths); }
+
+        /// What the Studio's tab for this viewer says, and its icon.
+        public string TabTitle
+        {
+            get
+            {
+                if (Doc) return Path.GetFileName(docSource);
+                if (opening && !string.IsNullOrEmpty(title)) return title;
+                if (Current != null) return Path.GetFileName(Current);
+                return L.T("tabs_empty");
+            }
+        }
+        public string TabGlyph { get { return Doc || opening ? Ico.Doc : files.Count > 0 ? Ico.Photo : Ico.Add; } }
 
         Btn bText;
         /// Reads the text in the photo on screen and copies it.
@@ -1258,7 +1304,15 @@ namespace FileConverter
         void ReadText(RectangleF area)
         {
             if (Current == null) return;
-            Ocr.Run(this, Current, canvas.Rotation, area, (msg, ok) => ShowToast(msg, ok, null, null), CopyText);
+            // a PDF page that wasn't changed here is drawn again, sharper, for reading (small print reads much better)
+            Func<string> sharper = null;
+            if (DocIsPdf && !pageRender.ContainsKey(index) && !(editing && editor.S.Dirty))
+            {
+                string pdf = docSource; int pg = index;
+                sharper = () => DocPages.RenderPage(pdf, pg, 3300, Path.Combine(Path.GetTempPath(), "FadiOcrPage_" + Guid.NewGuid().ToString("N").Substring(0, 8)));
+            }
+            string shown = Doc && pageRender.ContainsKey(index) ? pageRender[index] : Current;   // a changed page: as it looks now
+            Ocr.Run(this, shown, canvas.Rotation, area, (msg, ok) => ShowToast(msg, ok, null, null), CopyText, sharper);
         }
 
         /// Asks for a picture, then does something with it once it's on screen.
@@ -1360,6 +1414,55 @@ namespace FileConverter
             if (editing) return;
             index = (index + d + files.Count) % files.Count;
             Show(index);
+        }
+
+        // ------------------------------------------------------------------ right click
+        /// The menu for a right click on the picture: for the text or photo under the mouse while editing,
+        /// otherwise for the page itself.
+        void ShowContextMenu(int layer, Point screen)
+        {
+            List<MenuPopup.Item> m = new List<MenuPopup.Item>();
+            if (editing && !editor.S.Video)
+            {
+                TextLayer l = layer >= 0 ? editor.SelectedLayer : null;
+                if (l != null && l.IsPicture)
+                {
+                    m.Add(new MenuPopup.Item { Text = L.T("lm_adjust"), Glyph = "\uE706", Run = () => PicAdjustPopup.ShowAt(canvas, screen, l.PicAdj, a => { editor.SetPictureAdjust(a); canvas.Invalidate(); }) });
+                    m.Add(new MenuPopup.Item { Text = L.T("lm_replace"), Glyph = Ico.Photo, Run = editor.ReplacePictureSelected });
+                    m.Add(new MenuPopup.Item { Divider = true });
+                    m.Add(new MenuPopup.Item { Text = L.T("lm_turn"), Glyph = Ico.Rotate, Run = editor.TurnSelected });
+                    m.Add(new MenuPopup.Item { Text = L.T("lm_flip"), Glyph = Ico.Sync, Run = editor.FlipSelected });
+                    m.Add(new MenuPopup.Item { Text = L.T("lm_reset_shape"), Glyph = Ico.Resize, Run = editor.ResetShapeSelected, Disabled = Math.Abs(l.Stretch - 1) < 0.001f && Math.Abs(l.Angle) < 0.01f });
+                }
+                else if (l != null)
+                    m.Add(new MenuPopup.Item { Text = L.T("lm_edit_text"), Glyph = Ico.Edit, Run = editor.FocusText });
+                if (l != null)
+                {
+                    m.Add(new MenuPopup.Item { Divider = true });
+                    m.Add(new MenuPopup.Item { Text = L.T("lm_duplicate"), Glyph = Ico.Copy, Shortcut = "Ctrl+D", Run = editor.DuplicateSelected });
+                    m.Add(new MenuPopup.Item { Text = L.T("lm_front"), Glyph = "\uE7C4", Run = () => editor.OrderSelected(true), Disabled = editor.S.Layers.Count < 2 || editor.S.Selected == editor.S.Layers.Count - 1 });
+                    m.Add(new MenuPopup.Item { Text = L.T("lm_back"), Glyph = "\uE7C4", Run = () => editor.OrderSelected(false), Disabled = editor.S.Layers.Count < 2 || editor.S.Selected == 0 });
+                    m.Add(new MenuPopup.Item { Divider = true });
+                    m.Add(new MenuPopup.Item { Text = L.T("lm_remove"), Glyph = Ico.Delete, Shortcut = "Del", Danger = true, Run = editor.DeleteSelected });
+                }
+                else
+                {
+                    m.Add(new MenuPopup.Item { Text = L.T("ed_add"), Glyph = Ico.Add, Run = editor.AddTextLayer });
+                    m.Add(new MenuPopup.Item { Text = L.T("ed_add_photo"), Glyph = Ico.Photo, Run = editor.PickPictureLayer });
+                }
+            }
+            else if (!editing && Current != null)
+            {
+                m.Add(new MenuPopup.Item { Text = L.T("ed_edit"), Glyph = Ico.Edit, Run = EnterEdit });
+                m.Add(new MenuPopup.Item { Text = L.T("ocr_btn"), Glyph = "\uE8EF", Run = CopyText });
+                m.Add(new MenuPopup.Item { Divider = true });
+                m.Add(new MenuPopup.Item { Text = L.T("lm_turn_left"), Glyph = "\uE7A8", Run = () => Rotate(-90) });
+                m.Add(new MenuPopup.Item { Text = L.T("lm_turn"), Glyph = Ico.Rotate, Run = () => Rotate(90) });
+                m.Add(new MenuPopup.Item { Divider = true });
+                m.Add(new MenuPopup.Item { Text = L.T("v_convert"), Glyph = Ico.Sync, Run = () => { if (Current != null && SendToConverter != null) SendToConverter(Current); } });
+                m.Add(new MenuPopup.Item { Text = L.T("v_folder"), Glyph = Ico.FolderOpen, Run = () => { if (Current != null) try { Process.Start("explorer.exe", "/select,\"" + (Doc ? docSource : Current) + "\""); } catch { } } });
+            }
+            if (m.Count > 0) MenuPopup.ShowAt(canvas, screen, m);
         }
 
         void Rotate(int deg)
@@ -1466,6 +1569,7 @@ namespace FileConverter
                     case Keys.Control | Keys.Y: case Keys.Control | Keys.Shift | Keys.Z: if (typing) return false; editor.Redo(); return true;
                     case Keys.Escape: if (!typing && editor.Deselect()) return true; ExitEdit(true); return true;
                     case Keys.Delete: return !typing && editor.DeleteKey();
+                    case Keys.Control | Keys.D: if (typing || editor.SelectedLayer == null) return false; editor.DuplicateSelected(); return true;
                     case Keys.Left: if (typing) return false; if (Doc && editor.S.Current == null) { Go(Theme.RTL ? 1 : -1); return true; } editor.Nudge(-1, 0); return true;
                     case Keys.Right: if (typing) return false; if (Doc && editor.S.Current == null) { Go(Theme.RTL ? -1 : 1); return true; } editor.Nudge(1, 0); return true;
                     case Keys.PageUp: if (!Doc) return false; Go(-1); return true;

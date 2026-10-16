@@ -23,6 +23,16 @@ namespace FileConverter
             return string.Join(",", new[] { Bright, Contrast, Sat, Warmth, Blur, Sharpen }.Select2(v => Math.Round(v).ToString(CultureInfo.InvariantCulture))) + "," + Filter;
         }
         public bool Same(Adjust o) { return o != null && Key() == o.Key(); }
+        /// Back from Key() (null when there's nothing to read).
+        public static Adjust FromKey(string k)
+        {
+            if (string.IsNullOrEmpty(k)) return null;
+            string[] p = k.Split(',');
+            if (p.Length < 7) return null;
+            float[] v = new float[7];
+            for (int i = 0; i < 7; i++) float.TryParse(p[i], NumberStyles.Float, CultureInfo.InvariantCulture, out v[i]);
+            return new Adjust { Bright = v[0], Contrast = v[1], Sat = v[2], Warmth = v[3], Blur = v[4], Sharpen = v[5], Filter = (int)v[6] };
+        }
 
         // ------------------------------------------------------------------ color (one 5×5 matrix)
         static float[][] I()
