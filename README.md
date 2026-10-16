@@ -1,6 +1,6 @@
 # Fadi Tools
 
-**All-in-one Windows app — convert, compress, edit and download files. Free, offline, in English and Arabic.**
+**All-in-one Windows app — Convert, Compress, Edit and Download Files. Free, offline, in English and Arabic.**
 
 [![Build and test](https://github.com/RockeyUS/Fadi-Tools/actions/workflows/build.yml/badge.svg)](https://github.com/RockeyUS/Fadi-Tools/actions/workflows/build.yml)
 
