@@ -199,14 +199,6 @@ namespace FileConverter
 
         public void AnimateLayerTo(TextLayer l, PointF to)
         {
-            if (!Fx.Motion)
-            {
-                animLayer = null;
-                l.Pos = to;
-                Invalidate();
-                if (LayerMoved != null) LayerMoved();
-                return;
-            }
             animLayer = l; animFrom = l.Pos; animTo = to; animT = 0;
             Animator.Start(this);
         }
@@ -216,7 +208,7 @@ namespace FileConverter
             bool more = base.Step();
             if (animLayer != null && animT < 1)
             {
-                animT = Math.Min(1, animT + 0.09f);
+                animT = Math.Min(1, animT + 0.09f * Animator.K);
                 float e = 1 - (float)Math.Pow(1 - animT, 3);   // ease-out
                 animLayer.Pos = new PointF(animFrom.X + (animTo.X - animFrom.X) * e, animFrom.Y + (animTo.Y - animFrom.Y) * e);
                 Invalidate();
@@ -646,15 +638,34 @@ namespace FileConverter
         readonly RecentStrip recents = new RecentStrip();
         string DropText { get { return L.T(InStudio ? "studio_drop_any" : "v_drop"); } }
 
+        /// The Studio's PDF tab: opens PDFs (and only documents), with a button to the page tools.
+        public readonly bool PdfTab;
+        /// Photos: a PDF was chosen (it opens in the PDF tab instead).
+        public event Action<string> OpenPdf;
+        /// PDF tab: something that isn't a document was chosen (it goes to the right tab).
+        public event Action<string[]> OpenOther;
+        /// PDF tab: "Pages" was clicked (reorder, rotate, sign... this PDF).
+        public event Action<string> OrganizePages;
+        /// The PDF (or other document) open now, or null.
+        public string DocPath { get { return docSource; } }
+        public int PageIndex { get { return index; } }
+        readonly Btn bPages;
+
         public ViewerPage() : this(false) { }
-        public ViewerPage(bool studio) : base(studio ? "studio_title" : "viewer_title", studio ? "studio_sub" : "viewer_sub")
+        public ViewerPage(bool studio) : this(studio, false) { }
+        public ViewerPage(bool studio, bool pdfTab) : base(studio ? "studio_title" : "viewer_title", studio ? (pdfTab ? "studio_pdf_sub" : "studio_sub") : "viewer_sub")
         {
             InStudio = studio;
+            PdfTab = pdfTab;
+            bPages = new Btn(() => L.T("v_pages"), "", BtnKind.Secondary) { Visible = false };
+            bPages.MouseEnter += (s, e) => tips.SetToolTip(bPages, L.T("v_pages_tip"));
+            bPages.Click += (s, e) => { if (Doc && OrganizePages != null && ConfirmDiscard()) OrganizePages(docSource); };
             bPrev = IconBtn(Ico.Left, "v_prev", () => Go(-1));
             bNext = IconBtn(Ico.Right, "v_next", () => Go(1));
             bRotL = IconBtn("\uE7A8", "v_rotate_l", () => Rotate(270));
             bRotR = IconBtn(Ico.Rotate, "v_rotate_r", () => Rotate(90));
             bOpen = new Btn(() => L.T("v_open"), Ico.FolderOpen, BtnKind.Secondary); bOpen.Click += (s, e) => PickFile();
+            bOpen.MouseEnter += (s, e) => tips.SetToolTip(bOpen, L.T("v_open"));
             bSave = new Btn(() => L.T(Doc ? "doc_save_pdf" : "v_save_jpg"), Ico.Save, BtnKind.Primary); bSave.FontSize = 9.5f; bSave.Click += (s, e) => { if (Doc) SaveDoc(); else SaveJpg(); };
             bConvert = new Btn(() => L.T("v_convert"), Ico.Sync, BtnKind.Secondary);
             bConvert.MouseEnter += (s, e) => tips.SetToolTip(bConvert, L.T("v_convert")); bConvert.Click += (s, e) => { if (Current != null && SendToConverter != null) SendToConverter(Current); };
@@ -683,7 +694,7 @@ namespace FileConverter
                 if (file != null) { if (InStudio) Recovery.Clear(Recovery.PhotoFile); ShowToast(msg, true, () => L.T("show_file"), () => { try { Process.Start("explorer.exe", "/select,\"" + file + "\""); } catch { } }); }
                 else ShowToast(msg, ok, null, null);
             };
-            if (studio)
+            if (studio && !pdfTab)
             {
                 // the photo edit is backed up every half minute, and once more if the app crashes
                 autoTimer = new System.Windows.Forms.Timer { Interval = 30000 };
@@ -696,14 +707,14 @@ namespace FileConverter
             canvas.LayerPicked += i => editor.Select(i);
             canvas.LayerEdit += () => editor.FocusText();
             canvas.LayerMoved += () => editor.S.Dirty = true;
-            Controls.AddRange(new Control[] { bPrev, bNext, bRotL, bRotR, bOpen, bEdit, bText, bSave, bConvert, bFolder, canvas, editor, strip });
+            Controls.AddRange(new Control[] { bPrev, bNext, bRotL, bRotR, bOpen, bEdit, bText, bSave, bConvert, bFolder, bPages, canvas, editor, strip });
             strip.PathOf = i => pageRender.ContainsKey(i) ? pageRender[i] : (i < files.Count ? files[i] : null);
             strip.Edited = i => pageState.ContainsKey(i);
             strip.PagePicked += GoTo;
             recents.Visible = false;
             recents.Open += f => { if (OpenProjectFile != null) OpenProjectFile(f); };
             recents.Browse += () => { if (BrowseProjects != null) BrowseProjects(); };
-            if (studio) { Controls.Add(recents); recents.BringToFront(); }
+            if (studio && !pdfTab) { Controls.Add(recents); recents.BringToFront(); }
             EnableDrop(canvas);
             try
             {
@@ -834,6 +845,7 @@ namespace FileConverter
             cards.Add(bar);
             int y = bar.Y + Theme.S(16), h = Theme.S(36), x = bar.Right - Theme.S(16);
             foreach (Control c in new Control[] { bPrev, bNext, bRotL, bRotR, bOpen, bEdit, bText, bSave, bConvert, bFolder }) c.Visible = !editing;
+            bPages.Visible = PdfTab && Doc && !editing;
             bUndoH.Visible = bRedoH.Visible = editing && !editor.S.Video;
             if (editing && !editor.S.Video)
             {
@@ -854,11 +866,16 @@ namespace FileConverter
                 bFolder.Label = compact ? (Func<string>)(() => "") : () => L.T("v_folder");
                 bConvert.Label = compact ? (Func<string>)(() => "") : () => L.T("v_convert");
                 bText.Label = tiny ? (Func<string>)(() => "") : () => L.T("ocr_btn");
-                Btn[] right = { bFolder, bConvert, bSave, bText, bEdit, bOpen };
+                bPages.Label = compact ? (Func<string>)(() => "") : () => L.T("v_pages");
+                bool openIcon = compact && PdfTab;   // the PDF tab has one more button: make room for the file name
+                bOpen.Label = openIcon ? (Func<string>)(() => "") : () => L.T("v_open");
+                List<Btn> right = new List<Btn> { bFolder, bConvert, bSave, bText, bEdit };
+                if (bPages.Visible) right.Add(bPages);
+                right.Add(bOpen);
                 foreach (Btn b in right)
                 {
                     int w = Math.Max(Theme.S(70), b.PreferredWidth);
-                    if ((compact && (b == bFolder || b == bConvert)) || (tiny && b == bText)) w = h;
+                    if ((compact && (b == bFolder || b == bConvert || b == bPages)) || (tiny && b == bText) || (openIcon && b == bOpen)) w = h;
                     x -= w; Place(b, new Rectangle(x, y, w, h)); x -= Theme.S(8);
                 }
                 x -= Theme.S(8);
@@ -892,7 +909,7 @@ namespace FileConverter
             if (ShowStrip) { strip.Count = files.Count; strip.Current = index; }
             editor.Visible = editing;
             // the empty Studio: recent video projects along the bottom
-            if (InStudio)
+            if (InStudio && !PdfTab)
             {
                 List<string> rp = files.Count == 0 && !editing ? TrimPage.RecentProjects : new List<string>();
                 recents.Paths = rp;
@@ -953,8 +970,9 @@ namespace FileConverter
             if (old != null) old.Dispose();
             title = ""; info = "";
             Form f = FindForm(); if (f is ViewerForm) f.Text = L.T("viewer_title");
+            strip.Count = 0;
             UpdateButtons();
-            Invalidate();
+            DoLayout();   // the page strip goes too (it used to stay behind, its pages no longer clickable)
             return true;
         }
 
@@ -1141,7 +1159,9 @@ namespace FileConverter
                 List<string> pats = new List<string>();
                 foreach (string e in Formats.ImageExt) pats.Add("*." + e);
                 d.Filter = L.T("images") + "|" + string.Join(";", pats.ToArray()) + "|" + L.T("all_files") + "|*.*";
-                if (InStudio)
+                if (PdfTab)
+                    d.Filter = L.T("documents") + "|*.pdf;*.doc;*.docx;*.odt;*.rtf;*.ppt;*.pptx;*.odp|" + L.T("all_files") + "|*.*";
+                else if (InStudio)
                     d.Filter = L.T("photos_videos") + "|" + string.Join(";", pats.ToArray()) + ";*.mp4;*.mov;*.mkv;*.avi;*.webm;*.wmv;*.m4v;*.mpg;*.3gp;*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.opus;*.flac;*.pdf;*.doc;*.docx;*.odt;*.rtf;*.ppt;*.pptx;*.odp|" +
                                L.T("documents") + "|*.pdf;*.doc;*.docx;*.odt;*.rtf;*.ppt;*.pptx;*.odp|" + d.Filter;
                 if (LastDir.Show(d, FindForm(), "studio") == DialogResult.OK) LoadFiles(new[] { d.FileName });
@@ -1178,10 +1198,14 @@ namespace FileConverter
 
         bool opening;
         /// PDF / Word / PowerPoint: every page becomes a picture you can flip through, edit and save.
-        public void OpenDocument(string path)
+        public void OpenDocument(string path) { OpenDocument(path, 0); }
+
+        /// Opens a document's pages; startPage = the page to show first.
+        public void OpenDocument(string path, int startPage)
         {
             if (opening) return;
             if (editing) { if (!ConfirmDiscard()) return; ExitEdit(false); }
+            else if (DocChanged && !ConfirmDiscard()) return;
             opening = true;
             title = Path.GetFileName(path); info = L.T("doc_opening"); Invalidate();
             ShowToast(L.T("doc_opening"), true, null, null);
@@ -1206,6 +1230,7 @@ namespace FileConverter
                         docSource = path;
                         docLoading = true;
                         try { LoadFiles(pages.ToArray()); } finally { docLoading = false; }
+                        if (startPage > 0 && startPage < files.Count) GoTo(startPage);
                         if (pages.Count > 1) ShowToast(L.T("doc_pages", pages.Count), true, null, null);
                     }));
                 }
@@ -1221,6 +1246,8 @@ namespace FileConverter
                 Category c = Formats.CategoryOf(Formats.Ext(paths[0]));
                 if (c == Category.Video || c == Category.Audio) { OpenMedia(paths[0]); return; }
             }
+            if (!docLoading && InStudio && OpenPdf != null && paths != null && paths.Length == 1 && Formats.Ext(paths[0]) == "pdf" && File.Exists(paths[0])) { OpenPdf(paths[0]); return; }
+            if (!docLoading && PdfTab && OpenOther != null && paths != null && paths.Length > 0 && !(paths.Length == 1 && DocPages.IsDoc(paths[0]))) { OpenOther(paths); return; }
             if (InStudio && paths != null && paths.Length == 1 && DocPages.IsDoc(paths[0]) && File.Exists(paths[0])) { OpenDocument(paths[0]); return; }
             if (!docLoading && !editing && DocChanged && !ConfirmDiscard()) return;
             if (editing)

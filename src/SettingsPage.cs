@@ -101,9 +101,14 @@ namespace FileConverter
             anim.CheckedChanged += (s, e) => Settings.Set("Animations", anim.Checked ? "1" : "0");
             btnZip = new Btn(() => L.T("zip_make"), "\uE8B7", BtnKind.Secondary);
             btnZip.Click += (s, e) => MakeZip();
-            Controls.AddRange(new Control[] { btnUpdate, btnTips, btnNew, askSave, btnZip, anim });
-            Controls.AddRange(new Control[] { theme, lang, accent, logoSeg, folder, btnReset, openAfter, btnUninstall, btnLo, btnYt, btnYtUpdate, ytProgress });
-            Controls.AddRange(integ);
+            // everything sits on one body that slides up and down as a whole when the page scrolls
+            // (moving each button on its own made the page wobble while scrolling fast)
+            body = new Body(this);
+            thumb = new Thumb(this);
+            Controls.Add(thumb); Controls.Add(body);
+            body.Controls.AddRange(new Control[] { btnUpdate, btnTips, btnNew, askSave, btnZip, anim });
+            body.Controls.AddRange(new Control[] { theme, lang, accent, logoSeg, folder, btnReset, openAfter, btnUninstall, btnLo, btnYt, btnYtUpdate, ytProgress });
+            body.Controls.AddRange(integ);
             LoadValues();
         }
 
@@ -126,7 +131,7 @@ namespace FileConverter
                     {
                         if ((DateTime.Now - last).TotalMilliseconds < 250) return;
                         last = DateTime.Now;
-                        try { BeginInvoke((Action)(() => { zipStatus = L.T("zip_working", (int)(f * 100)); Invalidate(); })); } catch { }
+                        try { BeginInvoke((Action)(() => { zipStatus = L.T("zip_working", (int)(f * 100)); body.Invalidate(); })); } catch { }
                     }, () => IsDisposed);
                 }
                 catch (Exception ex) { err = ex.Message; }
@@ -134,7 +139,7 @@ namespace FileConverter
                 {
                     BeginInvoke((Action)(() =>
                     {
-                        zipping = false; btnZip.Enabled = true; btnZip.Invalidate(); zipStatus = null; Invalidate();
+                        zipping = false; btnZip.Enabled = true; btnZip.Invalidate(); zipStatus = null; body.Invalidate();
                         if (err != null) ShowToast(err, false, null, null);
                         else ShowToast(L.T("zip_done", Path.GetFileName(path), Theme.HumanSize(new FileInfo(path).Length)), true, () => L.T("show_file"), () => { try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + path + "\""); } catch { } });
                     }));
@@ -183,7 +188,7 @@ namespace FileConverter
         }
 
         public override void OnShown() { Tools.Reset(); LoadValues(); Refresh2(); }
-        public override void Restyle() { LoadValues(); Refresh2(); }
+        public override void Restyle() { LoadValues(); Refresh2(); body.Invalidate(true); thumb.Invalidate(); }
 
         void Refresh2()
         {
@@ -201,17 +206,28 @@ namespace FileConverter
         {
             int W = Width, H = Height, p = Pad, gap = Theme.S(18), ip = Theme.S(20);
             cards.Clear();
-            int colW = (W - p * 2 - gap) / 2;
-            int lx = p, rx = p + colW + gap, y = Top0;
+            // narrow window: one column (two squeezed columns made the buttons pile on top of the text)
+            bool one = (W - p * 2 - gap) / 2 < Theme.S(430);
+            int colW = one ? W - p * 2 : (W - p * 2 - gap) / 2;
+            int lx = p, rx = one ? p : p + colW + gap, y = Top0;
             appearance = new Rectangle(lx, y, colW, Theme.S(292));
             saving = new Rectangle(lx, appearance.Bottom + gap, colW, Theme.S(236));
             // the about card: when "Show tips" and "What's new" don't fit beside the buttons, they get a row of their own
             int uw = Math.Max(Theme.S(150), Math.Max(btnUninstall.PreferredWidth, btnUpdate.PreferredWidth));
             int tw = Math.Max(Theme.S(120), btnTips.PreferredWidth), nw2 = Math.Max(Theme.S(110), btnNew.PreferredWidth);
             bool aboutTall = tw + Theme.S(4) + nw2 > colW - ip * 2 - Theme.S(50) - uw - Theme.S(12);
-            about = new Rectangle(lx, saving.Bottom + gap, colW, aboutTall ? Theme.S(152) : Math.Max(Theme.S(96), Math.Min(Theme.S(120), H - saving.Bottom - gap - p)));
-            engines = new Rectangle(rx, y, colW, Theme.S(296));
-            integration = new Rectangle(rx, engines.Bottom + gap, colW, Theme.S(322));
+            if (one)
+            {
+                engines = new Rectangle(lx, saving.Bottom + gap, colW, Theme.S(296));
+                integration = new Rectangle(lx, engines.Bottom + gap, colW, Theme.S(322));
+                about = new Rectangle(lx, integration.Bottom + gap, colW, aboutTall ? Theme.S(152) : Theme.S(112));
+            }
+            else
+            {
+                about = new Rectangle(lx, saving.Bottom + gap, colW, aboutTall ? Theme.S(152) : Math.Max(Theme.S(96), Math.Min(Theme.S(120), H - saving.Bottom - gap - p)));
+                engines = new Rectangle(rx, y, colW, Theme.S(296));
+                integration = new Rectangle(rx, engines.Bottom + gap, colW, Theme.S(322));
+            }
             cards.AddRange(new[] { appearance, saving, about, engines, integration });
 
             int x = appearance.X + ip, w = colW - ip * 2;
@@ -264,10 +280,16 @@ namespace FileConverter
             int zw = Math.Max(Theme.S(130), btnZip.PreferredWidth);
             Place(btnZip, new Rectangle(ex + ew - zw, zipRow.Y + Theme.S(7), zw, Theme.S(34)));
             // long page: scroll with the mouse wheel when the window is short
-            int bottom = Math.Max(about.Bottom, integration.Bottom) + p + ScrollY;
+            int bottom = Math.Max(about.Bottom, integration.Bottom) + p;
             maxScroll = Math.Max(0, bottom - H);
-            if (ScrollY > maxScroll) { ScrollY = maxScroll; scrollTo = scrollNow = maxScroll; DoLayout(); return; }
-            Invalidate();
+            if (scrollTo > maxScroll) scrollTo = maxScroll;
+            if (scrollNow > maxScroll) scrollNow = maxScroll;
+            body.Bounds = new Rectangle(0, -(int)Math.Round(scrollNow), W, Math.Max(H, bottom));
+            thumb.Bounds = Theme.Mirror(new Rectangle(W - Theme.S(10), 0, Theme.S(10), H), W);
+            thumb.Visible = maxScroll > 0;
+            thumb.BringToFront();
+            body.Invalidate();
+            thumb.Invalidate();
         }
 
         void Head(Graphics g, Rectangle card, string glyph, string key)
@@ -316,12 +338,6 @@ namespace FileConverter
             Head(g, integration, Ico.Settings, "integration");
             using (Pen lp = new Pen(Theme.Line)) { Rectangle l = M(new Rectangle(zipRow.X, zipRow.Y - Theme.S(4), zipRow.Width, 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
             Label(g, zipStatus ?? L.T(Paths.Portable ? "zip_label_portable" : "zip_label"), Theme.F(9.5f), zipStatus != null ? Theme.InkSoft : Theme.Ink, new Rectangle(zipRow.X, zipRow.Y, zipRow.Width - Theme.S(150), zipRow.Height), Align.Start, true, true);
-            if (maxScroll > 0)
-            {
-                int th = Math.Max(Theme.S(40), Height * Height / (Height + maxScroll));
-                int ty = (int)((Height - th) * (ScrollY / (float)maxScroll));
-                Theme.FillRound(g, M(new Rectangle(Width - Theme.S(7), ty, Theme.S(4), th)), Theme.S(2), Color.FromArgb(90, Theme.InkFaint));
-            }
             string[] ik = { "int_desktop", "int_menu", "int_viewer", "int_notify" };
             for (int i = 0; i < 4; i++)
                 Label(g, L.T(ik[i]), Theme.F(9.5f), Theme.Ink, new Rectangle(integRows[i].X, integRows[i].Y, integRows[i].Width - Theme.S(64), integRows[i].Height), Align.Start, true, true);
@@ -358,12 +374,20 @@ namespace FileConverter
 
         void Ui(Action a) { try { if (!IsDisposed && IsHandleCreated) BeginInvoke(a); } catch { } }
 
-        protected override void OnMouseWheel(MouseEventArgs e)
+        protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); Wheel(e.Delta); }
+
+        void Wheel(int delta)
         {
-            base.OnMouseWheel(e);
             if (maxScroll <= 0) return;
-            scrollTo = Math.Max(0, Math.Min(maxScroll, scrollTo - e.Delta / 120f * Theme.S(90)));
+            scrollTo = Math.Max(0, Math.Min(maxScroll, scrollTo - delta / 120f * Theme.S(90)));
             Animator.Start(this);
+        }
+
+        /// Scrolls straight to a spot (0 = top), without the glide.
+        public void ScrollToNow(int y)
+        {
+            scrollTo = scrollNow = Math.Max(0, Math.Min(maxScroll, y));
+            body.Top = -(int)Math.Round(scrollNow); thumb.Invalidate();
         }
 
         public override bool Step()
@@ -372,11 +396,62 @@ namespace FileConverter
             if (Math.Abs(scrollTo - scrollNow) > 0.01f)
             {
                 bool moving = Fx.Ease(ref scrollNow, scrollTo, 0.3f);
-                int n = (int)Math.Round(scrollNow);
-                if (n != ScrollY) { ScrollY = n; SuspendLayout(); DoLayout(); ResumeLayout(); Invalidate(true); }
+                int n = -(int)Math.Round(scrollNow);
+                if (n != body.Top) { body.Top = n; thumb.Invalidate(); thumb.Update(); }
                 more |= moving;
             }
             return more;
+        }
+
+        protected override void OnPaint(PaintEventArgs e) { PaintBg(e.Graphics); }
+
+        // ---- the scrolling body and its scroll bar
+        readonly Body body;
+        readonly Thumb thumb;
+
+        void PaintBody(Graphics g, Control on)
+        {
+            Theme.PaintSurface(g, on, Surface.Background);
+            Theme.Smooth(g);
+            int tx = Pad;
+            Label(g, L.T(TitleKey), Theme.Serif(20f), Theme.Ink, new Rectangle(tx, Theme.S(18), Width - Pad - tx - HeaderReserve, Theme.S(40)), Align.Start, false);
+            Label(g, L.T(SubKey), Theme.F(9.75f), Theme.InkSoft, new Rectangle(tx, Theme.S(58), Width - Pad - tx - HeaderReserve, Theme.S(24)), Align.Start, false);
+            foreach (Rectangle c in cards) Theme.PaintCard(g, M(c));
+            PaintContent(g);
+        }
+
+        class Body : Control
+        {
+            readonly SettingsPage page;
+            public Body(SettingsPage p)
+            {
+                page = p;
+                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            }
+            protected override void OnPaint(PaintEventArgs e) { page.PaintBody(e.Graphics, this); }
+            protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); page.Wheel(e.Delta); }
+        }
+
+        class Thumb : Control
+        {
+            readonly SettingsPage page;
+            public Thumb(SettingsPage p)
+            {
+                page = p;
+                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            }
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                Graphics g = e.Graphics;
+                g.Clear(Theme.Bg);
+                if (page.maxScroll <= 0) return;
+                Theme.Smooth(g);
+                int H = page.Height;
+                int th = Math.Max(Theme.S(40), H * H / (H + page.maxScroll));
+                int ty = (int)((H - th) * (page.scrollNow / page.maxScroll));
+                Theme.FillRound(g, new Rectangle((Width - Theme.S(4)) / 2, ty, Theme.S(4), th), Theme.S(2), Color.FromArgb(90, Theme.InkFaint));
+            }
+            protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); page.Wheel(e.Delta); }
         }
 
         void InstallYt()
@@ -385,7 +460,7 @@ namespace FileConverter
             Thread t = new Thread(() =>
             {
                 string err = null;
-                try { YtDlp.Install((label, f) => Ui(() => { ytStatus = label; ytProgress.Value = f; Invalidate(); }), () => IsDisposed); }
+                try { YtDlp.Install((label, f) => Ui(() => { ytStatus = label; ytProgress.Value = f; body.Invalidate(); }), () => IsDisposed); }
                 catch (Exception ex) { err = ex.Message; }
                 Ui(() => { ytBusy = false; Refresh2(); ShowToast(err == null ? L.T("yt_ready") : L.T("yt_setup_failed", err), err == null, null, null); });
             });

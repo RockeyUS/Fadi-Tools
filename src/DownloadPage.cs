@@ -289,8 +289,14 @@ namespace FileConverter
             btnClear.Visible = false;
             btnClear.Click += (s, e) =>
             {
-                lock (queue.Items) queue.Items.RemoveAll(x => x.State == ItemState.Done || x.State == ItemState.Failed || x.State == ItemState.Skipped);
-                queue.ClampScroll(); queue.Invalidate(); UpdateClear();
+                Func<DlItem, bool> finished = x => x.State == ItemState.Done || x.State == ItemState.Failed || x.State == ItemState.Skipped;
+                List<Rectangle> gone;
+                lock (queue.Items) gone = queue.VisibleRows(i => i < queue.Items.Count && finished(queue.Items[i]));
+                Fx.SweepAway(queue, gone, () =>
+                {
+                    lock (queue.Items) queue.Items.RemoveAll(x => finished(x));
+                    queue.ClampScroll(); queue.Invalidate(); UpdateClear();
+                });
             };
             thumbView = new ThumbView { Visible = false };
             Controls.AddRange(new Control[] { url, btnPaste, btnGet, btnDownload, btnSetup, saveAs, qualityV, qualityA, gifSize, gifLen, playlist, notice, busy, queue, thumbView, btnClear });

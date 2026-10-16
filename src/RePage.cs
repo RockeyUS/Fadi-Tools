@@ -634,9 +634,19 @@ namespace FileConverter
         {
             int W = Width, H = Height, p = Pad, ip = Theme.S(20);
             cards.Clear();
-            int rows = Math.Max(1, (fits.Count + 2) / 3);
             int whatH = fits.Count > 0 ? what.NeededHeight(fits.Count) : 0;
-            top = new Rectangle(p, Top0, W - p * 2, ip * 2 + Theme.S(44) + Theme.S(14) + Theme.S(24) + whatH + Theme.S(16) + Theme.S(42) + Theme.S(4));
+            // the run row: [Install Node.js / app icon] status ........ [icon] [Connect to AI agents] [Analyze]
+            // on a narrow window the status gets a row of its own instead of being squeezed between the buttons
+            int cardW = W - p * 2, w0 = cardW - ip * 2;
+            int rw = Math.Max(Theme.S(170), bRun.PreferredWidth);
+            int sw = Math.Max(Theme.S(200), bSetup.PreferredWidth);
+            int nw = Math.Max(Theme.S(160), bNode.PreferredWidth);
+            int iw = bIcon.Visible ? Math.Max(Theme.S(130), bIcon.PreferredWidth) : 0;
+            int rightW = rw + Theme.S(12) + sw + (iw > 0 ? iw + Theme.S(12) : 0);
+            int leadW = bNode.Visible ? nw + Theme.S(12) : iconImg != null ? Theme.S(52) : 0;
+            bool split = w0 - rightW - leadW - Theme.S(12) < Theme.S(260);
+            int extra = split ? Theme.S(54) : 0;
+            top = new Rectangle(p, Top0, cardW, ip * 2 + Theme.S(44) + Theme.S(14) + Theme.S(24) + whatH + Theme.S(16) + Theme.S(42) + Theme.S(4) + extra);
             results = new Rectangle(p, top.Bottom + Theme.S(18), W - p * 2, Math.Max(Theme.S(140), H - top.Bottom - Theme.S(18) - p));
             cards.Add(top); cards.Add(results);
             int x = top.X + ip, w = top.Width - ip * 2, y = top.Y + ip;
@@ -647,22 +657,20 @@ namespace FileConverter
             y += Theme.S(58);
             whatLbl = new Rectangle(x, y, w, Theme.S(20)); y += Theme.S(24);
             if (fits.Count > 0) { Place(what, new Rectangle(x, y, w, whatH)); y += whatH + Theme.S(16); }
-            int rw = Math.Max(Theme.S(170), bRun.PreferredWidth);
-            Place(bRun, new Rectangle(x + w - rw, y, rw, Theme.S(42)));
-            int sw = Math.Max(Theme.S(200), bSetup.PreferredWidth);
-            Place(bSetup, new Rectangle(x + w - rw - Theme.S(12) - sw, y, sw, Theme.S(42)));
-            int nw = Math.Max(Theme.S(160), bNode.PreferredWidth);
+            int by = split ? y + Theme.S(54) : y;   // the buttons' row
+            Place(bRun, new Rectangle(x + w - rw, by, rw, Theme.S(42)));
+            Place(bSetup, new Rectangle(x + w - rw - Theme.S(12) - sw, by, sw, Theme.S(42)));
+            if (bIcon.Visible) Place(bIcon, new Rectangle(x + w - rw - sw - Theme.S(24) - iw, by, iw, Theme.S(42)));
             Place(bNode, new Rectangle(x, y, nw, Theme.S(42)));
-            int lead = bNode.Visible ? nw + Theme.S(12) : 0;
             iconR = Rectangle.Empty;
+            int lead = bNode.Visible ? nw + Theme.S(12) : 0;
             if (iconImg != null && !bNode.Visible)
             {
                 iconR = new Rectangle(x, y + Theme.S(1), Theme.S(40), Theme.S(40));
                 lead = Theme.S(52);
             }
-            int iw = bIcon.Visible ? Math.Max(Theme.S(130), bIcon.PreferredWidth) : 0;
-            if (bIcon.Visible) Place(bIcon, new Rectangle(x + w - rw - sw - Theme.S(24) - iw, y, iw, Theme.S(42)));
-            engineR = new Rectangle(x + lead, y, w - rw - sw - Theme.S(24) - lead - (iw > 0 ? iw + Theme.S(12) : 0), Theme.S(42));
+            engineR = split ? new Rectangle(x + lead, y, w - lead, Theme.S(42))
+                            : new Rectangle(x + lead, y, w - rightW - Theme.S(12) - lead, Theme.S(42));
             Place(busy, new Rectangle(top.X + ip, top.Bottom - Theme.S(8), top.Width - ip * 2, Theme.S(4)));
 
             int rx = results.X + ip, rwid = results.Width - ip * 2, ry = results.Y + Theme.S(14);

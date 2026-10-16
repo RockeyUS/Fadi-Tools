@@ -105,7 +105,7 @@ namespace FileConverter
             bool more = base.Step();
             bool working = false;
             foreach (FileItem it in Items) if (it.State == ItemState.Working) working = true;
-            if (working) { spin = (spin + 9) % 360; Invalidate(); return true; }
+            if (working) { spin = (spin + (int)Math.Round(9 * Animator.K)) % 360; Invalidate(); return true; }
             return more;
         }
 
@@ -434,9 +434,12 @@ namespace FileConverter
         void ClearList()
         {
             if (running) return;
-            list.Items.Clear(); list.Invalidate(); progress.Value = 0; progress.Visible = false;
-            doneCount = 0; totalBefore = totalAfter = 0;
-            SetStatus("", Theme.InkSoft); UpdateState();
+            Fx.SweepAway(list, list.VisibleRows(null), () =>
+            {
+                list.Items.Clear(); list.Invalidate(); progress.Value = 0; progress.Visible = false;
+                doneCount = 0; totalBefore = totalAfter = 0;
+                SetStatus("", Theme.InkSoft); UpdateState();
+            });
         }
 
         public override void DoLayout()

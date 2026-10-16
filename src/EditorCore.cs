@@ -724,13 +724,12 @@ namespace FileConverter
             base.OnMouseClick(e);
             if (!Enabled) return;
             for (int i = 0; i < 6; i++)
-                if (Cell(i).Contains(e.Location)) { flash = i; flashT = Fx.Motion ? 1 : 0; Animator.Start(this); if (Picked != null) Picked(i); break; }
+                if (Cell(i).Contains(e.Location)) { flash = i; flashT = 1; Animator.Start(this); if (Picked != null) Picked(i); break; }
         }
         public override bool Step()
         {
             bool more = base.Step();
-            if (!Fx.Motion) flashT = 0;
-            else if (flashT > 0) { flashT = Math.Max(0, flashT - 0.08f); Invalidate(); more |= flashT > 0; }
+            if (flashT > 0) { flashT = Math.Max(0, flashT - 0.08f * Animator.K); Invalidate(); more |= flashT > 0; }
             return more;
         }
         protected override void OnPaint(PaintEventArgs e)
@@ -787,12 +786,8 @@ namespace FileConverter
         public override bool Step()
         {
             bool more = base.Step();
-            if (!Fx.Motion) current = target;
-            else
-            {
-                current += (target - current) * 0.3f;
-                if (Math.Abs(target - current) < 0.5f) current = target;
-            }
+            current += (target - current) * Animator.Rate(0.3f);
+            if (Math.Abs(target - current) < 0.5f) current = target;
             int n = (int)Math.Round(current);
             if (n != Offset) { Offset = n; if (Scrolled != null) Scrolled(); Invalidate(); }
             return more || current != target;

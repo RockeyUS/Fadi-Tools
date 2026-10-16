@@ -50,7 +50,7 @@ namespace FileConverter
             bAdd = new Btn(() => L.T("ren_add"), Ico.Add, BtnKind.Secondary) { FontSize = 9f };
             bAdd.Click += (s, e) => Browse();
             bClear = new Btn(() => L.T("clear"), Ico.Delete, BtnKind.Ghost) { FontSize = 9f };
-            bClear.Click += (s, e) => { files.Clear(); status = null; ShowState(); };
+            bClear.Click += (s, e) => Fx.SweepAway(list, list.VisibleRows(null), () => { files.Clear(); status = null; ShowState(); });
             bRename = new Btn(() => L.T("ren_go", ChangeCount), "", BtnKind.Primary);
             bRename.Click += (s, e) => DoRename();
             bUndo = new Btn(() => L.T("ren_undo"), "", BtnKind.Ghost) { FontSize = 9f };

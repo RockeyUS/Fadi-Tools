@@ -14,12 +14,17 @@ namespace FileConverter
         /// glyph, title key, text key
         public static readonly string[][] Items =
         {
+            // 1.4.2
+            new[] { "", "wn_pdftab_t", "wn_pdftab_d" },
+            new[] { "", "wn_smooth_t", "wn_smooth_d" },
+            new[] { Ico.Search, "wn_pop_t", "wn_pop_d" },
+            new[] { "\uE740", "wn_small_t", "wn_small_d" },
+            // 1.4.0
             new[] { "", "wn_design_t", "wn_design_d" },
             new[] { "", "wn_merge_t", "wn_merge_d" },
             new[] { Ico.Copy, "wn_arabic_t", "wn_arabic_d" },
             new[] { Ico.Text, "wn_capsub_t", "wn_capsub_d" },
             new[] { Ico.Download, "wn_ready_t", "wn_ready_d" },
-            new[] { "", "wn_motion_t", "wn_motion_d" },
         };
 
         /// Shows the window once after the app was updated (not on a first install: the tour is shown then).
@@ -110,13 +115,13 @@ namespace FileConverter
         class WnList : ScrollList
         {
             float frame = -1;
-            public WnList() { RowHeight = 66; Surface = Surface.Card; }
+            public WnList() { RowHeight = 72; Surface = Surface.Card; }
             public override int Count { get { return WhatsNew.Items.Length; } }
             public void Start() { frame = Fx.Motion ? 0 : 1000; Animator.Start(this); }
             public override bool Step()
             {
                 bool more = base.Step();
-                if (frame >= 0 && frame < Count * 3 + 14) { frame++; Invalidate(); more = true; }
+                if (frame >= 0 && frame < Count * 3 + 14) { frame += Animator.K; Invalidate(); more = true; }
                 return more;
             }
 
@@ -134,7 +139,7 @@ namespace FileConverter
                 Theme.FillRound(g, ic, Theme.S(11), Color.FromArgb(a, Theme.AccentSoft));
                 Theme.Glyph(g, it[0], 12f, Color.FromArgb(a, Theme.AccentColor), ic);
                 Rectangle tr = Theme.Mirror(new Rectangle(r.X + Theme.S(68), r.Y + Theme.S(8), r.Width - Theme.S(84), Theme.S(22)), Width);
-                Rectangle dr = Theme.Mirror(new Rectangle(r.X + Theme.S(68), r.Y + Theme.S(29), r.Width - Theme.S(84), Theme.S(36)), Width);
+                Rectangle dr = Theme.Mirror(new Rectangle(r.X + Theme.S(68), r.Y + Theme.S(29), r.Width - Theme.S(84), Theme.S(42)), Width);
                 Theme.Text(g, L.T(it[1]), Theme.F(10f, FontStyle.Bold), Color.FromArgb(a, Theme.Ink), tr, Align.Start);
                 Theme.Text(g, L.T(it[2]), Theme.F(8.75f), Color.FromArgb(a, Theme.InkSoft), dr, Align.Start, false, true);
             }

@@ -56,6 +56,9 @@ namespace FileConverter
                 return Narrow ? new Rectangle(c.X + (c.Width - s) / 2, LogoRect.Bottom + Theme.S(8), s, s) : new Rectangle(c.Right - s - Theme.S(10), c.Y + Theme.S(17), s, s);
             }
         }
+        /// The search box on the screen (the quick search grows out of it).
+        public Rectangle SearchScreenRect { get { return RectangleToScreen(M(SearchRect)); } }
+
         public Rectangle SearchRect
         {
             get
@@ -111,12 +114,12 @@ namespace FileConverter
             if (Fx.Ease(ref toggleHot, hoverToggle ? 1 : 0, 0.28f)) more = true;
             if (ripple.Step()) more = true;
             if (Fx.Ease(ref actOpenT, ActivityOpen ? 1 : 0, 0.25f)) more = true;
-            if (actPulse < 1) { actPulse = Math.Min(1, actPulse + 0.028f); more = true; }
+            if (actPulse < 1) { actPulse = Math.Min(1, actPulse + 0.028f * Animator.K); more = true; }
             float ty = SelRect(selected).Y;
             if (pillY < 0 || !Fx.Motion) pillY = ty;
-            pillY += (ty - pillY) * 0.22f;
+            pillY += (ty - pillY) * Animator.Rate(0.22f);
             if (Math.Abs(ty - pillY) < 0.5f) pillY = ty; else more = true;
-            if (ActivityRunning > 0) { spin = (spin + 6) % 360; more = true; }
+            if (ActivityRunning > 0) { spin = (spin + (int)Math.Round(6 * Animator.K)) % 360; more = true; }
             Invalidate();
             return more;
         }
@@ -148,6 +151,7 @@ namespace FileConverter
             base.OnMouseClick(e);
             if (set) nav = SettingsIndex;
             if (nav >= 0) { ripple.Start(e.Location, M(SelRect(nav))); Animator.Start(this); }
+            else if (srch) { ripple.Start(e.Location, M(SearchRect)); Animator.Start(this); }
             if (nav >= 0 && Navigate != null) Navigate(nav);
             else if (tog && ToggleCollapse != null) ToggleCollapse();
             else if (srch && OpenSearch != null) OpenSearch();

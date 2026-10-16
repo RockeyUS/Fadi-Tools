@@ -65,14 +65,13 @@ namespace FileConverter
         public override bool Step()
         {
             bool more = base.Step();
-            if (!Fx.Motion) { shown = Value; press = dragging ? 1 : 0; Invalidate(); return more; }
             if (float.IsNaN(shown)) shown = Value;
-            float k = dragging ? 0.55f : 0.28f;
+            float k = Animator.Rate(dragging ? 0.55f : 0.28f);
             if (LogScale) { float fs = FracOf(shown), fv = FracOf(Value); fs += (fv - fs) * k; shown = Math.Abs(fv - fs) < 0.0005f ? Value : ValueAt(fs); }
             else shown += (Value - shown) * k;
             if (Math.Abs(Value - shown) < (Max - Min) / 2000f) shown = Value;
             float pt = dragging ? 1 : 0;
-            press += (pt - press) * 0.35f;
+            press += (pt - press) * Animator.Rate(0.35f);
             if (Math.Abs(pt - press) < 0.02f) press = pt;
             Invalidate();
             return more || shown != Value || press != pt;

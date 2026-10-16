@@ -25,9 +25,12 @@ namespace FileConverter
         static CommandPalette open;
         public static bool IsOpen { get { return open != null; } }
 
-        public static void Show(Form owner, List<PaletteItem> items)
+        public static void Show(Form owner, List<PaletteItem> items) { Show(owner, items, Rectangle.Empty); }
+
+        /// from = where it was opened from on the screen (the search box): it grows out of there.
+        public static void Show(Form owner, List<PaletteItem> items, Rectangle from)
         {
-            if (open != null) { open.Close(); return; }
+            if (open != null) { open.Dismiss(); return; }
             CommandPalette p = new CommandPalette(items);
             open = p;
             p.FormClosed += (s, e) => open = null;
@@ -36,9 +39,26 @@ namespace FileConverter
             int h = Theme.S(470);
             p.Bounds = new Rectangle(o.X + (o.Width - w) / 2, o.Y + Math.Min(Theme.S(110), Math.Max(Theme.S(40), (o.Height - h) / 3)), w, h);
             p.LayoutInside();
-            p.Show(owner);
             p.search.Restyle();
-            p.search.Box.Focus();
+            p.owner = owner;
+            p.from = from.IsEmpty ? new Rectangle(p.Left + w / 2, p.Top, 1, 1) : from;
+            IntPtr hh = p.Handle;   // made now, so its picture can be taken before it shows
+            Fx.PopIn(p, owner, p.from, Theme.S(10), 220, () =>
+            {
+                if (p.IsDisposed) return;
+                p.Show(owner);
+                p.search.Box.Focus();
+            });
+        }
+
+        Form owner; Rectangle from; bool closing;
+
+        /// Shrinks back towards the search box and fades out.
+        public void Dismiss()
+        {
+            if (closing || IsDisposed) return;
+            closing = true;
+            Fx.PopOut(this, owner, from, Theme.S(10), 140, () => { if (!IsDisposed) Close(); });
         }
 
         CommandPalette(List<PaletteItem> items)
@@ -64,7 +84,7 @@ namespace FileConverter
             };
             rows.Picked += Pick;
             Controls.Add(search); Controls.Add(rows);
-            Deactivate += (s, e) => Close();
+            Deactivate += (s, e) => Dismiss();
             Rebuild();
         }
 
@@ -89,15 +109,15 @@ namespace FileConverter
 
         protected override bool ProcessCmdKey(ref Message msg, Keys k)
         {
-            if (k == Keys.Escape || k == (Keys.Control | Keys.K)) { Close(); return true; }
+            if (k == Keys.Escape || k == (Keys.Control | Keys.K)) { Dismiss(); return true; }
             return base.ProcessCmdKey(ref msg, k);
         }
 
         void Pick(PaletteItem it)
         {
             if (it == null) return;
-            Close();
-            Form owner = Owner;
+            Form owner = Owner ?? this.owner;
+            Dismiss();
             // run after the palette is gone, so dialogs it opens get the focus
             try { if (owner != null && owner.IsHandleCreated) owner.BeginInvoke(it.Run); else it.Run(); } catch { }
         }

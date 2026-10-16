@@ -65,10 +65,11 @@ namespace FileConverter
             sidebar.ToggleCollapse += () =>
             {
                 // fold into icons / open again, sliding
+                if (sliding) return;
                 sidebar.Collapsed = !sidebar.Collapsed;
                 Settings.Set("SideCollapsed", sidebar.Collapsed ? "1" : "0");
                 float from = sideW, to = sidebar.Collapsed ? SideNarrow : SideWide;
-                Fx.Tween(240, t => { sideW = from + (to - from) * t; DoLayout(); }, () => { sideW = to; DoLayout(); });
+                SlideSidebar(from, to);
             };
             sidebar.OpenSearch += ShowPalette;
             actTimer.Tick += (s, e) => PollActivity();
@@ -81,9 +82,9 @@ namespace FileConverter
             for (int i = 0; i < pages.Count; i++) pages[i].Glyph = nav[i].Glyph;
             inspect.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
             studio.Photos.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
+            studio.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
 
             Controls.Add(toast);
-            Controls.Add(fader);
             foreach (Page p in pages) { p.Toast = toast; p.Owner = this; p.Visible = false; Controls.Add(p); }
             Controls.Add(sidebar);
             Controls.Add(Bar);
@@ -146,27 +147,54 @@ namespace FileConverter
         readonly List<NavItem> nav = new List<NavItem>();
 
         // ------------------------------------------------------------------ light/dark and language changes, animated
-        PageFader lookFader;
+        Overlay lookOv;
         Point? revealAt;
 
-        /// Called just before the theme or language changes: holds a picture of the window as it looks now,
-        /// then (once everything has been redrawn the new way) fades — or, for the light/dark button, grows — into the new look.
+        /// Called just before the theme or language changes: holds a picture of the window as it looks now over it,
+        /// then fades it away — or, for the light/dark button, lets the new look grow through it as a circle.
         void BeginLookChange()
         {
             Point? from = revealAt; revealAt = null;
-            if (!Visible || WindowState == FormWindowState.Minimized || !IsHandleCreated || (lookFader != null && lookFader.Visible)) return;
-            Bitmap before = Fx.SnapWindow(this);
-            if (before == null) return;
-            if (lookFader == null) { lookFader = new PageFader(); Controls.Add(lookFader); }
-            lookFader.Bounds = ClientRectangle;
-            lookFader.RevealFrom = from;
-            lookFader.Frames = from.HasValue ? 30 : 18;
-            lookFader.Hold(before);
-            BeginInvoke((Action)(() =>
+            if (!Visible || WindowState == FormWindowState.Minimized || !IsHandleCreated || (lookOv != null && !lookOv.IsDisposed)) return;
+            Overlay ov = Fx.Hold(this, ClientRectangle);
+            if (ov == null) return;
+            lookOv = ov;
+            ov.FormClosed += (s, e) => { if (lookOv == ov) lookOv = null; };
+            if (from.HasValue) Fx.RevealAway(ov, PointToScreen(from.Value), 480);
+            else Fx.FadeAway(ov, 280, 0, 0);
+        }
+
+        // ------------------------------------------------------------------ folding the side list
+        bool sliding;
+
+        /// The side list folds / opens while the page slides along with it. The page is laid out once (not on
+        /// every frame, which was slow on a big screen): it keeps its wider size during the slide and only moves.
+        void SlideSidebar(float from, float to)
+        {
+            Page pg = current >= 0 && current < pages.Count ? pages[current] : null;
+            if (!Fx.Motion || pg == null || !Visible || WindowState == FormWindowState.Minimized) { sideW = to; DoLayout(); return; }
+            int W = ClientSize.Width, bh = BarHeight, H = ClientSize.Height - bh;
+            int wFrom = W - (int)Math.Round(from), wTo = W - (int)Math.Round(to);
+            int pw = Math.Max(wFrom, wTo);
+            sliding = true;
+            Func<float, int> pageX = sw => Theme.RTL ? W - (int)Math.Round(sw) - pw : (int)Math.Round(sw);
+            pg.SetBounds(pageX(from), bh, pw, H);
+            Fx.Tween(260, t =>
             {
-                lookFader.Bounds = ClientRectangle;
-                lookFader.Run(before, Fx.SnapWindow(this), 0);
-            }));
+                sideW = from + (to - from) * t;
+                int sw = (int)Math.Round(sideW);
+                sidebar.Bounds = new Rectangle(Theme.RTL ? W - sw : 0, bh, sw, H);
+                pg.Location = new Point(pageX(sideW), bh);
+                sidebar.Update(); pg.Update();
+            }, () =>
+            {
+                sideW = to;
+                sliding = false;
+                // opening: the page was kept wide while it slid; it now fits again behind a quick fade
+                Overlay ov = pw != wTo ? Fx.Hold(this, new Rectangle(Theme.RTL ? 0 : (int)Math.Round(to), bh, wTo, H)) : null;
+                DoLayout();
+                Fx.FadeAway(ov, 160, 0, 0);
+            });
         }
 
         /// The app closed before some Studio work was saved (crash, power cut): offer to bring it back.
@@ -245,7 +273,7 @@ namespace FileConverter
             int i = PageIndexOf(c);
             if (i < 0) return;
             Go(i);
-            if (pages[i] == studio && (c == studio.Videos || c == studio.Photos || c == studio.Pdf)) studio.Show((Page)c);
+            if (pages[i] == studio && (c == studio.Videos || c == studio.Photos || c == studio.Pdf || c == studio.PdfDoc)) studio.Show((Page)c);
             if (pages[i] == inspector && (c == inspector.Inspect || c == inspector.Re)) inspector.Show((Page)c);
         }
 
@@ -276,7 +304,7 @@ namespace FileConverter
         }
 
         // ------------------------------------------------------------------ quick search (Ctrl+K)
-        void ShowPalette() { CommandPalette.Show(this, PaletteItems()); }
+        void ShowPalette() { CommandPalette.Show(this, PaletteItems(), sidebar.Visible ? sidebar.SearchScreenRect : Rectangle.Empty); }
 
         /// Everything the quick search offers. Words hold extra search terms in both languages.
         List<PaletteItem> PaletteItems()
@@ -342,25 +370,19 @@ namespace FileConverter
         }
         public void ShowStudio(string[] files) { Go(1); studio.AcceptFiles(files); }
 
-        readonly PageFader fader = new PageFader();
-
         void Go(int i)
         {
             if (i == current) return;
             int was = current;
-            // picture of the page we're leaving, for a soft cross-fade
-            Bitmap before = was >= 0 && Visible && WindowState != FormWindowState.Minimized ? PageFader.Snap(pages[was]) : null;
+            // a picture of the page we're leaving floats above and fades away (on the graphics card) as the new one shows
+            Overlay before = was >= 0 && !sliding && Visible && WindowState != FormWindowState.Minimized ? Fx.Hold(pages[was], pages[was].ClientRectangle) : null;
             current = i;
             sidebar.Selected = i;
             for (int k = 0; k < pages.Count; k++) pages[k].Visible = k == i;
             pages[i].OnShown();
             pages[i].DoLayout();
             sidebar.Invalidate();
-            if (before != null)
-            {
-                fader.Bounds = pages[i].Bounds;
-                fader.Run(before, PageFader.Snap(pages[i]), i > was ? 1 : -1);
-            }
+            Fx.FadeAway(before, 230, 0, (i > was ? -1 : 1) * Theme.S(10));
             if (i != SettingsIndex) Settings.Set("LastPage", i.ToString());
         }
 

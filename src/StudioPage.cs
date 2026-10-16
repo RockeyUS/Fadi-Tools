@@ -10,6 +10,9 @@ namespace FileConverter
         public readonly ViewerPage Photos;
         public readonly TrimPage Videos;
         public readonly PdfPage Pdf;
+        /// The PDF tab's page viewer / editor (what the Photos side used to do with PDFs: read, add text and
+        /// pictures, copy text, save as PDF). The PDF tab shows it while a PDF is open in it, the page tools otherwise.
+        public readonly ViewerPage PdfDoc;
         readonly Segments tabs;
         Page active;
         readonly Btn bClose;
@@ -24,12 +27,21 @@ namespace FileConverter
             Photos.OpenProjectFile += f => { Show(Videos); Videos.OpenProject(f, false); };
             Photos.BrowseProjects += () => { string f = TrimPage.PickProject(FindForm()); if (f != null) { Show(Videos); Videos.OpenProject(f, false); } };
             Pdf = new PdfPage { TitleKey = "studio_title", SubKey = "studio_pdf_sub" };
-            Videos.Visible = false; Pdf.Visible = false;
-            Controls.Add(Photos); Controls.Add(Videos); Controls.Add(Pdf);
+            PdfDoc = new ViewerPage(true, true);
+            // a PDF picked or dropped on the Photos side opens in the PDF tab
+            Photos.OpenPdf += f => OpenPdf(f, 0);
+            PdfDoc.OpenOther += AcceptFiles;
+            PdfDoc.OpenMedia += f => { Show(Videos); Videos.AcceptFiles(new[] { f }); };
+            PdfDoc.SendToConverter += f => { if (SendToConverter != null) SendToConverter(f); };
+            // from the page editor to the page tools and back, with the same PDF
+            PdfDoc.OrganizePages += f => { PdfDoc.CloseAll(); Pdf.StartMode(1, false); Show(Pdf); Pdf.OpenPdf(f); };
+            Pdf.EditContent += (f, page) => OpenPdf(f, page);
+            Videos.Visible = false; Pdf.Visible = false; PdfDoc.Visible = false;
+            Controls.Add(Photos); Controls.Add(Videos); Controls.Add(Pdf); Controls.Add(PdfDoc);
             // the three sides of the Studio
             tabs = new Segments(() => L.T("studio_t_photos"), () => L.T("studio_t_videos"), () => L.T("studio_t_pdf")) { FontSize = 9f, Surface = Surface.Background };
             tabs.Glyphs = new[] { Ico.Photo, Ico.Video, "\uEA90" };
-            tabs.SelectedChanged += (s, e) => Show(new Page[] { Photos, Videos, Pdf }[tabs.SelectedIndex]);
+            tabs.SelectedChanged += (s, e) => Show(new Page[] { Photos, Videos, PdfDoc.HasFile ? (Page)PdfDoc : Pdf }[tabs.SelectedIndex]);
             Controls.Add(tabs);
             active = Photos;
             // close the open photo/video and go back to the empty Studio
@@ -37,8 +49,9 @@ namespace FileConverter
             bClose.FontSize = 9f;
             bClose.Click += (s, e) =>
             {
-                bool ok = active == Videos ? Videos.CloseFile() : Photos.CloseAll();
+                bool ok = active == Videos ? Videos.CloseFile() : active == PdfDoc ? PdfDoc.CloseAll() : Photos.CloseAll();
                 if (ok && active == Videos) Show(Photos);
+                if (ok && active == PdfDoc) Show(Pdf);
                 UpdateClose();
             };
             Controls.Add(bClose);
@@ -47,22 +60,32 @@ namespace FileConverter
             poll.Start();
         }
 
+        public event Action<string> SendToConverter;
+
         public void Show(Page p)
         {
             if (active == p) return;
             if (Visible && active != null) Fx.Crossfade(this, 180);
             active = p;
-            Photos.Visible = p == Photos; Videos.Visible = p == Videos; Pdf.Visible = p == Pdf;
+            Photos.Visible = p == Photos; Videos.Visible = p == Videos; Pdf.Visible = p == Pdf; PdfDoc.Visible = p == PdfDoc;
             tabs.SetQuietly(p == Photos ? 0 : p == Videos ? 1 : 2);
             DoLayout();
+            UpdateClose();
             p.OnShown();
+        }
+
+        /// Opens a PDF in the PDF tab's page editor (page = the page to show first).
+        public void OpenPdf(string path, int page)
+        {
+            Show(PdfDoc);
+            PdfDoc.OpenDocument(path, page);
         }
 
         public override bool Busy { get { return Videos.Busy || Pdf.Busy; } }
 
         void UpdateClose()
         {
-            bool v = active == Pdf ? false : active == Videos ? Videos.HasFile : Photos.HasFile;
+            bool v = active == Pdf ? false : active == Videos ? Videos.HasFile : active == PdfDoc ? PdfDoc.HasFile : Photos.HasFile;
             if (bClose.Visible != v) { bClose.Visible = v; if (v) bClose.BringToFront(); }
         }
 
@@ -70,7 +93,7 @@ namespace FileConverter
         {
             int tw = Math.Min(Theme.S(360), Math.Max(Theme.S(240), Width / 3));
             int w = Math.Max(Theme.S(110), bClose.PreferredWidth + Theme.S(12));
-            foreach (Page p in new Page[] { Photos, Videos, Pdf })
+            foreach (Page p in new Page[] { Photos, Videos, Pdf, PdfDoc })
             {
                 p.Toast = Toast; p.Owner = Owner; p.Glyph = Glyph;
                 p.HeaderReserve = tw + w + Theme.S(24);
@@ -85,7 +108,7 @@ namespace FileConverter
             bClose.BringToFront();
         }
 
-        public override void Restyle() { Photos.Restyle(); Videos.Restyle(); Pdf.Restyle(); Photos.DoLayout(); Videos.DoLayout(); Pdf.DoLayout(); }
+        public override void Restyle() { Photos.Restyle(); Videos.Restyle(); Pdf.Restyle(); PdfDoc.Restyle(); Photos.DoLayout(); Videos.DoLayout(); Pdf.DoLayout(); PdfDoc.DoLayout(); }
         public override void OnShown() { active.OnShown(); }
 
         public override void AcceptFiles(string[] paths)
@@ -98,6 +121,15 @@ namespace FileConverter
                 foreach (string p in paths) { string e = Formats.Ext(p); if (e != "pdf" && Formats.CategoryOf(e) != Category.Image) fits = false; }
                 if (fits) { Pdf.AcceptFiles(paths); return; }
             }
+            // PDFs go to the PDF tab: one opens in the page editor, several are combined
+            bool allPdf = true;
+            foreach (string p in paths) if (Formats.Ext(p) != "pdf") allPdf = false;
+            if (allPdf)
+            {
+                if (paths.Length == 1) { OpenPdf(paths[0], 0); return; }
+                Pdf.StartMode(0, false); Show(Pdf); Pdf.AcceptFiles(paths); return;
+            }
+            if (active == PdfDoc && paths.Length == 1 && DocPages.IsDoc(paths[0])) { PdfDoc.OpenDocument(paths[0]); return; }
             if (Formats.Ext(paths[0]) == TrimPage.ProjectExt) { Show(Videos); Videos.OpenProject(paths[0], false); return; }
             Category c = Formats.CategoryOf(Formats.Ext(paths[0]));
             // pictures dropped on a video being edited go on top of it
@@ -110,6 +142,7 @@ namespace FileConverter
         public bool ConfirmClose()
         {
             if (!Photos.ConfirmDiscard()) return false;
+            if (!PdfDoc.ConfirmDiscard()) return false;
             if (Videos.HasUnsavedText && !Ask.Confirm(FindForm(), L.T("ed_discard_title"), L.T("ed_discard"), L.T("ed_discard_yes"), L.T("ed_keep_editing"), AskKind.Warning)) return false;
             return true;
         }
@@ -118,6 +151,7 @@ namespace FileConverter
         {
             if (active == Pdf) return false;
             if (active == Photos) return (Photos.Editing || !textBoxFocused) && Photos.HandleKey(k);
+            if (active == PdfDoc) return (PdfDoc.Editing || !textBoxFocused) && PdfDoc.HandleKey(k);
             return Videos.HandleKey(k);
         }
 

@@ -91,7 +91,6 @@ namespace FileConverter
         public bool Step()
         {
             if (to == null) return false;
-            if (!Fx.Motion) { Done(); return false; }
             frame++;
             t = Math.Min(1, frame / Math.Max(1, Frames));
             if (t >= 1) { Done(); return false; }
@@ -134,7 +133,7 @@ namespace FileConverter
     }
 
     /// Small one-line animations for any part of the app.
-    public static class Fx
+    public static partial class Fx
     {
         static readonly bool noAnim = Environment.GetEnvironmentVariable("FADI_NO_ANIM") != null;
         /// Movement on (Settings > Animations; off = everything jumps straight to where it ends).
@@ -142,29 +141,37 @@ namespace FileConverter
 
         class TweenRun : IAnimated
         {
-            public int Frame, Frames; public Action<float> Each; public Action Done;
+            public double Ms, Start = -1; public Action<float> Each; public Action Done; public bool Raw;
             public bool Step()
             {
-                Frame++;
-                float t = Math.Min(1f, Frame / (float)Math.Max(1, Frames));
-                float e = 1 - (float)Math.Pow(1 - t, 3);
+                // the clock starts at the first frame, so a slow first paint doesn't eat the start of the movement
+                double now = Animator.Now;
+                if (Start < 0) Start = now - 15;
+                float t = (float)Math.Min(1, (now - Start) / Math.Max(1, Ms));
+                float e = Raw ? t : 1 - (float)Math.Pow(1 - t, 3);
                 try { Each(e); } catch { }
                 if (t >= 1) { if (Done != null) try { Done(); } catch { } return false; }
                 return true;
             }
         }
-        /// Runs step(0..1, eased) over about ms milliseconds, then done (instantly when motion is off).
+        /// Runs step(0..1, eased out) over ms milliseconds of real time, then done (instantly when motion is off).
         public static void Tween(int ms, Action<float> step, Action done)
         {
             if (!Motion) { step(1); if (done != null) done(); return; }
-            Animator.Start(new TweenRun { Frames = Math.Max(2, ms / 15), Each = step, Done = done });
+            Animator.Start(new TweenRun { Ms = ms, Each = step, Done = done });
+        }
+        /// Same, with plain (linear) time 0..1 so the caller can shape it.
+        public static void TweenLinear(int ms, Action<float> step, Action done)
+        {
+            if (!Motion) { step(1); if (done != null) done(); return; }
+            Animator.Start(new TweenRun { Ms = ms, Each = step, Done = done, Raw = true });
         }
 
         /// Moves a value a step closer to its target; true while it's still moving.
         public static bool Ease(ref float v, float target, float speed)
         {
             if (!Motion) { v = target; return false; }
-            v += (target - v) * speed;
+            v += (target - v) * Animator.Rate(speed);
             if (Math.Abs(target - v) < 0.004f) { v = target; return false; }
             return true;
         }
@@ -173,55 +180,20 @@ namespace FileConverter
         /// (call it just before changing what the control shows).
         public static void Crossfade(Control c, int ms) { Crossfade(c, ms, 0); }
 
+        /// (A picture of the old look is held over the control on its own see-through window and fades away
+        /// on the graphics card, so this stays smooth however big the window is.)
         public static void Crossfade(Control c, int ms, int dir)
         {
-            if (!PageFader.Enabled2 || c == null || c.Parent == null || !c.Visible || !c.IsHandleCreated) return;
-            Form f = c.FindForm();
-            if (f == null || f.WindowState == FormWindowState.Minimized) return;
-            Bitmap before = PageFader.Snap(c);
-            if (before == null) return;
-            Control parent = c.Parent;
-            PageFader fd = new PageFader { Frames = Math.Max(4, ms / 15f), OneShot = true, Bounds = c.Bounds };
-            parent.Controls.Add(fd);
-            fd.Hold(before);
-            try
-            {
-                parent.BeginInvoke((Action)(() =>
-                {
-                    if (fd.IsDisposed) return;
-                    if (c.IsDisposed || !c.Visible) { fd.Run(null, null, 0); return; }
-                    fd.Bounds = c.Bounds;
-                    fd.Run(before, PageFader.Snap(c), dir);
-                }));
-            }
-            catch { fd.Run(null, null, 0); }
+            if (c == null) return;
+            FadeAway(Hold(c, c.ClientRectangle), ms + 40, 0, -dir * Theme.S(8));
         }
 
         /// Cross-fades one part of a control (area in its own coordinates), e.g. the content under a row of tabs.
         public static void Crossfade(Control host, Func<Rectangle> area, int ms)
         {
             if (area == null) { Crossfade(host, ms, 0); return; }
-            if (!PageFader.Enabled2 || host == null || !host.Visible || !host.IsHandleCreated) return;
-            Form f = host.FindForm();
-            if (f == null || f.WindowState == FormWindowState.Minimized) return;
-            Rectangle r = area();
-            r.Intersect(host.ClientRectangle);
-            if (r.Width < 4 || r.Height < 4) return;
-            Bitmap before = Crop(PageFader.Snap(host), r);
-            if (before == null) return;
-            PageFader fd = new PageFader { Frames = Math.Max(4, ms / 15f), OneShot = true, Bounds = r };
-            host.Controls.Add(fd);
-            fd.Hold(before);
-            try
-            {
-                host.BeginInvoke((Action)(() =>
-                {
-                    if (fd.IsDisposed) return;
-                    if (host.IsDisposed || !host.Visible) { fd.Run(null, null, 0); return; }
-                    fd.Run(before, Crop(PageFader.Snap(host), r), 0);
-                }));
-            }
-            catch { fd.Run(null, null, 0); }
+            if (host == null) return;
+            FadeAway(Hold(host, area()), ms + 40, 0, 0);
         }
 
         static Bitmap Crop(Bitmap full, Rectangle r)
@@ -277,9 +249,8 @@ namespace FileConverter
         /// One frame; true while it's still spreading.
         public bool Step()
         {
-            if (!Fx.Motion) { t = 1; return false; }
             if (t >= 1) return false;
-            t = Math.Min(1, t + 0.055f);
+            t = Math.Min(1, t + 0.055f * Animator.K);
             return true;
         }
 

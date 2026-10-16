@@ -368,24 +368,40 @@ namespace FileConverter
             Edit = "", Bold = "", Italic = "", AlignLeft = "", AlignCenter = "", AlignRight = "", FontGlyph = "", Resize = "", Text = "";
     }
 
-    /// Drives small hover/press animations at ~60 fps.
+    /// Drives the animations at up to ~60 fps. Movement follows the clock, not the frame count:
+    /// when a frame takes longer (a big window, a busy PC) things move further, so nothing slows down.
     public static class Animator
     {
         static readonly List<IAnimated> items = new List<IAnimated>();
         static Timer timer;
+        static readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+        static double last;
+        /// How many 15 ms frames' worth of time this frame stands for (1 = on time).
+        public static float K = 1;
+        /// Milliseconds since the app started (for animations that follow the clock).
+        public static double Now { get { return clock.Elapsed.TotalMilliseconds; } }
+
+        /// A "move this fraction of the way per 15 ms frame" speed, corrected for the real length of this frame.
+        public static float Rate(float perFrame) { return K == 1 ? perFrame : 1 - (float)Math.Pow(1 - Math.Min(0.999f, perFrame), K); }
+
         public static void Start(IAnimated a)
         {
             if (!items.Contains(a)) items.Add(a);
             if (timer == null) { timer = new Timer(); timer.Interval = 15; timer.Tick += Tick; }
-            if (!timer.Enabled) timer.Start();
+            if (!timer.Enabled) { last = Now - 15; timer.Start(); }
         }
         static void Tick(object s, EventArgs e)
         {
+            double now = Now;
+            K = (float)Math.Max(0.5, Math.Min(4, (now - last) / 15.0));
+            last = now;
             for (int i = items.Count - 1; i >= 0; i--)
             {
+                if (i >= items.Count) continue;
+                IAnimated it = items[i];
                 bool more = false;
-                try { more = items[i].Step(); } catch { }
-                if (!more) items.RemoveAt(i);
+                try { more = it.Step(); } catch { }
+                if (!more) { int k = items.IndexOf(it); if (k >= 0) items.RemoveAt(k); }
             }
             if (items.Count == 0) timer.Stop();
         }

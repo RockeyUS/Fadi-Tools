@@ -31,7 +31,10 @@ namespace FileConverter
             btnAdd = new Btn(() => L.T("add_files"), Ico.Add, BtnKind.Secondary);
             btnAdd.Click += (s, e) => Browse();
             btnClear = new Btn(() => L.T("clear"), Ico.Delete, BtnKind.Ghost);
-            btnClear.Click += (s, e) => { list.Items.Clear(); list.Invalidate(); userPicked = false; progress.Value = 0; btnOpen.Visible = false; SetStatus("", Theme.InkSoft); DoLayout(); UpdateState(); };
+            btnClear.Click += (s, e) => Fx.SweepAway(list, list.VisibleRows(null), () =>
+            {
+                list.Items.Clear(); list.Invalidate(); userPicked = false; progress.Value = 0; btnOpen.Visible = false; SetStatus("", Theme.InkSoft); DoLayout(); UpdateState();
+            });
 
             list = new FileList();
             list.Previews = Settings.Get("ConvertPreviews", "1") == "1";

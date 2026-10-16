@@ -295,6 +295,18 @@ namespace FileConverter
         int ContentH { get { return Pad * 2 + (Pages.Count + Cols - 1) / Cols * CellH; } }
         int MaxScroll { get { return Math.Max(0, ContentH - Height); } }
 
+        /// The page pictures on screen (for the "clear" animation).
+        public List<Rectangle> VisibleCells()
+        {
+            List<Rectangle> l = new List<Rectangle>();
+            for (int i = 0; i < Pages.Count; i++)
+            {
+                Rectangle c = Cell(i); c.Height += Theme.S(24);
+                if (c.Bottom > 0 && c.Top < Height) l.Add(c);
+            }
+            return l;
+        }
+
         Rectangle Cell(int i)
         {
             int cols = Cols;
@@ -325,10 +337,9 @@ namespace FileConverter
         public override bool Step()
         {
             bool more = base.Step();
-            if (!Fx.Motion) { scrollF = target; scroll = target; Invalidate(); return more; }
             if (scroll != target)
             {
-                scrollF += (target - scrollF) * 0.3f;
+                scrollF += (target - scrollF) * Animator.Rate(0.3f);
                 if (Math.Abs(target - scrollF) < 0.6f) scrollF = target;
                 scroll = (int)Math.Round(scrollF); Invalidate();
                 return true;
@@ -570,11 +581,16 @@ namespace FileConverter
             bAdd.Click += (s, e) => { if (mode.SelectedIndex == 0) BrowseCombine(); else BrowsePdf(); };
             bClear = new Btn(() => L.T("clear"), Ico.Delete, BtnKind.Ghost);
             bClear.Click += (s, e) => ClearAll();
+            bClear.MouseEnter += (s, e) => tips.SetToolTip(bClear, L.T("clear"));
             bOpen = new Btn(() => L.T("pdf_open_other"), Ico.FolderOpen, BtnKind.Secondary);
             bOpen.Click += (s, e) => BrowsePdf();
+            bOpen.MouseEnter += (s, e) => tips.SetToolTip(bOpen, L.T("pdf_open_other"));
+            bAdd.MouseEnter += (s, e) => tips.SetToolTip(bAdd, L.T("add_files"));
             bGo = new Btn(() => running ? L.T("cancel") : GoLabel, "", BtnKind.Primary) { FontSize = 11f, Radius = 10 };
             bGo.Click += (s, e) => { if (running) { cancel = true; SetStatus(L.T("cancelling"), Theme.InkSoft); } else Go(); };
 
+            bContent = Tool("pdf_content", Ico.Edit, OpenContent);
+            bContent.MouseEnter += (s, e) => tips.SetToolTip(bContent, L.T("pdf_content_tip"));
             bRotL = Tool("pdf_rot_l", "\uE7A8", () => grid.RotateSelected(270));
             bRotR = Tool("pdf_rot_r", Ico.Rotate, () => grid.RotateSelected(90));
             bDel = Tool("pdf_delete", Ico.Delete, () => grid.DeleteSelected());
@@ -588,7 +604,14 @@ namespace FileConverter
             bNums = Tool("pdf_nums", "\uE8EF", AddNumbers);
             bMark = Tool("pdf_mark", "\uE790", AddWatermark);
             bSign = Tool("pdf_sign", "\uEC87", SignIt);
-            foreach (Btn b in new[] { bLock, bNums, bMark, bSign }) { Btn k = b; k.MouseEnter += (s, e) => tips.SetToolTip(k, k.Caption); }
+            // the names show when pointed at (they're icons only when the window is short)
+            Btn[] named = { bLock, bNums, bMark, bSign, bExtract, bSplit, bImages };
+            string[] names = { "pdf_lock", "pdf_nums", "pdf_mark", "pdf_sign", "pdf_extract", "pdf_split", "pdf_images" };
+            for (int i = 0; i < named.Length; i++)
+            {
+                Btn k = named[i]; string key = names[i];
+                k.MouseEnter += (s, e) => tips.SetToolTip(k, L.T(k == bLock && pdfLocked ? "pdf_unlock" : key));
+            }
             bShow = new Btn(() => L.T("show_file"), Ico.FolderOpen, BtnKind.Ghost) { AlignStart = true, Visible = false };
             bShow.Click += (s, e) => ActivityRows.ShowOutput(lastOutput);
             pageSize = new Segments(() => "A4", () => "Letter", () => L.T("pdf_size_photo"));
@@ -601,7 +624,7 @@ namespace FileConverter
             imgFmt.SetSilently(Settings.Get("PdfImgFmt", "jpg") == "png" ? 1 : 0);
             imgFmt.SelectedChanged += (s, e) => Settings.Set("PdfImgFmt", imgFmt.SelectedIndex == 1 ? "png" : "jpg");
 
-            Controls.AddRange(new Control[] { mode, list, grid, dropC, dropP, bAdd, bClear, bOpen, bGo, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bShow, pageSize, imgFmt, progress, bLock, bNums, bMark, bSign });
+            Controls.AddRange(new Control[] { mode, list, grid, dropC, dropP, bAdd, bClear, bOpen, bGo, bContent, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bShow, pageSize, imgFmt, progress, bLock, bNums, bMark, bSign });
             EnableDrop(list, grid, dropC, dropP);
             UpdateState();
         }
@@ -614,6 +637,23 @@ namespace FileConverter
         }
 
         public override bool Busy { get { return running; } }
+
+        /// "Add text & pictures": the open PDF goes to the Studio's page editor (path, page to start on).
+        public event Action<string, int> EditContent;
+        /// The PDF open in "Edit pages", or null.
+        public string PdfPath { get { return Combine ? null : pdfPath; } }
+        Btn bContent;
+        string[] modeGlyphs;
+
+        void OpenContent()
+        {
+            if (pdfPath == null || EditContent == null || running) return;
+            // page changes made here (order, turns, deletions) aren't in the file until it's saved
+            if (Edited && !Ask.Confirm(FindForm(), L.T("ed_discard_title"), L.T("pdf_content_unsaved"), L.T("pdf_content_go"), L.T("ed_keep_editing"), AskKind.Warning)) return;
+            int page = 0;
+            if (!Edited) foreach (PdfPageItem it in grid.Pages) if (it.Sel) { page = it.Src - 1; break; }
+            EditContent(pdfPath, page);
+        }
         bool Combine { get { return mode.SelectedIndex == 0; } }
         bool Edited
         {
@@ -645,10 +685,15 @@ namespace FileConverter
         void ClearAll()
         {
             if (running) return;
-            if (Combine) { foreach (PdfItem it in list.Items) if (it.Thumb != null) it.Thumb.Dispose(); list.Items.Clear(); list.Invalidate(); }
-            else ClosePdf();
-            lastOutput = null; bShow.Visible = false;
-            SetStatus("", Theme.InkSoft); UpdateState();
+            Control from = Combine ? (Control)list : grid;
+            List<Rectangle> pieces = Combine ? list.VisibleRows(null) : grid.VisibleCells();
+            Fx.SweepAway(from, pieces, () =>
+            {
+                if (Combine) { foreach (PdfItem it in list.Items) if (it.Thumb != null) it.Thumb.Dispose(); list.Items.Clear(); list.Invalidate(); }
+                else ClosePdf();
+                lastOutput = null; bShow.Visible = false;
+                SetStatus("", Theme.InkSoft); UpdateState();
+            });
         }
 
         void ClosePdf()
@@ -670,9 +715,19 @@ namespace FileConverter
             int rx = left.Right + gap;
             bool c = Combine, has = c ? list.Items.Count > 0 : pdfPath != null;
             // header: mode switch + add / clear
+            if (modeGlyphs == null) modeGlyphs = mode.Glyphs;
+            bClear.Label = () => L.T("clear"); bAdd.Label = () => L.T("add_files"); bOpen.Label = () => L.T("pdf_open_other");
             int bw = Math.Max(Theme.S(86), bClear.PreferredWidth), aw = Math.Max(Theme.S(118), (c ? bAdd : bOpen).PreferredWidth);
             int room = left.Width - ip * 2 - (has ? aw + bw + Theme.S(24) : 0);
-            Place(mode, new Rectangle(left.X + ip, left.Y + Theme.S(14), Math.Max(Theme.S(240), Math.Min(Theme.S(400), room)), Theme.S(38)));
+            // a narrow window: the buttons next to the tabs become icons (their names show when pointed at)
+            if (has && room < Theme.S(250))
+            {
+                bClear.Label = () => ""; bAdd.Label = () => ""; bOpen.Label = () => "";
+                bw = aw = Theme.S(38);
+                room = left.Width - ip * 2 - (aw + bw + Theme.S(24));
+            }
+            mode.Glyphs = room < Theme.S(270) ? null : modeGlyphs;
+            Place(mode, new Rectangle(left.X + ip, left.Y + Theme.S(14), Math.Max(Theme.S(190), Math.Min(Theme.S(400), room)), Theme.S(38)));
             Place(bClear, new Rectangle(left.Right - ip - bw, left.Y + Theme.S(15), bw, Theme.S(36)));
             Btn add = c ? bAdd : bOpen;
             Place(add, new Rectangle(left.Right - ip - aw - (has ? bw + Theme.S(8) : 0), left.Y + Theme.S(15), aw, Theme.S(36)));
@@ -695,7 +750,7 @@ namespace FileConverter
             }
             else statusR = Rectangle.Empty;
             int oy = y + Theme.S(16);
-            foreach (Control k in new Control[] { pageSize, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, imgFmt, bLock, bNums, bMark, bSign }) k.Visible = false;
+            foreach (Control k in new Control[] { pageSize, bContent, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, imgFmt, bLock, bNums, bMark, bSign }) k.Visible = false;
             stampCard = Rectangle.Empty;
             if (c)
             {
@@ -710,11 +765,16 @@ namespace FileConverter
             {
                 selLblR = new Rectangle(x, oy, cw, Theme.S(18)); oy += Theme.S(26);
                 int ry = oy;
-                foreach (Btn b in new[] { bRotL, bRotR, bDel, bAll, bReset })
+                // rows get a little tighter when the window is short, so all three cards still fit
+                int tools = Edited ? 6 : 5;
+                int need = (oy - Top0) + tools * Theme.S(38) + Theme.S(10) + gap + Theme.S(42) + 3 * Theme.S(38) + Theme.S(44) + gap + Theme.S(42) + Theme.S(38) + Theme.S(8);
+                int rh = need <= H - p - Top0 ? Theme.S(38) : need - (tools + 4) * Theme.S(5) <= H - p - Top0 ? Theme.S(33) : Theme.S(30);
+                int bh2 = rh - Theme.S(2);
+                foreach (Btn b in new[] { bContent, bRotL, bRotR, bDel, bAll, bReset })
                 {
                     b.Visible = has; if (!has) continue;
                     if (b == bReset && !Edited) { b.Visible = false; continue; }
-                    Place(b, new Rectangle(rx + Theme.S(8), ry, w - Theme.S(16), Theme.S(36))); ry += Theme.S(38);
+                    Place(b, new Rectangle(rx + Theme.S(8), ry, w - Theme.S(16), bh2)); ry += rh;
                 }
                 if (!has) { optHintR = new Rectangle(x, oy, cw, Theme.S(54)); ry = oy + Theme.S(58); }
                 else optHintR = Rectangle.Empty;
@@ -724,38 +784,70 @@ namespace FileConverter
                 if (has)
                 {
                     moreLblR = new Rectangle(x, my + Theme.S(16), cw, Theme.S(18));
-                    int by = my + Theme.S(42);
-                    foreach (Btn b in new[] { bExtract, bSplit, bImages })
-                    {
-                        b.Visible = true; Place(b, new Rectangle(rx + Theme.S(8), by, w - Theme.S(16), Theme.S(36))); by += Theme.S(38);
-                    }
-                    fmtLblR = new Rectangle(x, by + Theme.S(6), cw / 2, Theme.S(32));
-                    imgFmt.Visible = true; Place(imgFmt, new Rectangle(x + cw / 2, by + Theme.S(4), cw / 2, Theme.S(32))); by += Theme.S(44);
-                    more = new Rectangle(rx, my, w, by - my);
-                    if (more.Bottom < H - p) cards.Add(more);
-                    // protect & stamp: 2 × 2 with words when there's room, one row of icons when the window is short
-                    int sy = more.Bottom + gap;
                     Btn[] st = { bLock, bNums, bMark, bSign };
-                    bool roomy = sy + Theme.S(42) + Theme.S(38) * 2 + Theme.S(10) <= H - p;
-                    stampLblR = new Rectangle(x, sy + Theme.S(16), cw, Theme.S(18));
-                    int half = (w - Theme.S(16) - Theme.S(4)) / 2, qw = (w - Theme.S(16) - Theme.S(12)) / 4;
-                    for (int i = 0; i < 4; i++)
+                    Btn[] mo = { bExtract, bSplit, bImages };
+                    // a short window: "More" and "Protect & stamp" share one card of icons (names show when pointed at)
+                    bool shortWin = my + Theme.S(42) + 3 * rh + Theme.S(44) + gap + Theme.S(42) + Theme.S(38) + Theme.S(8) > H - p + Theme.S(4);
+                    int qw = (w - Theme.S(16) - Theme.S(12)) / 4;
+                    if (shortWin)
                     {
-                        Btn b = st[i]; b.Visible = true;
-                        if (roomy)
+                        int by = my + Theme.S(42);
+                        for (int i = 0; i < 3; i++)
                         {
-                            b.Label = i == 0 ? (Func<string>)(() => L.T(pdfLocked ? "pdf_unlock" : "pdf_lock")) : i == 1 ? (Func<string>)(() => L.T("pdf_nums")) : i == 2 ? (Func<string>)(() => L.T("pdf_mark")) : () => L.T("pdf_sign");
-                            b.AlignStart = true;
-                            Place(b, new Rectangle(rx + Theme.S(8) + (i % 2) * (half + Theme.S(4)), sy + Theme.S(42) + (i / 2) * Theme.S(38), half, Theme.S(36)));
+                            Btn b = mo[i]; b.Visible = true; b.AlignStart = false; b.Label = () => "";
+                            Place(b, new Rectangle(rx + Theme.S(8) + i * (qw + Theme.S(4)), by, qw, Theme.S(34)));
                         }
-                        else
+                        imgFmt.Visible = true;
+                        Place(imgFmt, new Rectangle(rx + Theme.S(8) + 3 * (qw + Theme.S(4)), by + Theme.S(1), qw, Theme.S(32)));
+                        fmtLblR = Rectangle.Empty;
+                        by += Theme.S(38);
+                        for (int i = 0; i < 4; i++)
                         {
-                            b.Label = () => ""; b.AlignStart = false;
-                            Place(b, new Rectangle(rx + Theme.S(8) + i * (qw + Theme.S(4)), sy + Theme.S(42), qw, Theme.S(36)));
+                            Btn b = st[i]; b.Visible = true; b.AlignStart = false; b.Label = () => "";
+                            Place(b, new Rectangle(rx + Theme.S(8) + i * (qw + Theme.S(4)), by, qw, Theme.S(34)));
                         }
+                        by += Theme.S(42);
+                        more = new Rectangle(rx, my, w, by - my);
+                        cards.Add(more);
+                        stampCard = Rectangle.Empty;
                     }
-                    stampCard = new Rectangle(rx, sy, w, Theme.S(42) + (roomy ? Theme.S(76) : Theme.S(38)) + Theme.S(8));
-                    if (stampCard.Bottom <= H - p + Theme.S(4)) cards.Add(stampCard);
+                    else
+                    {
+                        int by = my + Theme.S(42);
+                        string[] mk = { "pdf_extract", "pdf_split", "pdf_images" };
+                        for (int i = 0; i < 3; i++)
+                        {
+                            Btn b = mo[i]; string k = mk[i];
+                            b.Visible = true; b.AlignStart = true; b.Label = () => L.T(k);
+                            Place(b, new Rectangle(rx + Theme.S(8), by, w - Theme.S(16), bh2)); by += rh;
+                        }
+                        fmtLblR = new Rectangle(x, by + Theme.S(6), cw / 2, Theme.S(32));
+                        imgFmt.Visible = true; Place(imgFmt, new Rectangle(x + cw / 2, by + Theme.S(4), cw / 2, Theme.S(32))); by += Theme.S(44);
+                        more = new Rectangle(rx, my, w, by - my);
+                        cards.Add(more);
+                        // protect & stamp: 2 × 2 with words when there's room, one row of icons otherwise
+                        int sy = more.Bottom + gap;
+                        bool roomy = sy + Theme.S(42) + Theme.S(38) * 2 + Theme.S(10) <= H - p;
+                        stampLblR = new Rectangle(x, sy + Theme.S(16), cw, Theme.S(18));
+                        int half = (w - Theme.S(16) - Theme.S(4)) / 2;
+                        for (int i = 0; i < 4; i++)
+                        {
+                            Btn b = st[i]; b.Visible = true;
+                            if (roomy)
+                            {
+                                b.Label = i == 0 ? (Func<string>)(() => L.T(pdfLocked ? "pdf_unlock" : "pdf_lock")) : i == 1 ? (Func<string>)(() => L.T("pdf_nums")) : i == 2 ? (Func<string>)(() => L.T("pdf_mark")) : () => L.T("pdf_sign");
+                                b.AlignStart = true;
+                                Place(b, new Rectangle(rx + Theme.S(8) + (i % 2) * (half + Theme.S(4)), sy + Theme.S(42) + (i / 2) * Theme.S(38), half, Theme.S(36)));
+                            }
+                            else
+                            {
+                                b.Label = () => ""; b.AlignStart = false;
+                                Place(b, new Rectangle(rx + Theme.S(8) + i * (qw + Theme.S(4)), sy + Theme.S(42), qw, Theme.S(36)));
+                            }
+                        }
+                        stampCard = new Rectangle(rx, sy, w, Theme.S(42) + (roomy ? Theme.S(76) : Theme.S(38)) + Theme.S(8));
+                        cards.Add(stampCard);
+                    }
                 }
                 else more = Rectangle.Empty;
             }
@@ -801,7 +893,7 @@ namespace FileConverter
                 if (cards.Contains(more))
                 {
                     Caps(g, this, L.T("pdf_more_lbl"), moreLblR, m);
-                    Label(g, L.T("pdf_pics_as"), Theme.F(8.75f), Theme.InkSoft, fmtLblR);
+                    if (!fmtLblR.IsEmpty) Label(g, L.T("pdf_pics_as"), Theme.F(8.75f), Theme.InkSoft, fmtLblR);
                 }
                 if (!stampCard.IsEmpty) Caps(g, this, L.T("pdf_stamp_lbl"), stampLblR, m);
             }
@@ -824,7 +916,7 @@ namespace FileConverter
             bDel.Enabled = sel > 0 && sel < grid.Pages.Count && !running;
             bExtract.Enabled = sel > 0 && !running;
             bAll.Label = () => grid.SelectedCount == grid.Pages.Count && grid.Pages.Count > 0 ? L.T("pdf_select_none") : L.T("pdf_select_all");
-            foreach (Btn b in new[] { bAll, bReset, bSplit, bImages, bAdd, bOpen, bClear, bLock, bNums, bMark, bSign }) b.Enabled = !running;
+            foreach (Btn b in new[] { bContent, bAll, bReset, bSplit, bImages, bAdd, bOpen, bClear, bLock, bNums, bMark, bSign }) b.Enabled = !running;
             pageSize.Enabled = imgFmt.Enabled = !running;
             DoLayout();
             foreach (Control k in Controls) k.Invalidate();
