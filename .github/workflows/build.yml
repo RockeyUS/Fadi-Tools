@@ -27,7 +27,11 @@ jobs:
           $out = Join-Path $PWD 'selftest'
           $p = Start-Process -FilePath 'build\Fadi Tools.exe' -ArgumentList '/selftest', "`"$out`"" -Wait -PassThru
           if (Test-Path "$out\selftest.log") { Get-Content "$out\selftest.log" }
-          if ($p.ExitCode -ne 0) { throw "The self-test failed (exit code $($p.ExitCode))" }
+          if ($p.ExitCode -ne 0)
+          {
+            if (Test-Path "$out\selftest.log") { Get-Content "$out\selftest.log" | Where-Object { $_ -match 'PROBLEM|FAILED' } | Select-Object -First 20 | ForEach-Object { Write-Host "::error::$_" } }
+            throw "The self-test failed (exit code $($p.ExitCode))"
+          }
 
       - name: Pictures of every page
         if: always()

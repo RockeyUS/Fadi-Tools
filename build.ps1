@@ -2,6 +2,8 @@
 #   powershell -ExecutionPolicy Bypass -File build.ps1
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
+# on GitHub, a failure is also shown as a note on the run (so it can be read without opening the log)
+trap { if ($env:GITHUB_ACTIONS) { Write-Host ('::error::' + (($_ | Out-String) -replace "[`r`n]+", ' | ').Trim()) }; break }
 
 python checklang.py
 if ($LASTEXITCODE -ne 0) { throw 'A text key is listed twice in src\Lang.cs' }
@@ -35,7 +37,13 @@ if ($ref) {
 $cscArgs += 'src\*.cs'
 
 New-Item -ItemType Directory -Force build | Out-Null
-& $csc @args
-if ($LASTEXITCODE -ne 0) { throw "The build failed ($LASTEXITCODE)" }
+$log = & $csc @cscArgs 2>&1
+$code = $LASTEXITCODE
+$log | ForEach-Object { Write-Host $_ }
+if ($code -ne 0)
+{
+    if ($env:GITHUB_ACTIONS) { $log | Where-Object { "$_" -match 'error' } | Select-Object -First 25 | ForEach-Object { Write-Host "::error::$_" } }
+    throw "The build failed ($code)"
+}
 Copy-Item build\FileConverter.exe 'build\Fadi Tools.exe' -Force
 Write-Host 'Built build\Fadi Tools.exe'
