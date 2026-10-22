@@ -7,7 +7,7 @@
 ### [⬇ Download the latest version](https://github.com/RockeyUS/Fadi-Tools/releases/latest)
 
 Get **Fadi.Tools.zip** (everything included), unzip it anywhere and open **Fadi Tools.exe**. Or get **Fadi.Tools.exe** on its own; it downloads its engines the first time.
-If Windows says "Windows protected your PC", click **More info → Run anyway**.
+If Windows says "Windows protected your PC", It's due to Unsigned code, click **More info → Run anyway**.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/RockeyUS/Fadi-Tools/main/screenshots/convert-dark-en.png">
