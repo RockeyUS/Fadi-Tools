@@ -13,6 +13,7 @@ namespace FileConverter
     {
         static readonly Dictionary<char, string> Paths = new Dictionary<char, string>
         {
+            { '\uF406', "M6 2V16a2 2 0 0 0 2 2H22M2 6H16a2 2 0 0 1 2 2V22" },                         // crop
             { '\uE8FD', "M9 6H21M9 12H21M9 18H21M4 6H4.01M4 12H4.01M4 18H4.01" },                // list view
             { '\uF0E2', "R3 4 8 7 1.5R13 4 8 7 1.5R3 13 8 7 1.5R13 13 8 7 1.5" },                   // previews (picture view)
             { '', "M12 5V19M5 12H19" },                                                         // add

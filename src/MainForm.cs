@@ -74,6 +74,10 @@ namespace FileConverter
             };
             sidebar.OpenSearch += ShowPalette;
             Notifier.ExitRequested += ExitFromTray;
+            TrayPanel.ExitRequested += ExitFromTray;
+            TrayPanel.OpenRequested += ComeBack;
+            TrayPanel.SettingsRequested += () => { ComeBack(); Go(SettingsIndex); };
+            TrayPanel.CustomizeRequested += ShowWheelSettings;
             actTimer.Tick += (s, e) => PollActivity();
             actTimer.Start();
 
@@ -97,6 +101,8 @@ namespace FileConverter
                 if (SelfTest.Active) return;   // a test run: no tour, questions or update check
                 // the icon by the clock, for as long as the app is open
                 if (Settings.Get("KeepInTray", "1") == "1") Notifier.ShowResident(this, true);
+                DragWheel.Dropped += OnWheelDrop;
+                DragWheel.Apply(this);
                 BeginInvoke((Action)(() =>
                 {
                     bool tour = false;
@@ -258,6 +264,91 @@ namespace FileConverter
             }
         }
 
+        // ------------------------------------------------------------------ the drag + Shift wheel
+        /// Settings → Donut Wheel (from the tray panel).
+        public void ShowWheelSettings()
+        {
+            ComeBack();
+            if (current == SettingsIndex) { settings.OpenWheel(); return; }
+            settings.PrepareWheel();
+            Go(SettingsIndex);
+            settings.AfterShownWheel();
+        }
+
+        /// Brings the window back (from the tray too) for actions that need it.
+        void ComeBack()
+        {
+            if (!Visible) Show();
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            Activate();
+        }
+
+        /// A file was dropped on a slice of the wheel: convert / compress / cut out right away (shown in Activity,
+        /// saved next to the file), or open the right page.
+        void OnWheelDrop(string[] files, WheelItem it)
+        {
+            if (IsDisposed || files == null || files.Length == 0) return;
+            switch (it.Action)
+            {
+                // small windows of their own: Fadi Tools itself stays where it is
+                case "crop": CropWindow.Open(files[0], Cursor.Position, studio); return;
+                case "compress": CompressWindow.Open(files, Cursor.Position, compress); return;
+                case "edit": ComeBack(); Route(files, "studio"); return;
+                case "text": ComeBack(); Route(new[] { files[0] }, "text"); return;
+                case "info": ComeBack(); Route(new[] { files[0] }, "inspect"); return;
+                case "nobg":
+                    if (!BgRemover.Ready) { ComeBack(); Route(new[] { files[0] }, "studio"); toast.Show(L.T("wh_nobg_get"), true, null, null); return; }
+                    break;
+            }
+            bool cancel = false;
+            string title = files.Length == 1 ? System.IO.Path.GetFileName(files[0]) : L.T("n_files", files.Length);
+            Control source = it.IsFormat ? (Control)convert : it.Action == "compress" ? (Control)compress : studio;
+            string kind = it.IsFormat ? L.T("act_k_convert", it.Target.ToUpperInvariant()) : it.Action == "compress" ? L.T("act_k_compress") : L.T("wh_nobg");
+            ActJob job = Activity.Begin(source, kind, title, () => cancel = true);
+            Thread t = new Thread(() =>
+            {
+                int ok = 0; string lastOut = null, lastErr = null;
+                for (int i = 0; i < files.Length && !cancel; i++)
+                {
+                    string f = files[i];
+                    int index = i;
+                    try
+                    {
+                        string outDir = DragWheel.OutDirFor(f);
+                        if (it.Action == "nobg")
+                        {
+                            Activity.Update(job, (index + 0.2) / files.Length, null);
+                            using (Image im = ViewerPage.Decode(f, 4096))
+                            using (Bitmap b = new Bitmap(im))
+                            {
+                                byte[] mask = BgRemover.Mask(b);
+                                using (Bitmap cut = BgRemover.Cutout(b, mask))
+                                {
+                                    string dst = Paths.UniquePath(outDir, System.IO.Path.GetFileNameWithoutExtension(f) + " " + L.T("wh_nobg_suffix"), "png");
+                                    cut.Save(dst, System.Drawing.Imaging.ImageFormat.Png);
+                                    lastOut = dst;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            Job j = it.IsFormat ? Engine.Build(f, it.Target, outDir, Quality.Balanced) : Compressor.Build(f, outDir, Compressor.Level.Balanced, 0);
+                            string err = Engine.Run(j, p => Activity.Update(job, (index + p) / files.Length, files.Length > 1 ? (index + 1) + "/" + files.Length + "  ·  " + (int)(p * 100) + "%" : (int)(p * 100) + "%"), () => cancel);
+                            if (err != null) throw new Exception(err);
+                            lastOut = j.Output;
+                        }
+                        ok++;
+                    }
+                    catch (Exception ex) { lastErr = ex.Message; }
+                }
+                string where = files.Length > 0 ? System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(lastOut ?? files[0])) : "";
+                string detail = ok == files.Length ? L.T("all_done", ok == 1 ? L.T("one_file") : L.T("n_files", ok), where) : L.T("some_failed", ok, files.Length - ok);
+                Activity.End(job, ok == 0 ? (lastErr ?? L.T("none_converted")) : null, cancel, detail, ok == 1 ? lastOut : (lastOut != null ? System.IO.Path.GetDirectoryName(lastOut) : null));
+            });
+            t.IsBackground = true;
+            t.Start();
+        }
+
         // ------------------------------------------------------------------ activity (jobs across all pages)
         readonly System.Windows.Forms.Timer actTimer = new System.Windows.Forms.Timer { Interval = 200 };
         ActivityPanel actPanel; DateTime actPanelClosed = DateTime.MinValue, actSeenAt = DateTime.Now;
@@ -304,12 +395,18 @@ namespace FileConverter
         bool AnyBusy { get { foreach (Page p in pages) if (p.Busy) return true; return false; } }
 
         /// Closing the window while something runs: it hides and keeps working, with an icon by the clock.
-        void GoToTray()
+        void GoToTray(bool idle)
         {
             inTray = true;
             Hide();
             Notifier.Tray(this, true);
-            Notifier.Show(this, L.T("tray_still"), L.T("tray_still_d"), true, null);
+            if (!idle) Notifier.Show(this, L.T("tray_still"), L.T("tray_still_d"), true, null);
+            else if (Settings.Get("TrayNoteShown", "0") != "1")
+            {
+                // closed with "keep running" on: say where it went, once
+                Settings.Set("TrayNoteShown", "1");
+                Notifier.Show(this, L.T("tray_idle"), L.T("tray_idle_d"), true, null);
+            }
         }
 
         /// "Exit" in the tray icon's menu: really close (still asking about unsaved work).
@@ -648,11 +745,12 @@ namespace FileConverter
             bool busy = false;
             foreach (Page p in pages) if (p.Busy) busy = true;
             // closing while something runs: keep working in the tray (unless that's turned off, or Exit was chosen there)
-            if (!system && !reallyExit && e.CloseReason == CloseReason.UserClosing && (busy || Activity.RunningCount > 0) &&
-                Settings.Get("KeepInTray", "1") == "1" && Environment.OSVersion.Platform == PlatformID.Win32NT)
+            bool working = busy || Activity.RunningCount > 0;
+            if (!system && !reallyExit && e.CloseReason == CloseReason.UserClosing && Environment.OSVersion.Platform == PlatformID.Win32NT && !SelfTest.Active &&
+                ((working && Settings.Get("KeepInTray", "1") == "1") || Settings.Get("CloseToTray", "0") == "1"))
             {
                 e.Cancel = true;
-                GoToTray();
+                GoToTray(!working);
                 return;
             }
             if (!Visible && !system) { Show(); Activate(); }   // Exit from the tray: questions need the window
@@ -667,6 +765,9 @@ namespace FileConverter
             }
             try { RemoveClipboardFormatListener(Handle); } catch { }
             Notifier.ExitRequested -= ExitFromTray;
+            TrayPanel.ExitRequested -= ExitFromTray;
+            TrayPanel.OpenRequested -= ComeBack;
+            TrayPanel.CustomizeRequested -= ShowWheelSettings;
             Media.StopPreview();
             actTimer.Stop();
             Notifier.Dispose();

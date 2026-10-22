@@ -4,5 +4,5 @@ using System.Reflection;
 [assembly: AssemblyProduct("Fadi Tools")]
 [assembly: AssemblyCompany("Fadi Tools")]
 [assembly: AssemblyCopyright("Free to use")]
-[assembly: AssemblyVersion("1.5.1.0")]
-[assembly: AssemblyFileVersion("1.5.1.0")]
+[assembly: AssemblyVersion("1.6.2.0")]
+[assembly: AssemblyFileVersion("1.6.2.0")]

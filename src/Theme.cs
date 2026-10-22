@@ -151,38 +151,81 @@ namespace FileConverter
         }
         static string monoName = "Consolas";
 
-        static Image logo;
+        static Image logo, logoSmall;
+        static readonly Dictionary<int, Bitmap> logoAt = new Dictionary<int, Bitmap>();
+        /// Light or Dark (Settings → App logo). Dark unless Light was chosen.
+        public static bool LogoDark { get { return Settings.Get("Logo", "dark") != "light"; } }
+        static Image Res(string name)
+        {
+            using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
+                if (s != null) { MemoryStream ms = new MemoryStream(); s.CopyTo(ms); return Image.FromStream(ms); }
+            return null;
+        }
+        /// The app logo, big (256 px): the detailed drawing.
         public static Image Logo
         {
             get
             {
-                if (logo == null)
-                {
-                    string choice = Settings.Get("Logo", "");
-                    // ("custom" from older versions: a picture of your own is no longer offered — back to the classic logo)
-                        using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(choice == "silver" ? "FileConverter.logo_silver.png" : choice == "dark" ? "FileConverter.logo_dark.png" : "FileConverter.logo.png"))
-                            if (s != null) { MemoryStream ms = new MemoryStream(); s.CopyTo(ms); logo = Image.FromStream(ms); }
-                }
+                if (logo == null) logo = Res(LogoDark ? "FileConverter.logo_dark.png" : "FileConverter.logo.png");
                 return logo;
             }
+        }
+        /// The bolder drawing made for small sizes (the sidebar, the title bar, the taskbar).
+        public static Image LogoSmall
+        {
+            get
+            {
+                if (logoSmall == null) logoSmall = Res(LogoDark ? "FileConverter.logo_dark_small.png" : "FileConverter.logo_small.png") ?? Logo;
+                return logoSmall;
+            }
+        }
+
+        /// Draws the logo smoothly at any size: the small drawing up to 72 px, scaled down once in high quality
+        /// and kept, so its rounded edges stay soft (no hard clipping).
+        public static void DrawLogo(Graphics g, Rectangle r)
+        {
+            if (r.Width <= 0 || r.Height <= 0) return;
+            Image src = r.Width <= S(72) ? LogoSmall : Logo;
+            if (src == null) return;
+            int key = r.Width * 2 + (src == logoSmall ? 1 : 0);
+            Bitmap b;
+            if (!logoAt.TryGetValue(key, out b))
+            {
+                b = new Bitmap(r.Width, r.Width, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                using (Graphics bg = Graphics.FromImage(b))
+                {
+                    bg.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    bg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    bg.CompositingQuality = CompositingQuality.HighQuality;
+                    bg.SmoothingMode = SmoothingMode.AntiAlias;
+                    using (System.Drawing.Imaging.ImageAttributes ia = new System.Drawing.Imaging.ImageAttributes())
+                    {
+                        ia.SetWrapMode(WrapMode.TileFlipXY);   // no grey seam at the edges when scaling down
+                        bg.DrawImage(src, new Rectangle(0, 0, r.Width, r.Width), 0, 0, src.Width, src.Height, GraphicsUnit.Pixel, ia);
+                    }
+                }
+                logoAt[key] = b;
+            }
+            g.DrawImage(b, new Rectangle(r.X, r.Y + (r.Height - r.Width) / 2, r.Width, r.Width));
         }
 
         public static string CustomLogoPath { get { return Path.Combine(Paths.AppDir, "custom_logo.png"); } }
         /// Call after the logo setting changes: the sidebar, windows and taskbar pick up the new one.
         public static void ResetLogo()
         {
-            logo = null; appIcon = null;
-            if (Settings.Get("Logo", "") != "" && Logo != null)
-                try { using (Bitmap b = new Bitmap(Logo, 64, 64)) appIcon = System.Drawing.Icon.FromHandle(b.GetHicon()); } catch { }
+            logo = null; logoSmall = null; appIcon = null;
+            foreach (Bitmap b in logoAt.Values) b.Dispose();
+            logoAt.Clear();
         }
 
         static System.Drawing.Icon appIcon;
+        /// The window / taskbar icon: the app's own (dark) icon, or the light logo when that was chosen.
         public static System.Drawing.Icon AppIcon
         {
             get
             {
-                if (appIcon == null && Settings.Get("Logo", "") != "" && Logo != null)
-                    try { using (Bitmap b = new Bitmap(Logo, 64, 64)) appIcon = System.Drawing.Icon.FromHandle(b.GetHicon()); } catch { }
+                if (appIcon == null && !LogoDark && LogoSmall != null)
+                    try { using (Bitmap b = new Bitmap(64, 64)) { using (Graphics g = Graphics.FromImage(b)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.PixelOffsetMode = PixelOffsetMode.HighQuality; g.DrawImage(LogoSmall, 0, 0, 64, 64); } appIcon = System.Drawing.Icon.FromHandle(b.GetHicon()); } } catch { }
                 if (appIcon == null) try { appIcon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
                 return appIcon;
             }
@@ -401,7 +444,7 @@ namespace FileConverter
     /// Icon glyphs from Segoe MDL2 Assets (built into Windows 10).
     public static class Ico
     {
-        public const string Convert = "", Cut = "", Download = "", Search = "", Photo = "",
+        public const string Crop = "\uF406", Convert = "", Cut = "", Download = "", Search = "", Photo = "",
             Settings = "", Sun = "", Moon = "", Globe = "", Add = "", Folder = "",
             FolderOpen = "", Delete = "", Close = "", Play = "", Pause = "", Paste = "",
             Link = "", Check = "", Error = "", Info = "", Music = "", Video = "",

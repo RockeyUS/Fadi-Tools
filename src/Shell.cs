@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -12,7 +13,7 @@ namespace FileConverter
     /// Windows integration: install location, shortcuts, right-click menu, file associations, uninstall.
     public static class Shell
     {
-        public const string Version = "1.5.1";
+        public const string Version = "1.6.2";
 
         [DllImport("shell32.dll")]
         static extern void SHChangeNotify(int eventId, int flags, IntPtr item1, IntPtr item2);
@@ -120,8 +121,9 @@ namespace FileConverter
                 try { File.Delete(Path.Combine(old, "File Converter.lnk")); } catch { }
             Directory.CreateDirectory(StartMenuDir);
             Shortcut(Path.Combine(StartMenuDir, "Fadi Tools.lnk"), exe, "", "Convert, edit and download files");
-            Shortcut(Path.Combine(StartMenuDir, "Image Viewer.lnk"), exe, "/view", "View HEIC, AVIF, WEBP and other photos");
-            try { File.Delete(Path.Combine(StartMenuDir, "Image Viewer (HEIC, AVIF, WEBP).lnk")); } catch { }
+            // one Start menu entry: Fadi Tools (photos still open in it through "Open with" and double-click)
+            foreach (string gone in new[] { "Image Viewer.lnk", "Image Viewer (HEIC, AVIF, WEBP).lnk" })
+                try { File.Delete(Path.Combine(StartMenuDir, gone)); } catch { }
             string desk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Fadi Tools.lnk");
             if (desktop) Shortcut(desk, exe, "", "Convert images, audio, video and documents");
             else try { File.Delete(desk); } catch { }
@@ -148,15 +150,24 @@ namespace FileConverter
                     SetValue(k, "MultiSelectModel", "Player");
                     SetValue(k + @"\command", null, q + " /do " + v[2] + " \"%1\"");
                 }
+                // in the same menu, only where they fit: "Copy text" on pictures, "View" on HEIC/AVIF/WEBP… (since 1.6.1:
+                // no second "Fadi Tools" entry of their own)
+                string t = MenuKey + @"\shell\f_text";
+                SetValue(t, "MUIVerb", L.T("menu_text"));
+                SetValue(t, "AppliesTo", "System.Kind:=picture");
+                SetValue(t + @"\command", null, q + " /do text \"%1\"");
+                if (viewer)
+                {
+                    string vk = MenuKey + @"\shell\a0_view";
+                    List<string> ex = new List<string>();
+                    foreach (string e in Formats.ViewerExt) ex.Add("System.FileExtension:=." + e);
+                    SetValue(vk, "MUIVerb", L.T("menu_view"));
+                    SetValue(vk, "AppliesTo", string.Join(" OR ", ex.ToArray()));
+                    SetValue(vk + @"\command", null, q + " /view \"%1\"");
+                }
             }
-            // pictures only: "Copy text (Fadi Tools)"
+            // the separate "Copy text (Fadi Tools)" entry of older versions
             Registry.CurrentUser.DeleteSubKeyTree(TextKey, false);
-            if (contextMenu)
-            {
-                SetValue(TextKey, "MUIVerb", L.T("menu_text"));
-                SetValue(TextKey, "Icon", exe + ",0");
-                SetValue(TextKey + @"\command", null, q + " /do text \"%1\"");
-            }
 
             // video projects open in the Studio when double-clicked
             SetValue(@"Software\Classes\." + TrimPage.ProjectExt, null, "FadiTools.Project");
@@ -176,14 +187,8 @@ namespace FileConverter
             {
                 SetValue(@"Software\Classes\." + e + @"\OpenWithProgids", "FileConverter.Image", "");
                 SetValue(AppKey + @"\SupportedTypes", "." + e, "");
-                string v = @"Software\Classes\SystemFileAssociations\." + e + @"\shell\FileConverter.View";
-                if (viewer)
-                {
-                    SetValue(v, "MUIVerb", L.T("menu_view"));
-                    SetValue(v, "Icon", exe + ",0");
-                    SetValue(v + @"\command", null, viewCmd);
-                }
-                else Registry.CurrentUser.DeleteSubKeyTree(v, false);
+                // "View with Fadi Tools" now lives in the Fadi Tools menu: remove the separate entry of older versions
+                Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\SystemFileAssociations\." + e + @"\shell\FileConverter.View", false);
             }
             if (viewer)
             {
@@ -231,10 +236,10 @@ namespace FileConverter
             foreach (string[] v in new[] { new[] { "a_convert", "menu_convert" }, new[] { "b_compress", "menu_compress" }, new[] { "c_discord", "menu_discord" },
                                            new[] { "d_studio", "menu_studio" }, new[] { "e_inspect", "menu_inspect" } })
                 set(MenuKey + @"\shell\" + v[0], "MUIVerb", L.T(v[1]));
-            set(TextKey, "MUIVerb", L.T("menu_text"));
+            set(MenuKey + @"\shell\f_text", "MUIVerb", L.T("menu_text"));
+            set(MenuKey + @"\shell\a0_view", "MUIVerb", L.T("menu_view"));
             set(@"Software\Classes\FadiTools.Project", null, L.T("proj_files"));
             set(AppKey, "FriendlyAppName", L.T("viewer_app_name"));
-            foreach (string e in Formats.ViewerExt) set(@"Software\Classes\SystemFileAssociations\." + e + @"\shell\FileConverter.View", "MUIVerb", L.T("menu_view"));
         }
 
         const string MenuKey = @"Software\Classes\*\shell\FadiTools";

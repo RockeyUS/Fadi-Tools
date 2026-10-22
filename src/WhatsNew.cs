@@ -14,6 +14,22 @@ namespace FileConverter
         /// glyph, title key, text key
         public static readonly string[][] Items =
         {
+            // 1.6.2
+            new[] { Ico.Crop, "wn_crop_t", "wn_crop_d" },
+            new[] { "\uE73F", "wn_cmpwin_t", "wn_cmpwin_d" },
+            new[] { Ico.Convert, "wn_wheelsize_t", "wn_wheelsize_d" },
+            // 1.6.1
+            new[] { Ico.Convert, "wn_donut_t", "wn_donut_d" },
+            new[] { "\uE7E7", "wn_traypanel_t", "wn_traypanel_d" },
+            new[] { Ico.Photo, "wn_onemenu_t", "wn_onemenu_d" },
+            new[] { Ico.Contrast, "wn_logo161_t", "wn_logo161_d" },
+            // 1.6.0
+            new[] { Ico.Convert, "wn_wheel_t", "wn_wheel_d" },
+            new[] { Ico.Photo, "wn_icon_t", "wn_icon_d" },
+            new[] { "\uE7E7", "wn_closetray_t", "wn_closetray_d" },
+            new[] { Ico.Download, "wn_sizes_t", "wn_sizes_d" },
+            new[] { Ico.Search, "wn_close_t", "wn_close_d" },
+            new[] { Ico.Folder, "wn_where_t", "wn_where_d" },
             // 1.5.1
             new[] { "\uE7C4", "wn_tabs_t", "wn_tabs_d" },
             new[] { "\uE712", "wn_menu_t", "wn_menu_d" },
@@ -106,14 +122,7 @@ namespace FileConverter
             using (Pen p = new Pen(Theme.CardBorder)) g.DrawPath(p, Theme.Round(new RectangleF(0.5f, 0.5f, Width - 2, Height - 2), Theme.S(9)));
             int W = ClientSize.Width;
             Rectangle lr = Theme.Mirror(logoR, W);
-            if (Theme.Logo != null)
-                using (GraphicsPath lp = Theme.Round(lr, Theme.S(12)))
-                {
-                    GraphicsState st = g.Save();
-                    g.SetClip(lp); g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    g.DrawImage(Theme.Logo, lr);
-                    g.Restore(st);
-                }
+            Theme.DrawLogo(g, lr);
             Theme.Text(g, L.T("wn_title", Shell.Version), Theme.Serif(16f), Theme.Ink, Theme.Mirror(titleR, W), Align.Start);
             Theme.Text(g, L.T("wn_sub"), Theme.F(9.5f), Theme.InkSoft, Theme.Mirror(subR, W), Align.Start);
         }
