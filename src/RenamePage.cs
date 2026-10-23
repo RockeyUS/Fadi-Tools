@@ -28,8 +28,11 @@ namespace FileConverter
 
         public RenamePage() : base("ren_title", "ren_sub")
         {
-            drop = new DropZone(() => L.T("ren_drop"), () => L.T("ren_drop_sub")) { Glyph = "", Tips = new[] { "tip_ren_folder", "tip_ren_undo", "tip_palette" } };
+            drop = new DropZone(() => L.T("ren_drop"), () => L.T("ren_drop_sub")) { Glyph = "", Tips = new[] { "tip_ren_folder", "tip_ren_undo", "tip_ren_tags" } };
             drop.Click += (s, e) => Browse();
+            // what it does, shown: two numbered names
+            drop.ExtrasTitle = () => L.T("ren_example");
+            drop.Example = () => new[] { "IMG_2041.jpg", L.T("ren_ex_name", "001") + ".jpg", "IMG_2042.jpg", L.T("ren_ex_name", "002") + ".jpg" };
             mode = new Segments(() => L.T("ren_m_number"), () => L.T("ren_m_replace"), () => L.T("ren_m_add"), () => L.T("ren_m_case"), () => L.T("ren_m_info")) { FontSize = 8.75f };
             int m0; int.TryParse(Settings.Get("RenameMode", "0"), out m0);
             mode.SetSilently(Math.Max(0, Math.Min(4, m0)));

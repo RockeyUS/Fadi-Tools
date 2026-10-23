@@ -5,8 +5,11 @@ Set-Location $PSScriptRoot
 # on GitHub, a failure is also shown as a note on the run (so it can be read without opening the log)
 trap { if ($env:GITHUB_ACTIONS) { Write-Host ('::error::' + (($_ | Out-String) -replace "[`r`n]+", ' | ').Trim()) }; break }
 
-python checklang.py
-if ($LASTEXITCODE -ne 0) { throw 'A text key is listed twice in src\Lang.cs' }
+# a text key listed twice in src\Lang.cs would stop the app from starting (checklang.py does the same check, for Linux)
+$langText = Get-Content src\Lang.cs -Raw -Encoding UTF8
+$dupKeys = [regex]::Matches($langText, '\{ "([^"]+)", new\[\]') | ForEach-Object { $_.Groups[1].Value } |
+           Group-Object -CaseSensitive | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name }
+if ($dupKeys) { throw "A text key is listed twice in src\Lang.cs: $($dupKeys -join ', ')" }
 
 # the C# compiler: the one that comes with Visual Studio / Build Tools, else the one inside Windows
 $csc = $null
@@ -26,7 +29,7 @@ if (Test-Path $refRoot) {
 }
 $libs = 'System.dll', 'System.Windows.Forms.dll', 'System.Drawing.dll', 'System.IO.Compression.dll', 'System.IO.Compression.FileSystem.dll', 'System.Core.dll', 'System.Xml.dll', 'Accessibility.dll'
 $cscArgs = @('/nologo', '/target:winexe', '/optimize+', '/platform:anycpu', '/out:build\FileConverter.exe', '/win32icon:assets\app.ico',
-          '/resource:assets\logo.png,FileConverter.logo.png', '/resource:assets\logo_silver.png,FileConverter.logo_silver.png', '/resource:assets\logo_dark.png,FileConverter.logo_dark.png')
+          '/resource:assets\logo.png,FileConverter.logo.png', '/resource:assets\logo_dark.png,FileConverter.logo_dark.png', '/resource:assets\logo_small.png,FileConverter.logo_small.png', '/resource:assets\logo_dark_small.png,FileConverter.logo_dark_small.png')
 if ($ref) {
     Write-Host "References: $($ref.FullName)"
     $cscArgs += '/noconfig', '/nostdlib+', "/r:$(Join-Path $ref.FullName 'mscorlib.dll')"

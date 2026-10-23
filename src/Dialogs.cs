@@ -243,7 +243,10 @@ namespace FileConverter
     public class TourForm : Form
     {
         public const string Version = "6";
-        static readonly string[] Glyphs = { "", Ico.Search, Ico.Video, "\uE7C4", "\uE9D9" };
+        static readonly string[] Glyphs = { "", Ico.Search, Ico.Video, "\uE7C4", "\uE9D9", "donut" };
+        const int DonutPage = 5;
+        readonly Timer demo = new Timer { Interval = 16 };
+        readonly System.Diagnostics.Stopwatch demoClock = System.Diagnostics.Stopwatch.StartNew();
         int page;
         readonly Btn bNext, bBack, bSkip;
         [DllImport("gdi32.dll")] static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
@@ -273,6 +276,8 @@ namespace FileConverter
             Text = L.T("tour_title");
             ClientSize = new Size(Theme.S(520), Theme.S(400));
             int pad = Theme.S(28), bh = Theme.S(40), by = ClientSize.Height - pad - bh;
+            demo.Tick += (s, e) => Invalidate();
+            FormClosed += (s, e) => { demo.Stop(); demo.Dispose(); };
             bNext = new Btn(() => page == Glyphs.Length - 1 ? L.T("tour_done") : L.T("tour_next"), null, BtnKind.Primary) { Surface = Surface.Card };
             bNext.Click += (s, e) => { if (page == Glyphs.Length - 1) Close(); else { page++; Changed(); } };
             bBack = new Btn(() => L.T("tour_back"), null, BtnKind.Secondary) { Surface = Surface.Card };
@@ -288,7 +293,11 @@ namespace FileConverter
             Shown += (s, e) => bNext.Focus();
         }
 
-        void Changed() { bBack.Visible = page > 0; bNext.Invalidate(); Invalidate(); }
+        void Changed()
+        {
+            bBack.Visible = page > 0; bNext.Invalidate(); Invalidate();
+            if (page == DonutPage) { demoClock.Restart(); demo.Start(); } else demo.Stop();
+        }
 
         protected override CreateParams CreateParams { get { CreateParams cp = base.CreateParams; cp.ClassStyle |= 0x20000; return cp; } }
         protected override void OnHandleCreated(EventArgs e)
@@ -310,6 +319,40 @@ namespace FileConverter
             return base.ProcessCmdKey(ref msg, k);
         }
 
+        /// The Donut Wheel page of the tour, acted out: a file is dragged in, Shift goes down, the wheel opens round it
+        /// (it turns a little) — then again.
+        void DrawDonutDemo(Graphics g, Rectangle box)
+        {
+            double t = (demoClock.Elapsed.TotalMilliseconds % 3600) / 3600.0;
+            float slide = (float)Math.Min(1, t / 0.25), ease = 1 - (1 - slide) * (1 - slide) * (1 - slide);
+            bool shift = t > 0.28 && t < 0.9;
+            float pop = (float)Math.Max(0, Math.Min(1, (t - 0.32) / 0.16));
+            float back = 1.4f, popE = pop <= 0 ? 0 : 1 + (back + 1) * (float)Math.Pow(pop - 1, 3) + back * (float)Math.Pow(pop - 1, 2);
+            float fade = t > 0.9 ? (float)(1 - (t - 0.9) / 0.1) : 1;
+            int cx = box.X + box.Width / 2 + Theme.S(30), cy = box.Y + box.Height / 2;
+            if (popE > 0.01f)
+            {
+                int d = (int)(box.Height * popE);
+                Rectangle wr = new Rectangle(cx - d / 2, cy - d / 2, d, d);
+                WheelEntry.DrawMini(g, wr, (float)(t * 90));
+                if (fade < 1) using (SolidBrush cover = new SolidBrush(Color.FromArgb((int)(255 * (1 - fade)), Theme.Card))) g.FillEllipse(cover, wr.X - 2, wr.Y - 2, wr.Width + 4, wr.Height + 4);
+            }
+            // the file being dragged
+            float fx = box.X + Theme.S(20) + (cx - box.X - Theme.S(20)) * ease, fy = cy;
+            Rectangle file = new Rectangle((int)fx - Theme.S(16), (int)fy - Theme.S(20), Theme.S(32), Theme.S(40));
+            using (SolidBrush sh = new SolidBrush(Color.FromArgb(40, 0, 0, 0))) g.FillRectangle(sh, file.X + 2, file.Y + 3, file.Width, file.Height);
+            Theme.FillRound(g, file, Theme.S(4), Color.White);
+            Theme.StrokeRound(g, file, Theme.S(4), Theme.ChipBorder);
+            Theme.Glyph(g, Ico.Photo, 9f, Theme.AccentColor, file);
+            // the Shift key
+            Rectangle key = new Rectangle(box.X + Theme.S(4), box.Bottom - Theme.S(34), Theme.S(70), Theme.S(30));
+            if (shift) key.Offset(0, Theme.S(2));
+            Theme.FillRound(g, new Rectangle(key.X, key.Y + Theme.S(3), key.Width, key.Height), Theme.S(7), Theme.Mix(Theme.ChipBorder, Theme.Ink, 0.15f));
+            Theme.FillRound(g, key, Theme.S(7), shift ? Theme.AccentFill : Theme.CardInner);
+            Theme.StrokeRound(g, key, Theme.S(7), shift ? Theme.AccentFill : Theme.ChipBorder);
+            Theme.Text(g, "Shift", Theme.F(9f, FontStyle.Bold), shift ? Theme.PrimaryInk : Theme.Ink, key, Align.Center);
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
@@ -321,8 +364,9 @@ namespace FileConverter
             Rectangle art = new Rectangle(W / 2 - Theme.S(44), pad + Theme.S(8), Theme.S(88), Theme.S(88));
             if (page == 0 && Theme.Logo != null)
             {
-                using (GraphicsPath gp = Theme.Round(art, Theme.S(22))) { GraphicsState st = g.Save(); g.SetClip(gp); g.DrawImage(Theme.Logo, art); g.Restore(st); }
+                Theme.DrawLogo(g, art);
             }
+            else if (page == DonutPage) DrawDonutDemo(g, new Rectangle(W / 2 - Theme.S(130), art.Y - Theme.S(6), Theme.S(260), art.Height + Theme.S(12)));
             else
             {
                 using (LinearGradientBrush b = new LinearGradientBrush(art, Theme.PrimaryTop, Theme.PrimaryBottom, LinearGradientMode.Vertical))

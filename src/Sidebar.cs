@@ -24,6 +24,8 @@ namespace FileConverter
         public event Action<Rectangle> OpenActivity;
         /// what the Activity row shows: jobs running, and finished ones not looked at yet
         public int ActivityRunning, ActivityNew;
+        /// What's running, together: 0..1, or below 0 when it can't be told.
+        public double ActivityProgress = -1;
         /// True while the Activity panel is open (the row stays lit).
         public bool ActivityOpen;
         float actOpenT, actPulse = 1;
@@ -143,8 +145,9 @@ namespace FileConverter
         {
             get
             {
+                // one fixed spot, open or folded: under the logo, in the rail's column (so it never moves while the side list folds)
                 Rectangle c = Card; int s = Theme.S(28);
-                return Narrow ? new Rectangle(c.X + (c.Width - s) / 2, LogoRect.Bottom + Theme.S(8), s, s) : new Rectangle(c.Right - s - Theme.S(10), c.Y + Theme.S(17), s, s);
+                return new Rectangle(c.X + (Theme.S(62) - s) / 2, LogoRect.Bottom + Theme.S(16), s, s);
             }
         }
         /// The search box on the screen (the quick search grows out of it).
@@ -155,8 +158,9 @@ namespace FileConverter
             get
             {
                 Rectangle c = Card;
-                int y = (Narrow ? ToggleRect.Bottom : LogoRect.Bottom) + Theme.S(12);
-                return Narrow ? new Rectangle(c.X + (c.Width - Theme.S(40)) / 2, y, Theme.S(40), Theme.S(36)) : new Rectangle(c.X + Theme.S(10), y, c.Width - Theme.S(20), Theme.S(36));
+                if (Narrow) return new Rectangle(c.X + (c.Width - Theme.S(40)) / 2, ToggleRect.Bottom + Theme.S(12), Theme.S(40), Theme.S(36));
+                int x = ToggleRect.Right + Theme.S(6);   // open: beside the fold button, on the same row
+                return new Rectangle(x, LogoRect.Bottom + Theme.S(12), c.Right - Theme.S(10) - x, Theme.S(36));
             }
         }
         int NavTop { get { return SearchRect.Bottom + Theme.S(6); } }
@@ -278,7 +282,7 @@ namespace FileConverter
                 Font bf = Theme.F(7.75f, FontStyle.Bold);
                 bw = Math.Max(Theme.S(22), Theme.Measure(t, bf) + Theme.S(12));
                 Rectangle pr = new Rectangle(r.Right - bw - Theme.S(8), r.Y + (r.Height - Theme.S(20)) / 2, bw, Theme.S(20));
-                Theme.FillRound(g, M(pr), Theme.S(10), Theme.AccentColor);
+                Theme.FillRound(g, M(pr), Theme.S(10), Theme.AccentFill);
                 Theme.Text(g, t, bf, Theme.PrimaryInk, M(pr), Align.Center, true, false, true);
                 bw += Theme.S(12);
             }
@@ -316,20 +320,17 @@ namespace FileConverter
 
             // logo (and the name, when open)
             Rectangle logo = M(LogoRect);
-            if (Theme.Logo != null)
-                using (GraphicsPath lp = Theme.Round(logo, Theme.S(10)))
-                {
-                    GraphicsState st = g.Save();
-                    g.SetClip(lp); g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    g.DrawImage(Theme.Logo, logo);
-                    g.Restore(st);
-                }
+            Theme.DrawLogo(g, logo);
             if (!Narrow)
             {
-                Rectangle name = new Rectangle(LogoRect.Right + Theme.S(10), LogoRect.Y - Theme.S(2), Card.Right - LogoRect.Right - Theme.S(50), Theme.S(22));
-                Theme.Text(g, L.T("app_name"), Theme.Serif(13f), Theme.Ink, M(name), Align.Start);
+                Rectangle name = new Rectangle(LogoRect.Right + Theme.S(10), LogoRect.Y - Theme.S(2), Card.Right - LogoRect.Right - Theme.S(20), Theme.S(22));
+                Theme.Text(g, L.T("app_name"), Theme.Display(13f), Theme.Ink, M(name), Align.Start);
                 Rectangle tag = new Rectangle(name.X, name.Bottom, name.Width, Theme.S(16));
-                Theme.Text(g, L.T("app_short"), Theme.F(7.75f), Theme.InkFaint, M(tag), Align.Start);
+                // the whole line, never "…": a little smaller when the side list is narrow (or the words are longer)
+                string line = L.T("app_short");
+                float fs = 7.75f;
+                while (fs > 6f && Theme.Measure(line, Theme.F(fs)) > tag.Width) fs -= 0.25f;
+                Theme.Text(g, line, Theme.F(fs), Theme.InkFaint, M(tag), Align.Start);
             }
             // fold / unfold
             Rectangle tg = M(ToggleRect);
@@ -380,7 +381,7 @@ namespace FileConverter
                 Color fg = sel ? (Theme.Dark ? Theme.Ink : Theme.Mix(Theme.Ink, Theme.AccentColor, 0.35f)) : Theme.Mix(Theme.InkSoft, Theme.Ink, Items[i].Hot);
                 int badge = Items[i].Badge != null ? Items[i].Badge() : 0;
                 Row(g, r, Items[i].Glyph, L.T(Items[i].Key), fg, sel, badge, false);
-                if (sel && Math.Abs(pillY - r.Y) < 2) Mark(g, r);
+                if (sel && badge == 0 && Math.Abs(pillY - r.Y) < 2) Mark(g, r);
             }
             for (int i = 0; i < 2; i++)
             {
@@ -390,7 +391,21 @@ namespace FileConverter
                 Color fg = sel ? (Theme.Dark ? Theme.Ink : Theme.Mix(Theme.Ink, Theme.AccentColor, 0.35f)) : Theme.Mix(Theme.InkSoft, Theme.Ink, footHot[i]);
                 if (i == 1) { Row(g, r, Ico.Settings, L.T("nav_settings"), fg, sel, 0, false); if (sel && Math.Abs(pillY - r.Y) < 2) Mark(g, r); continue; }
                 if (actOpenT > 0) Theme.FillRound(g, M(r), Theme.S(9), Color.FromArgb((int)(255 * actOpenT), Theme.Dark ? Theme.Selected : Theme.Mix(Theme.Selected, Theme.AccentColor, 0.08f)));
-                Row(g, r, "", L.T("act_title"), ActivityRunning > 0 || actOpenT > 0.5f ? Theme.Ink : fg, false, ActivityRunning, ActivityNew > 0);
+                Row(g, r, "", L.T("act_title"), ActivityRunning > 0 || actOpenT > 0.5f ? Theme.Ink : fg, false, Narrow ? ActivityRunning : 0, ActivityNew > 0 && ActivityRunning == 0);
+                if (ActivityRunning > 0 && !Narrow)
+                {
+                    // a ring that fills as the work goes (or turns when it can't tell), with how many are running inside
+                    int d = Theme.S(22);
+                    Rectangle ring = M(new Rectangle(r.Right - d - Theme.S(10), r.Y + (r.Height - d) / 2, d, d));
+                    RectangleF rr = RectangleF.Inflate(ring, -Theme.S(1.5f), -Theme.S(1.5f));
+                    using (Pen tp = new Pen(Theme.Track, Theme.S(2.6f))) g.DrawEllipse(tp, rr);
+                    using (Pen ap = new Pen(Theme.AccentColor, Theme.S(2.6f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    {
+                        if (ActivityProgress >= 0) g.DrawArc(ap, rr, -90, Math.Max(8f, (float)(360 * Math.Min(1, ActivityProgress))));
+                        else g.DrawArc(ap, rr, spin, 90);
+                    }
+                    Theme.Text(g, ActivityRunning > 9 ? "9+" : ActivityRunning.ToString(), Theme.F(7f, FontStyle.Bold), Theme.Ink, ring, Align.Center, true, false, true);
+                }
                 if (actPulse < 1) Pulse(g, r);
                 if (ActivityRunning > 0 && Narrow)
                 {
@@ -420,11 +435,13 @@ namespace FileConverter
             }
         }
 
+        /// The page you're on: a small orange ring at the end of its row (the Donut Wheel's shape).
         void Mark(Graphics g, Rectangle r)
         {
             if (Narrow) return;
-            Rectangle mk = new Rectangle(r.X + Theme.S(2), r.Y + Theme.S(9), Theme.S(3), r.Height - Theme.S(18));
-            Theme.FillRound(g, M(mk), Theme.S(1.5f), Theme.AccentColor);
+            int d = Theme.S(9);
+            Rectangle mk = new Rectangle(r.Right - d - Theme.S(14), r.Y + (r.Height - d) / 2, d, d);
+            using (Pen p = new Pen(Theme.AccentColor, Theme.S(2.4f))) g.DrawEllipse(p, M(mk));
         }
     }
 }

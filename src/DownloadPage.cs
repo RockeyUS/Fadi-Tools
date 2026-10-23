@@ -315,6 +315,9 @@ namespace FileConverter
         {
             bool hasInfo = info != null;
             btnPaste.Enabled = btnGet.Enabled = !fetching;
+            // once a link is found, Download is the one main button; looking up again is a plain one
+            BtnKind gk = hasInfo ? BtnKind.Secondary : BtnKind.Primary;
+            if (btnGet.Kind != gk) { btnGet.Kind = gk; btnGet.Invalidate(); }
             btnSetup.Visible = !YtDlp.Ready && !hasInfo;
             btnSetup.Enabled = !settingUp;
             notice.Visible = !hasInfo && !fetching;
@@ -529,7 +532,7 @@ namespace FileConverter
         public static bool IsVideoLink(string u)
         {
             if (!u.StartsWith("http", StringComparison.OrdinalIgnoreCase) || !YtDlp.LooksLikeUrl(u)) return false;
-            return System.Text.RegularExpressions.Regex.IsMatch(u, @"^https?://([\w-]+\.)*(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|twitter\.com|x\.com|reddit\.com|redd\.it|pinterest\.[a-z.]+|pin\.it|vimeo\.com|giphy\.com|tenor\.com|imgur\.com|facebook\.com|fb\.watch|twitch\.tv|dailymotion\.com|soundcloud\.com|streamable\.com|bilibili\.com)/", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            return System.Text.RegularExpressions.Regex.IsMatch(u, @"^https?://([\w-]+\.)*(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|twitter\.com|x\.com|reddit\.com|redd\.it|pinterest\.[a-z.]+|pin\.it|vimeo\.com|giphy\.com|tenor\.com|klipy\.com|imgur\.com|facebook\.com|fb\.watch|twitch\.tv|dailymotion\.com|soundcloud\.com|streamable\.com|bilibili\.com)/", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 || Resolver.IsDirectMedia(u);
         }
 
@@ -560,7 +563,8 @@ namespace FileConverter
             if (!YtDlp.LooksLikeUrl(u)) { SetStatus(L.T("yt_invalid"), Theme.Error); info = null; UpdateView(); return; }
             if (!u.StartsWith("http")) u = "https://" + u;
             lastFetched = url.Box.Text.Trim();
-            bool needsEngine = !YtDlp.Ready && Resolver.Site(u) != "GIPHY" && Resolver.Site(u) != "Tenor" && Resolver.Site(u) != "Pinterest" && !Resolver.IsDirectMedia(u);
+            string st = Resolver.Site(u);
+            bool needsEngine = !YtDlp.Ready && st != "GIPHY" && st != "Tenor" && st != "KLIPY" && st != "Discord" && st != "Pinterest" && !Resolver.IsDirectMedia(u);
             if (needsEngine) { SetStatus(L.T("dl_need_engine"), Theme.Warn); info = null; UpdateView(); return; }
             fetching = true; info = null;
             busy.SetIndeterminate(true);

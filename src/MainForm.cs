@@ -18,6 +18,8 @@ namespace FileConverter
         int current = -1;
 
         public MainForm(string[] files) : this(files, null) { }
+        /// Started with Windows: open hidden, by the clock.
+        public static bool StartHidden;
 
         public MainForm(string[] files, string verb)
         {
@@ -96,13 +98,23 @@ namespace FileConverter
             Controls.Add(Bar);
 
             Theme.Changed += OnThemeChanged;
+            if (StartHidden) Opacity = 0;   // started with Windows: it goes straight to the clock without showing
             Shown += (s, e) =>
             {
                 if (SelfTest.Active) return;   // a test run: no tour, questions or update check
                 // the icon by the clock, for as long as the app is open
-                if (Settings.Get("KeepInTray", "1") == "1") Notifier.ShowResident(this, true);
+                if (Settings.Get("KeepInTray", "1") == "1" || StartHidden) Notifier.ShowResident(this, true);
                 DragWheel.Dropped += OnWheelDrop;
                 DragWheel.Apply(this);
+                Watchers.Start(this);
+                if (StartHidden)
+                {
+                    StartHidden = false;
+                    inTray = true;
+                    Hide();
+                    Opacity = 1;
+                    return;   // the tour, "what's new" and the update check wait for the first time it's opened
+                }
                 BeginInvoke((Action)(() =>
                 {
                     bool tour = false;
@@ -288,10 +300,16 @@ namespace FileConverter
         void OnWheelDrop(string[] files, WheelItem it)
         {
             if (IsDisposed || files == null || files.Length == 0) return;
+            if (Recipes.IsRecipe(it.Action)) { Recipes.Run(it.Action, files, convert); return; }
             switch (it.Action)
             {
                 // small windows of their own: Fadi Tools itself stays where it is
                 case "crop": CropWindow.Open(files[0], Cursor.Position, studio); return;
+                case "resize": ResizeWindow.Open(files[0], Cursor.Position, studio); return;
+                case "rotate": RotateWindow.Open(files[0], Cursor.Position, studio); return;
+                case "upscale": UpscaleWindow.Open(files[0], Cursor.Position, studio); return;
+                case "trim": TrimWindow.Open(files[0], Cursor.Position, studio); return;
+                case "combine": case "merge": QuickPdf.CombineInBackground(files, studio); return;
                 case "compress": CompressWindow.Open(files, Cursor.Position, compress); return;
                 case "edit": ComeBack(); Route(files, "studio"); return;
                 case "text": ComeBack(); Route(new[] { files[0] }, "text"); return;
@@ -380,14 +398,20 @@ namespace FileConverter
             actSeen = Activity.Version;
             int run = Activity.RunningCount, fresh = 0;
             foreach (ActJob j in Activity.Snapshot()) if (!j.Running && j.State != ActState.Cancelled && j.Ended > actSeenAt) fresh++;
-            sidebar.ActivityRunning = run; sidebar.ActivityNew = actPanel != null ? 0 : fresh;
+            sidebar.ActivityRunning = run; sidebar.ActivityProgress = Activity.Overall; sidebar.ActivityNew = actPanel != null ? 0 : fresh;
             if (run > 0) Animator.Start(sidebar);
             sidebar.Invalidate();   // counts (downloads, jobs) may have changed
             Taskbar.Set(this, Activity.Overall);
-            bool any = false;
-            foreach (ActJob j in Activity.TakeFinished()) { Announce(j); any = true; }
-            // working in the tray and now everything's done: say so (the app stays by the clock until opened or exited)
-            if (any && inTray && run == 0 && !AnyBusy) Notifier.Show(this, L.T("tray_all_done"), L.T("tray_all_done_d"), true, null);
+            bool any = false, told = false, longOne = false;
+            foreach (ActJob j in Activity.TakeFinished())
+            {
+                if (Announce(j)) told = true;
+                any = true;
+                if ((j.Ended - j.Started).TotalSeconds >= Notifier.LongSeconds) longOne = true;
+            }
+            // working in the tray and now everything's done: say so (the app stays by the clock until opened or exited),
+            // unless a notice just said it, or it was all quick
+            if (any && !told && inTray && run == 0 && !AnyBusy && (longOne || !Notifier.LongOnly)) Notifier.Show(this, L.T("tray_all_done"), L.T("tray_all_done_d"), true, null);
         }
 
         // ------------------------------------------------------------------ working on in the tray
@@ -525,17 +549,20 @@ namespace FileConverter
             }
         }
 
-        /// A job finished: when the app is in the background, say so with a Windows notification.
-        void Announce(ActJob j)
+        /// A job finished: when the app is in the background, say so with a Windows notification
+        /// (by default only for work that took a while, or failed). True when a notice was shown.
+        bool Announce(ActJob j)
         {
-            if (j.State == ActState.Cancelled) return;
+            if (j.State == ActState.Cancelled || !Notifier.Enabled) return false;
             bool background = Form.ActiveForm == null || WindowState == FormWindowState.Minimized;
-            if (!background) return;
+            if (!background) return false;
             bool ok = j.State == ActState.Done;
+            if (ok && Notifier.LongOnly && (j.Ended - j.Started).TotalSeconds < Notifier.LongSeconds) return false;
             string title = ok ? L.T("act_n_done", j.Title) : L.T("act_n_failed", j.Title);
             Control src = j.Source;
             Notifier.Show(this, title, j.Detail, ok, () => { GoTo(src); });
             Taskbar.Flash(this);
+            return true;
         }
 
         // ------------------------------------------------------------------ quick search (Ctrl+K)

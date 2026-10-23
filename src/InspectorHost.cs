@@ -28,6 +28,8 @@ namespace FileConverter
             Inspect.SendToRe += f => { Show(Re); Re.AcceptFiles(new[] { f }); };
             // both tabs look at the same file: one opened in either is ready in the other
             Inspect.FileShown += f => { pendingInspect = f; if (!SamePath(Re.Target, f)) Re.AcceptFiles(new[] { f }); };
+            Inspect.Cleared += () => { pendingInspect = null; Re.ClearTarget(); };
+            Re.Cleared += () => { pendingInspect = null; Inspect.ClearFile(); };
             Re.TargetChanged += f => { if (File.Exists(f) && !SamePath(Inspect.ShownFile, f) && !SamePath(pendingInspect, f)) { pendingInspect = f; Inspect.AcceptFiles(new[] { f }); } };
         }
 

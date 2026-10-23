@@ -421,7 +421,7 @@ namespace FileConverter
                     if (!l.Visible) continue;
                     RectangleF b = TextBar(i);
                     bool on = i == SelectedText, hot = i == hoverText;
-                    Color fill = on ? Theme.AccentColor : Theme.Mix(Theme.AccentSoft, Theme.AccentColor, hot ? 0.45f : 0.25f);
+                    Color fill = on ? Theme.AccentFill : Theme.Mix(Theme.AccentSoft, Theme.AccentColor, hot ? 0.45f : 0.25f);
                     Theme.FillRound(g, b, Theme.S(6), fill);
                     if (!on) Theme.StrokeRound(g, b, Theme.S(6), Theme.Mix(fill, Theme.AccentColor, 0.5f));
                     string label = l.Label;

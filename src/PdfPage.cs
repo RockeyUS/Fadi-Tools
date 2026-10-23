@@ -490,7 +490,7 @@ namespace FileConverter
                 {
                     Theme.StrokeRound(g, new RectangleF(c.X + 1, c.Y + 1, c.Width - 2, c.Height - 2), Theme.S(10), Theme.AccentColor, 2.4f);
                     Rectangle chk = new Rectangle(Theme.RTL ? c.X + Theme.S(6) : c.Right - Theme.S(26), c.Y + Theme.S(6), Theme.S(20), Theme.S(20));
-                    Theme.FillRound(g, chk, Theme.S(10), Theme.AccentColor);
+                    Theme.FillRound(g, chk, Theme.S(10), Theme.AccentFill);
                     Theme.Glyph(g, Ico.Check, 6.5f, Theme.PrimaryInk, chk);
                 }
                 else Theme.StrokeRound(g, c, Theme.S(10), Theme.CardBorder);
@@ -572,7 +572,7 @@ namespace FileConverter
 
             dropC = new DropZone(() => L.T("pdf_drop_c"), () => L.T("pdf_drop_c_sub")) { Glyph = "", Tips = new[] { "tip_pdf_order", "tip_pdf_sign", "tip_paste" } };
             dropC.Click += (s, e) => BrowseCombine();
-            dropP = new DropZone(() => L.T("pdf_drop_p"), () => L.T("pdf_drop_p_sub")) { Glyph = "", Tips = new[] { "tip_pdf_sign", "tip_palette" } };
+            dropP = new DropZone(() => L.T("pdf_drop_p"), () => L.T("pdf_drop_p_sub")) { Glyph = "", Tips = new[] { "tip_pdf_sign", "tip_pdf_drag" } };
             dropP.Click += (s, e) => BrowsePdf();
             list.Changed += () => UpdateState();
             grid.Changed += () => UpdateState();
@@ -590,7 +590,9 @@ namespace FileConverter
             bGo = new Btn(() => running ? L.T("cancel") : GoLabel, "", BtnKind.Primary) { FontSize = 11f, Radius = 10 };
             bGo.Click += (s, e) => { if (running) { cancel = true; SetStatus(L.T("cancelling"), Theme.InkSoft); } else Go(); };
 
-            bContent = Tool("pdf_content", Ico.Edit, OpenContent);
+            bContent = Tool("pdf_content", Ico.Photo, OpenContent);
+            bEditText = Tool("pe_tool", Ico.Edit, OpenTextEditor);
+            bEditText.MouseEnter += (s, e) => tips.SetToolTip(bEditText, L.T("pe_tool_tip"));
             bContent.MouseEnter += (s, e) => tips.SetToolTip(bContent, L.T("pdf_content_tip"));
             bRotL = Tool("pdf_rot_l", "\uE7A8", () => grid.RotateSelected(270));
             bRotR = Tool("pdf_rot_r", Ico.Rotate, () => grid.RotateSelected(90));
@@ -626,7 +628,7 @@ namespace FileConverter
             imgFmt.SetSilently(Settings.Get("PdfImgFmt", "jpg") == "png" ? 1 : 0);
             imgFmt.SelectedChanged += (s, e) => Settings.Set("PdfImgFmt", imgFmt.SelectedIndex == 1 ? "png" : "jpg");
 
-            Controls.AddRange(new Control[] { mode, list, grid, dropC, dropP, bAdd, bClear, bOpen, bGo, bContent, bSearchable, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bShow, pageSize, imgFmt, progress, bLock, bNums, bMark, bSign });
+            Controls.AddRange(new Control[] { mode, list, grid, dropC, dropP, bAdd, bClear, bOpen, bGo, bContent, bEditText, bSearchable, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bShow, pageSize, imgFmt, progress, bLock, bNums, bMark, bSign });
             EnableDrop(list, grid, dropC, dropP);
             UpdateState();
         }
@@ -644,7 +646,104 @@ namespace FileConverter
         public event Action<string, int> EditContent;
         /// The PDF open in "Edit pages", or null.
         public string PdfPath { get { return Combine ? null : pdfPath; } }
-        Btn bContent, bSearchable;
+        Btn bContent, bEditText, bSearchable;
+        PdfTextEditor textEditor;
+
+        /// "Edit text": the pages open in the text editor (over this page) — change, add or erase text; saved as a new PDF.
+        void OpenTextEditor()
+        {
+            if (pdfPath == null || running) return;
+            if (Edited && !Ask.Confirm(FindForm(), L.T("ed_discard_title"), L.T("pdf_content_unsaved"), L.T("pdf_content_go"), L.T("ed_keep_editing"), AskKind.Warning)) return;
+            if (Edited) ResetPages();
+            string src = pdfPath;
+            running = true; UpdateState();
+            progress.Visible = true; progress.SetIndeterminate(true);
+            SetStatus(L.T("doc_opening"), Theme.InkSoft);
+            Thread t = new Thread(() =>
+            {
+                List<string> pngs = null; string err = null;
+                try { pngs = DocPages.Render(src, (done, total) => Post(() => SetStatus(L.T("doc_rendering", done, Math.Max(done, total)), Theme.InkSoft)), () => IsDisposed || Tools.ShuttingDown); }
+                catch (Exception ex) { err = ex.Message; }
+                Post(() =>
+                {
+                    running = false; progress.SetIndeterminate(false); progress.Visible = false; UpdateState();
+                    if (err != null || pngs == null || pngs.Count == 0) { SetStatus(err ?? L.T("doc_failed"), Theme.Error); return; }
+                    SetStatus("", Theme.InkSoft);
+                    ShowTextEditor(src, pngs);
+                });
+            });
+            t.IsBackground = true; t.Start();
+        }
+
+        public void ShowTextEditor(string src, List<string> pngs)
+        {
+            if (textEditor == null)
+            {
+                textEditor = new PdfTextEditor { Visible = false };
+                textEditor.Closed += CloseTextEditor;
+                textEditor.SaveRequested += (edits, sizes) => SaveTextEdits(edits, sizes);
+                Controls.Add(textEditor);
+            }
+            if (Visible && Fx.Motion) Fx.Crossfade(this, 220, 1);
+            textEditor.Bounds = EditorArea;
+            textEditor.Visible = true; textEditor.BringToFront();
+            textEditor.Open(src, pngs);
+            textEditor.Focus();
+        }
+
+        /// Under the page's title (the Studio's own buttons stay usable above it).
+        Rectangle EditorArea { get { int top = Math.Max(0, Top0 - Theme.S(12)); return new Rectangle(0, top, Width, Height - top); } }
+
+        void CloseTextEditor()
+        {
+            if (textEditor == null || !textEditor.Visible) return;
+            if (Visible && Fx.Motion) Fx.Crossfade(this, 220, -1);
+            textEditor.Visible = false;
+            DoLayout(); Invalidate();
+        }
+
+        /// The changes become pictures laid over their pages (only where something changed); the rest of the PDF is untouched.
+        void SaveTextEdits(List<TextEdit> edits, List<Size> sizes)
+        {
+            CloseTextEditor();
+            SaveWith("pe_suffix", "act_k_pdf_edit", (w, r, pg) =>
+            {
+                List<PdfStamp.PageSpec> specs = Specs(pg);
+                for (int i = 0; i < pg.Count; i++)
+                {
+                    int src = pg[i].Src - 1;
+                    if (src < 0 || src >= sizes.Count || !edits.Exists(x => x.Page == src)) continue;
+                    Size sz = sizes[src];
+                    specs[i].H = specs[i].W * sz.Height / Math.Max(1, sz.Width);
+                    specs[i].Items.Add(new PdfStamp.Item { Image = PdfTextEditor.Overlay(edits, src, sz, 1f), Box = new RectangleF(0, 0, 1, 1) });
+                }
+                // the look: the changes laid over the pages
+                string mid = r + ".look.pdf";
+                string err = PdfStamp.Apply(w, mid, specs);
+                if (err != null) return err;
+                // the new words can be searched and copied too: an invisible text layer where they are
+                try
+                {
+                    List<PdfText.PageText> layer = new List<PdfText.PageText>();
+                    for (int i = 0; i < pg.Count; i++)
+                    {
+                        int src = pg[i].Src - 1;
+                        PdfText.PageText pt = new PdfText.PageText { ImgW = src >= 0 && src < sizes.Count ? sizes[src].Width : 1000, ImgH = src >= 0 && src < sizes.Count ? sizes[src].Height : 1414 };
+                        foreach (TextEdit e in edits)
+                            if (e.Page == src && !e.Area && e.Text.Trim().Length > 0) pt.Lines.Add(PdfTextEditor.Words(e));
+                        layer.Add(pt);
+                    }
+                    string lay = r + ".layer.pdf";
+                    PdfText.WriteLayer(lay, layer);
+                    err = PdfStamp.ApplyFile(mid, r, lay);
+                    try { File.Delete(lay); } catch { }
+                    if (err != null) File.Copy(mid, r, true);
+                }
+                catch { File.Copy(mid, r, true); }
+                try { File.Delete(mid); } catch { }
+                return null;
+            }, pg => L.T("pe_done", edits.Count));
+        }
         ActJob workAct;   // the job a SaveWith transform is part of (to show its progress)
 
         /// Reads the text on every page (Windows' own reader, offline) and lays it invisibly over the pages:
@@ -709,6 +808,18 @@ namespace FileConverter
 
         public override void Restyle() { UpdateState(); }
 
+        /// The Studio's Close: the open PDF goes (false when it's busy).
+        public bool CloseFile()
+        {
+            if (running) return false;
+            if (textEditor != null && textEditor.Visible) { if (textEditor.Edits.Count > 0 && !Ask.Confirm(FindForm(), L.T("ed_discard_title"), L.T("pe_discard"), L.T("pe_discard_yes"), L.T("ed_keep_editing"), AskKind.Warning)) return false; CloseTextEditor(); }
+            if (Edited && !Ask.Confirm(FindForm(), L.T("ed_discard_title"), L.T("ed_discard"), L.T("ed_discard_yes"), L.T("ed_keep_editing"), AskKind.Warning)) return false;
+            ClosePdf();
+            lastOutput = null; bShow.Visible = false;
+            SetStatus("", Theme.InkSoft); UpdateState();
+            return true;
+        }
+
         void ClearAll()
         {
             if (running) return;
@@ -735,6 +846,7 @@ namespace FileConverter
         // ------------------------------------------------------------------ layout & paint
         public override void DoLayout()
         {
+            if (textEditor != null && textEditor.Visible) textEditor.Bounds = EditorArea;
             int W = Width, H = Height, p = Pad, gap = Theme.S(18), rightW = Theme.S(320), ip = Theme.S(20);
             cards.Clear();
             left = new Rectangle(p, Top0, W - p * 2 - rightW - gap, H - Top0 - p);
@@ -777,7 +889,7 @@ namespace FileConverter
             }
             else statusR = Rectangle.Empty;
             int oy = y + Theme.S(16);
-            foreach (Control k in new Control[] { pageSize, bContent, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bSearchable, imgFmt, bLock, bNums, bMark, bSign }) k.Visible = false;
+            foreach (Control k in new Control[] { pageSize, bContent, bEditText, bRotL, bRotR, bDel, bAll, bReset, bExtract, bSplit, bImages, bSearchable, imgFmt, bLock, bNums, bMark, bSign }) k.Visible = false;
             stampCard = Rectangle.Empty;
             if (c)
             {
@@ -793,11 +905,11 @@ namespace FileConverter
                 selLblR = new Rectangle(x, oy, cw, Theme.S(18)); oy += Theme.S(26);
                 int ry = oy;
                 // rows get a little tighter when the window is short, so all three cards still fit
-                int tools = Edited ? 6 : 5;
+                int tools = Edited ? 7 : 6;
                 int need = (oy - Top0) + tools * Theme.S(38) + Theme.S(10) + gap + Theme.S(42) + 4 * Theme.S(38) + Theme.S(44) + gap + Theme.S(42) + Theme.S(38) + Theme.S(8);
                 int rh = need <= H - p - Top0 ? Theme.S(38) : need - (tools + 4) * Theme.S(5) <= H - p - Top0 ? Theme.S(33) : Theme.S(30);
                 int bh2 = rh - Theme.S(2);
-                foreach (Btn b in new[] { bContent, bRotL, bRotR, bDel, bAll, bReset })
+                foreach (Btn b in new[] { bEditText, bContent, bRotL, bRotR, bDel, bAll, bReset })
                 {
                     b.Visible = has; if (!has) continue;
                     if (b == bReset && !Edited) { b.Visible = false; continue; }
@@ -943,7 +1055,7 @@ namespace FileConverter
             bDel.Enabled = sel > 0 && sel < grid.Pages.Count && !running;
             bExtract.Enabled = sel > 0 && !running;
             bAll.Label = () => grid.SelectedCount == grid.Pages.Count && grid.Pages.Count > 0 ? L.T("pdf_select_none") : L.T("pdf_select_all");
-            foreach (Btn b in new[] { bContent, bAll, bReset, bSplit, bImages, bSearchable, bAdd, bOpen, bClear, bLock, bNums, bMark, bSign }) b.Enabled = !running;
+            foreach (Btn b in new[] { bContent, bEditText, bAll, bReset, bSplit, bImages, bSearchable, bAdd, bOpen, bClear, bLock, bNums, bMark, bSign }) b.Enabled = !running;
             pageSize.Enabled = imgFmt.Enabled = !running;
             DoLayout();
             foreach (Control k in Controls) k.Invalidate();

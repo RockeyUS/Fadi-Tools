@@ -34,36 +34,65 @@ namespace FileConverter
         static float Lum(Color c) { return (0.299f * c.R + 0.587f * c.G + 0.114f * c.B) / 255f; }
 
         /// The default accent: a warm orange (it sits well with the fez red of the logo).
-        public static Color Clay { get { return P(Dark, C(238, 98, 46), C(245, 120, 70)); } }
+        public static Color Clay { get { return P(Dark, C(201, 77, 26), C(245, 120, 70)); } }   // light: deep enough for text on white (4.6:1)
         public static Color AccentColor { get { return Accent.IsEmpty ? Clay : Accent; } }
 
-        // clean, flat surfaces: warm cream with white cards (light), soft black with charcoal cards (dark)
-        public static Color Bg { get { return T(P(Dark, C(246, 240, 233), C(22, 22, 24)), 0.03f, 0.05f); } }
+        // clean, flat surfaces: a soft warm grey with white cards (light), soft black with charcoal cards (dark)
+        public static Color Bg { get { return T(P(Dark, C(244, 243, 241), C(22, 22, 24)), 0.03f, 0.05f); } }
         public static Color BgTop { get { return Bg; } }
         public static Color BgBottom { get { return Bg; } }
         public static Color Side { get { return T(P(Dark, C(255, 255, 255), C(29, 29, 31)), 0.0f, 0.04f); } }
         public static Color SideTop { get { return Side; } }
         public static Color SideBottom { get { return Side; } }
-        public static Color SideBorder { get { return T(P(Dark, C(234, 227, 218), C(44, 44, 48)), 0.06f, 0.06f); } }
+        public static Color SideBorder { get { return T(P(Dark, C(229, 227, 223), C(44, 44, 48)), 0.06f, 0.06f); } }
         public static Color Card { get { return T(P(Dark, C(255, 255, 255), C(32, 32, 35)), 0.0f, 0.03f); } }
-        public static Color CardBorder { get { return T(P(Dark, C(234, 227, 218), C(48, 48, 52)), 0.06f, 0.06f); } }
-        public static Color CardInner { get { return T(P(Dark, C(249, 245, 240), C(27, 27, 30)), 0.03f, 0.04f); } }
+        public static Color CardBorder { get { return T(P(Dark, C(229, 227, 223), C(48, 48, 52)), 0.06f, 0.06f); } }
+        public static Color CardInner { get { return T(P(Dark, C(248, 247, 245), C(27, 27, 30)), 0.03f, 0.04f); } }
         public static Color Ink { get { return P(Dark, C(24, 22, 20), C(242, 242, 244)); } }
         public static Color InkSoft { get { return P(Dark, C(86, 82, 76), C(176, 176, 183)); } }
-        public static Color InkFaint { get { return P(Dark, C(136, 130, 122), C(124, 124, 132)); } }
-        public static Color Line { get { return P(Dark, C(238, 232, 224), C(46, 46, 50)); } }
-        public static Color Hover { get { return T(P(Dark, C(245, 240, 234), C(42, 42, 46)), 0.04f, 0.06f); } }
-        public static Color Pressed { get { return T(P(Dark, C(236, 229, 220), C(52, 52, 57)), 0.06f, 0.08f); } }
-        public static Color Selected { get { return T(P(Dark, C(241, 234, 226), C(48, 48, 53)), 0.08f, 0.1f); } }
+        // (5.4:1 on white and 4.8:1 on the page in light; 5.8:1 on cards in dark — small hints stay readable)
+        public static Color InkFaint { get { return P(Dark, C(110, 105, 98), C(154, 154, 162)); } }
+        public static Color Line { get { return P(Dark, C(236, 234, 230), C(46, 46, 50)); } }
+        public static Color Hover { get { return T(P(Dark, C(242, 241, 238), C(42, 42, 46)), 0.04f, 0.06f); } }
+        public static Color Pressed { get { return T(P(Dark, C(233, 231, 227), C(52, 52, 57)), 0.06f, 0.08f); } }
+        public static Color Selected { get { return T(P(Dark, C(238, 236, 232), C(48, 48, 53)), 0.08f, 0.1f); } }
         public static Color Field { get { return T(P(Dark, C(255, 255, 255), C(36, 36, 39)), 0.0f, 0.03f); } }
-        public static Color FieldBorder { get { return T(P(Dark, C(222, 214, 204), C(64, 64, 70)), 0.06f, 0.06f); } }
+        public static Color FieldBorder { get { return T(P(Dark, C(218, 215, 210), C(64, 64, 70)), 0.06f, 0.06f); } }
         public static Color ChipTop { get { return T(P(Dark, C(255, 255, 255), C(38, 38, 41)), 0.0f, 0.03f); } }
         public static Color ChipBottom { get { return ChipTop; } }
-        public static Color ChipBorder { get { return T(P(Dark, C(228, 220, 210), C(58, 58, 63)), 0.06f, 0.06f); } }
-        // primary actions: flat accent with white text (Claude's clay by default)
-        public static Color PrimaryTop { get { return AccentColor; } }
-        public static Color PrimaryBottom { get { return AccentColor; } }
-        public static Color PrimaryInk { get { return Lum(AccentColor) > 0.68f ? C(24, 24, 22) : Color.White; } }
+        public static Color ChipBorder { get { return T(P(Dark, C(224, 221, 216), C(58, 58, 63)), 0.06f, 0.06f); } }
+        // primary actions: a filled accent with white text. The fill is the accent made deep enough for white
+        // words on it to read (at least 4.5:1); the bright accent stays for lines, icons and text on cards.
+        public static Color PrimaryTop { get { return AccentFill; } }
+        public static Color PrimaryBottom { get { return AccentFill; } }
+        public static Color PrimaryInk { get { return Contrast(Color.White, AccentFill) >= 4.5 ? Color.White : C(24, 24, 22); } }
+
+        /// The accent for filled shapes with words or icons on them (buttons, picked chips, badges).
+        public static Color AccentFill
+        {
+            get
+            {
+                if (Accent.IsEmpty) return C(194, 72, 26);                   // the default orange, deep: white 4.96:1
+                Color a = Accent;
+                if (Contrast(Color.White, a) >= 4.5) return a;
+                if (Contrast(C(24, 24, 22), a) >= 7) return a;               // a very light accent: dark words on it instead
+                for (float k = 0.98f; k > 0.3f; k -= 0.02f)
+                {
+                    Color d = Color.FromArgb((int)(a.R * k), (int)(a.G * k), (int)(a.B * k));
+                    if (Contrast(Color.White, d) >= 4.5) return d;
+                }
+                return a;
+            }
+        }
+
+        /// WCAG contrast between two colours (1 to 21).
+        public static double Contrast(Color a, Color b)
+        {
+            Func<int, double> ch = v => { double x = v / 255.0; return x <= 0.03928 ? x / 12.92 : Math.Pow((x + 0.055) / 1.055, 2.4); };
+            Func<Color, double> L = c => 0.2126 * ch(c.R) + 0.7152 * ch(c.G) + 0.0722 * ch(c.B);
+            double la = L(a), lb = L(b);
+            return (Math.Max(la, lb) + 0.05) / (Math.Min(la, lb) + 0.05);
+        }
         public static Color AccentSoft { get { return Mix(Card, AccentColor, Dark ? 0.22f : 0.12f); } }
         public static Color Success { get { return P(Dark, C(46, 125, 72), C(110, 196, 136)); } }
         public static Color SuccessBg { get { return P(Dark, C(228, 242, 231), C(38, 60, 44)); } }
@@ -93,7 +122,7 @@ namespace FileConverter
             }
         }
         public static Color WarnBg { get { return P(Dark, C(250, 241, 222), C(66, 55, 32)); } }
-        public static Color Track { get { return T(P(Dark, C(230, 223, 214), C(58, 58, 63)), 0.08f, 0.1f); } }
+        public static Color Track { get { return T(P(Dark, C(228, 226, 222), C(58, 58, 63)), 0.08f, 0.1f); } }
         public static Color Shadow { get { return P(Dark, Color.FromArgb(22, 60, 50, 30), Color.FromArgb(30, 0, 0, 0)); } }
 
         public static float Scale = 1f;
@@ -125,7 +154,18 @@ namespace FileConverter
             fonts = new Dictionary<string, Font>();
             // (the old fonts are left for the garbage collector: controls may still be drawing with them this moment)
         }
-        static string serifName;
+        static string serifName, displayName;
+        static bool displayBold;
+        /// Titles: Windows 11's own display type (Segoe UI Variable Display, semibold), which also sits well next to
+        /// Arabic; elsewhere the UI font in bold. Arabic titles stay in the Arabic UI font.
+        public static Font Display(float size)
+        {
+            if (RTL || displayName == null) return F(size, FontStyle.Bold);
+            string key = "display" + size + "@" + Scale;
+            Font f;
+            if (!fonts.TryGetValue(key, out f)) { f = new Font(displayName, Px(size), displayBold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel); fonts[key] = f; }
+            return f;
+        }
         /// Headings in a book serif, like Claude's titles (Arabic stays in the UI font).
         public static Font Serif(float size, FontStyle style = FontStyle.Regular)
         {
@@ -254,7 +294,10 @@ namespace FileConverter
                     if (ff.Name == IconFontName) HasIconFont = true;
                     if (ff.Name == "Consolas") mono = true;
                     if (ff.Name == "Georgia" && serifName == null) serifName = "Georgia";
+                    if (ff.Name == "Segoe UI Variable Display Semibold" || ff.Name == "Segoe UI Variable Display Semib") displayName = ff.Name;
+                    else if (ff.Name == "Segoe UI Variable Display" && displayName == null) { displayName = ff.Name; displayBold = true; }
                 }
+                if (displayName == null && segoe) foreach (FontFamily ff in fc.Families) if (ff.Name == "Segoe UI Semibold") { displayName = ff.Name; break; }
                 if (!segoe) FontName = SystemFonts.MessageBoxFont.FontFamily.Name;
                 if (!mono) monoName = FontFamily.GenericMonospace.Name;
                 if (serifName == null) foreach (FontFamily ff in fc.Families) if (ff.Name == "Cambria" || ff.Name == "DejaVu Serif" || ff.Name == "Liberation Serif") { serifName = ff.Name; break; }
@@ -444,7 +487,7 @@ namespace FileConverter
     /// Icon glyphs from Segoe MDL2 Assets (built into Windows 10).
     public static class Ico
     {
-        public const string Crop = "\uF406", Convert = "", Cut = "", Download = "", Search = "", Photo = "",
+        public const string Crop = "\uF406", Upscale = "\uF409", Trim = "\uF40A", Combine = "\uF40B", FlipH = "\uF40C", FlipV = "\uF40D", Scale = "\uF40E", Watch = "\uF40F", Recipe = "\uF410", Convert = "", Cut = "", Download = "", Search = "", Photo = "",
             Settings = "", Sun = "", Moon = "", Globe = "", Add = "", Folder = "",
             FolderOpen = "", Delete = "", Close = "", Play = "", Pause = "", Paste = "",
             Link = "", Check = "", Error = "", Info = "", Music = "", Video = "",

@@ -9,13 +9,18 @@ namespace FileConverter
 {
     public class SettingsPage : Page
     {
-        Rectangle appearance, saving, about, engines, integration;
+        Rectangle appearance, saving, about, engines, integration, wheelCard;
+        readonly WheelEntry wheelEntry = new WheelEntry();
+        readonly WatchEntry watchEntry = new WatchEntry();
+        WheelPage wheelPage;
+        WatchPage watchPage;
+        Rectangle watchCard;
         int aboutLogoY, aboutTextW;
         bool aboutTallNow;
         Rectangle themeLbl, langLbl, openAfterLbl, askSaveLbl, aboutR, animLbl;
         readonly Toggle askSave = new Toggle(), anim = new Toggle();
         float scrollTo, scrollNow; int maxScroll;
-        Rectangle[] engineRows = new Rectangle[4], integRows = new Rectangle[6];
+        Rectangle[] engineRows = new Rectangle[4], integRows = new Rectangle[11];
         Segments theme, lang, logoSeg;
         Swatches accent;
         Rectangle accentLbl, logoLbl;
@@ -25,7 +30,11 @@ namespace FileConverter
         FolderButton folder;
         Btn btnReset, btnUninstall, btnLo, btnYt, btnYtUpdate;
         Toggle openAfter;
-        Toggle[] integ = new Toggle[6];
+        Toggle[] integ = new Toggle[11];
+        // Windows integration, in three groups: -1, -2, -3 are the group headings
+        static readonly int[] IntegOrder = { -1, 0, 1, 2, 7, -2, 3, 9, 10, -3, 4, 6, 8, 5 };
+        static readonly string[] IntegGroups = { "int_g_explorer", "int_g_notify", "int_g_background" };
+        readonly Rectangle[] integHeads = new Rectangle[3];
         Progress ytProgress;
         string ytStatus = "";
         bool ytBusy;
@@ -53,12 +62,12 @@ namespace FileConverter
                 Settings.Set("Accent", accent.Selected.ToArgb() == AccentColors[0].ToArgb() ? "" : ColorTranslator.ToHtml(Color.FromArgb(accent.Selected.R, accent.Selected.G, accent.Selected.B)));
                 Theme.ApplySettings(); Theme.RaiseChanged();
             };
-            logoSeg = new Segments(() => L.T("logo_classic"), () => L.T("logo_silver"), () => L.T("logo_night"));
+            logoSeg = new Segments(() => L.T("logo_classic"), () => L.T("logo_night"));
             string lc = Settings.Get("Logo", "");
-            logoSeg.SetSilently(lc == "silver" ? 1 : lc == "dark" ? 2 : 0);
+            logoSeg.SetSilently(Theme.LogoDark ? 1 : 0);
             logoSeg.SelectedChanged += (s, e) =>
             {
-                Settings.Set("Logo", new[] { "", "silver", "dark" }[logoSeg.SelectedIndex]);
+                Settings.Set("Logo", logoSeg.SelectedIndex == 1 ? "dark" : "light");
                 Theme.ResetLogo(); Theme.RaiseChanged();
             };
             folder = new FolderButton();
@@ -97,11 +106,27 @@ namespace FileConverter
                 };
             }
             integ[3] = new Toggle();
-            integ[3].CheckedChanged += (s, e) => Notifier.Enabled = integ[3].Checked;
+            integ[3].CheckedChanged += (s, e) => { Notifier.Enabled = integ[3].Checked; integ[9].Enabled = integ[10].Enabled = integ[3].Checked; Invalidate(); };
+            integ[9] = new Toggle();
+            integ[9].CheckedChanged += (s, e) => Notifier.LongOnly = integ[9].Checked;
+            integ[10] = new Toggle();
+            integ[10].CheckedChanged += (s, e) => Notifier.Sound = integ[10].Checked;
             integ[4] = new Toggle();
             integ[4].CheckedChanged += (s, e) => { Settings.Set("KeepInTray", integ[4].Checked ? "1" : "0"); Notifier.ShowResident(FindForm(), integ[4].Checked); };
             integ[5] = new Toggle();
             integ[5].CheckedChanged += (s, e) => Settings.Set("WatchLinks", integ[5].Checked ? "1" : "0");
+            integ[6] = new Toggle();
+            integ[6].CheckedChanged += (s, e) => { Settings.Set("CloseToTray", integ[6].Checked ? "1" : "0"); DragWheel.NotifyChanged(); };
+            integ[8] = new Toggle();
+            integ[8].CheckedChanged += (s, e) => Shell.SetStartsWithWindows(integ[8].Checked);
+            integ[7] = new Toggle();
+            integ[7].CheckedChanged += (s, e) =>
+            {
+                DragWheel.Switch(integ[7].Checked, FindForm());
+                // the wheel only works while Fadi Tools runs: offer to keep it running when the window closes
+                if (integ[7].Checked && !integ[6].Checked)
+                    ShowToast(L.T("wheel_needs_tray"), true, () => L.T("wheel_keep_running"), () => integ[6].Checked = true);
+            };
             anim.CheckedChanged += (s, e) => Settings.Set("Animations", anim.Checked ? "1" : "0");
             btnZip = new Btn(() => L.T("zip_make"), "\uE8B7", BtnKind.Secondary);
             btnZip.Click += (s, e) => MakeZip();
@@ -110,7 +135,11 @@ namespace FileConverter
             body = new Body(this);
             thumb = new Thumb(this);
             Controls.Add(thumb); Controls.Add(body);
-            body.Controls.AddRange(new Control[] { btnUpdate, btnTips, btnNew, askSave, btnZip, anim });
+            body.Controls.AddRange(new Control[] { btnUpdate, btnTips, btnNew, askSave, btnZip, anim, wheelEntry, watchEntry });
+            wheelEntry.Click += (s, e) => OpenWheel();
+            watchEntry.Click += (s, e) => OpenWatch();
+            // switched from the tray panel or the wheel's own page: the switches here follow
+            DragWheel.Changed += () => { if (IsHandleCreated && !IsDisposed) { LoadValues(); wheelEntry.Invalidate(); } };
             body.Controls.AddRange(new Control[] { theme, lang, accent, logoSeg, folder, btnReset, openAfter, btnUninstall, btnLo, btnYt, btnYtUpdate, ytProgress });
             body.Controls.AddRange(integ);
             LoadValues();
@@ -189,11 +218,80 @@ namespace FileConverter
             integ[1].SetSilently(Settings.Get("IntMenu", "1") == "1");
             integ[2].SetSilently(Settings.Get("IntViewer", "1") == "1");
             integ[3].SetSilently(Notifier.Enabled);
+            integ[9].SetSilently(Notifier.LongOnly);
+            integ[10].SetSilently(Notifier.Sound);
+            integ[9].Enabled = integ[10].Enabled = Notifier.Enabled;
             integ[4].SetSilently(Settings.Get("KeepInTray", "1") == "1");
             integ[5].SetSilently(Settings.Get("WatchLinks", "1") == "1");
+            integ[6].SetSilently(Settings.Get("CloseToTray", "0") == "1");
+            integ[7].SetSilently(DragWheel.On);
+            integ[8].SetSilently(Shell.StartsWithWindows);
         }
 
-        public override void OnShown() { Tools.Reset(); LoadValues(); Refresh2(); }
+        public override void OnShown() { Tools.Reset(); LoadValues(); Refresh2(); if (!openingWheel) CloseWheel(false); }
+        bool openingWheel;
+
+        // ------------------------------------------------------------------ pages of their own on top: Donut Wheel, Watch folders
+        Page sub;   // the one showing, if any
+
+        T Make<T>(ref T page) where T : Page, new()
+        {
+            if (page == null)
+            {
+                page = new T { Toast = Toast, Owner = Owner, Glyph = Glyph, Visible = false };
+                Controls.Add(page);
+            }
+            return page;
+        }
+
+        void OpenSub(Page p)
+        {
+            if (sub == p && p.Visible) return;
+            if (sub != null && sub != p) sub.Visible = false;
+            if (Visible && Fx.Motion) Fx.Crossfade(this, 220, 1);
+            sub = p;
+            p.Bounds = ClientRectangle;
+            p.Visible = true; p.BringToFront();
+            body.Visible = thumb.Visible = false;
+            p.OnShown(); p.DoLayout();
+            p.Focus();
+        }
+
+        void CloseSub(bool animate)
+        {
+            if (sub == null || !sub.Visible) { sub = null; return; }
+            if (animate && Visible && Fx.Motion) Fx.Crossfade(this, 220, -1);
+            sub.Visible = false; sub = null;
+            body.Visible = true;
+            DoLayout();
+            wheelEntry.Invalidate(); watchEntry.Invalidate();
+        }
+
+        /// Shows the Donut Wheel page over Settings.
+        public void OpenWheel()
+        {
+            bool first = wheelPage == null;
+            Make(ref wheelPage);
+            if (first) wheelPage.BackRequested += () => CloseSub(true);
+            OpenSub(wheelPage);
+        }
+
+        /// Shows Watch folders over Settings.
+        public void OpenWatch()
+        {
+            bool first = watchPage == null;
+            Make(ref watchPage);
+            if (first) watchPage.BackRequested += () => CloseSub(true);
+            OpenSub(watchPage);
+        }
+
+        /// Back to Settings.
+        public void CloseWheel(bool animate) { CloseSub(animate); }
+        public bool WheelOpen { get { return sub != null && sub.Visible; } }
+
+        /// From the tray: open Settings right at the Donut Wheel page.
+        public void PrepareWheel() { openingWheel = true; }
+        public void AfterShownWheel() { openingWheel = false; OpenWheel(); }
         public override void Restyle() { LoadValues(); Refresh2(); body.Invalidate(true); thumb.Invalidate(); }
 
         void Refresh2()
@@ -225,16 +323,22 @@ namespace FileConverter
             if (one)
             {
                 engines = new Rectangle(lx, saving.Bottom + gap, colW, Theme.S(296));
-                integration = new Rectangle(lx, engines.Bottom + gap, colW, Theme.S(426));
-                about = new Rectangle(lx, integration.Bottom + gap, colW, aboutTall ? Theme.S(152) : Theme.S(112));
+                integration = new Rectangle(lx, engines.Bottom + gap, colW, Theme.S(790));
+                wheelCard = new Rectangle(lx, integration.Bottom + gap, colW, Theme.S(92));
+                watchCard = new Rectangle(lx, wheelCard.Bottom + gap, colW, Theme.S(92));
+                about = new Rectangle(lx, watchCard.Bottom + gap, colW, aboutTall ? Theme.S(152) : Theme.S(112));
             }
             else
             {
-                about = new Rectangle(lx, saving.Bottom + gap, colW, aboutTall ? Theme.S(152) : Math.Max(Theme.S(96), Math.Min(Theme.S(120), H - saving.Bottom - gap - p)));
+                wheelCard = new Rectangle(lx, saving.Bottom + gap, colW, Theme.S(92));
+                watchCard = new Rectangle(lx, wheelCard.Bottom + gap, colW, Theme.S(92));
+                about = new Rectangle(lx, watchCard.Bottom + gap, colW, aboutTall ? Theme.S(152) : Math.Max(Theme.S(96), Math.Min(Theme.S(120), H - watchCard.Bottom - gap - p)));
                 engines = new Rectangle(rx, y, colW, Theme.S(296));
-                integration = new Rectangle(rx, engines.Bottom + gap, colW, Theme.S(426));
+                integration = new Rectangle(rx, engines.Bottom + gap, colW, Theme.S(790));
             }
             cards.AddRange(new[] { appearance, saving, about, engines, integration });
+            Place(wheelEntry, wheelCard);   // a card that is a button: it paints itself
+            Place(watchEntry, watchCard);
 
             int x = appearance.X + ip, w = colW - ip * 2;
             int half = (w - Theme.S(12)) * 3 / 5;
@@ -277,12 +381,20 @@ namespace FileConverter
             Place(btnYtUpdate, new Rectangle(ex + ew - uw2, engineRows[3].Y + Theme.S(10), uw2, Theme.S(34)));
             Place(ytProgress, new Rectangle(ex + ew - bw, engineRows[3].Y + Theme.S(24), bw, Theme.S(5)));
 
-            for (int i = 0; i < 6; i++)
+            // the two notification choices sit right under "Windows notification…", a little indented
+            int iy = integration.Y + Theme.S(50);
+            foreach (int i in IntegOrder)
             {
-                integRows[i] = new Rectangle(ex, integration.Y + Theme.S(50) + i * Theme.S(52), ew, Theme.S(48));
+                if (i < 0) { integHeads[-i - 1] = new Rectangle(ex, iy + (i == -1 ? 0 : Theme.S(8)), ew, Theme.S(26)); iy += Theme.S(i == -1 ? 28 : 36); continue; }
+                bool sub = i == 9 || i == 10;
+                int ind = sub ? Theme.S(22) : 0;
+                integRows[i] = new Rectangle(ex + ind, iy, ew - ind, Theme.S(48));
                 Place(integ[i], new Rectangle(ex + ew - Theme.S(52), integRows[i].Y + Theme.S(7), Theme.S(52), Theme.S(34)));
+                iy += Theme.S(52);
             }
-            zipRow = new Rectangle(ex, integration.Y + Theme.S(50) + 6 * Theme.S(52) + Theme.S(6), ew, Theme.S(48));
+            zipRow = new Rectangle(ex, iy + Theme.S(6), ew, Theme.S(48));
+            integration.Height = zipRow.Bottom + Theme.S(14) - integration.Y;
+            for (int c = 0; c < cards.Count; c++) if (cards[c].Location == integration.Location) cards[c] = integration;
             int zw = Math.Max(Theme.S(130), btnZip.PreferredWidth);
             Place(btnZip, new Rectangle(ex + ew - zw, zipRow.Y + Theme.S(7), zw, Theme.S(34)));
             // long page: scroll with the mouse wheel when the window is short
@@ -292,7 +404,8 @@ namespace FileConverter
             if (scrollNow > maxScroll) scrollNow = maxScroll;
             body.Bounds = new Rectangle(0, -(int)Math.Round(scrollNow), W, Math.Max(H, bottom));
             thumb.Bounds = Theme.Mirror(new Rectangle(W - Theme.S(10), 0, Theme.S(10), H), W);
-            thumb.Visible = maxScroll > 0;
+            thumb.Visible = maxScroll > 0 && !WheelOpen;
+            if (WheelOpen) sub.Bounds = ClientRectangle;
             thumb.BringToFront();
             body.Invalidate();
             thumb.Invalidate();
@@ -318,7 +431,7 @@ namespace FileConverter
             Label(g, L.T("ask_save"), Theme.F(9.5f), Theme.Ink, askSaveLbl);
             // about
             Rectangle logo = new Rectangle(aboutR.X, aboutLogoY, Theme.S(44), Theme.S(44));
-            if (Theme.Logo != null) g.DrawImage(Theme.Logo, M(logo));
+            Theme.DrawLogo(g, M(logo));
             Label(g, L.T("app_name"), Theme.F(11f, FontStyle.Bold), Theme.Ink, new Rectangle(aboutR.X + Theme.S(56), logo.Y, aboutTextW, Theme.S(24)));
             Label(g, L.T("version", Shell.Version), Theme.F(9f), Theme.InkSoft, new Rectangle(aboutR.X + Theme.S(56), logo.Y + Theme.S(24), aboutTextW, aboutTallNow ? Theme.S(40) : Theme.S(20)), Align.Start, !aboutTallNow, aboutTallNow);
 
@@ -342,11 +455,16 @@ namespace FileConverter
             }
 
             Head(g, integration, Ico.Settings, "integration");
+            for (int h = 0; h < 3; h++)
+                Label(g, L.T(IntegGroups[h]).ToUpper(System.Globalization.CultureInfo.CurrentCulture), Theme.F(7.75f, FontStyle.Bold), Theme.InkFaint, integHeads[h], Align.Start);
             using (Pen lp = new Pen(Theme.Line)) { Rectangle l = M(new Rectangle(zipRow.X, zipRow.Y - Theme.S(4), zipRow.Width, 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
             Label(g, zipStatus ?? L.T(Paths.Portable ? "zip_label_portable" : "zip_label"), Theme.F(9.5f), zipStatus != null ? Theme.InkSoft : Theme.Ink, new Rectangle(zipRow.X, zipRow.Y, zipRow.Width - Theme.S(150), zipRow.Height), Align.Start, true, true);
-            string[] ik = { "int_desktop", "int_menu", "int_viewer", "int_notify", "int_tray", "int_links" };
-            for (int i = 0; i < 6; i++)
-                Label(g, L.T(ik[i]), Theme.F(9.5f), Theme.Ink, new Rectangle(integRows[i].X, integRows[i].Y, integRows[i].Width - Theme.S(64), integRows[i].Height), Align.Start, true, true);
+            string[] ik = { "int_desktop", "int_menu", "int_viewer", "int_notify", "int_tray", "int_links", "int_close_tray", "int_wheel", "int_startup", "int_notify_long", "int_notify_sound" };
+            for (int i = 0; i < 11; i++)
+            {
+                bool subRow = i == 9 || i == 10;
+                Label(g, L.T(ik[i]), Theme.F(subRow ? 9f : 9.5f), subRow ? (integ[3].Checked ? Theme.InkSoft : Theme.InkFaint) : Theme.Ink, new Rectangle(integRows[i].X, integRows[i].Y, integRows[i].Width - Theme.S(64), integRows[i].Height), Align.Start, true, true);
+            }
         }
 
         /// Lets you choose any picture as the app logo (kept as a 256 px PNG next to the settings).
@@ -420,7 +538,7 @@ namespace FileConverter
             Theme.PaintSurface(g, on, Surface.Background);
             Theme.Smooth(g);
             int tx = Pad;
-            Label(g, L.T(TitleKey), Theme.Serif(20f), Theme.Ink, new Rectangle(tx, Theme.S(18), Width - Pad - tx - HeaderReserve, Theme.S(40)), Align.Start, false);
+            Label(g, L.T(TitleKey), Theme.Display(20f), Theme.Ink, new Rectangle(tx, Theme.S(18), Width - Pad - tx - HeaderReserve, Theme.S(40)), Align.Start, false);
             Label(g, L.T(SubKey), Theme.F(9.75f), Theme.InkSoft, new Rectangle(tx, Theme.S(58), Width - Pad - tx - HeaderReserve, Theme.S(24)), Align.Start, false);
             foreach (Rectangle c in cards) Theme.PaintCard(g, M(c));
             PaintContent(g);

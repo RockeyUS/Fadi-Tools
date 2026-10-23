@@ -483,8 +483,8 @@ namespace FileConverter
         };
 
         Rectangle top, results, engineR, whatLbl, statusR, emptyR;
-        readonly TextField path = new TextField(() => L.T("re_path_hint"), Ico.Search) { ForceLtr = true };
-        readonly Btn bFile, bFolder, bRun, bSetup, bNode, bSave, bCopy, bIcon;
+        readonly TextField path = new TextField(() => L.T("re_path_hint"), Ico.Search) { ForceLtr = true, Clearable = true };
+        readonly Btn bFile, bFolder, bRun, bSetup, bNode, bNodeX, bSave, bCopy, bIcon;
         byte[] iconBytes; Bitmap iconImg; string iconFor;
         List<KeyValuePair<string, string>> versionInfo = new List<KeyValuePair<string, string>>();
         Rectangle iconR;
@@ -515,6 +515,8 @@ namespace FileConverter
             bSetup.Click += (s, e) => SetupAgents();
             bNode = new Btn(() => L.T("re_install_node"), Ico.Download, BtnKind.Primary) { Visible = false };
             bNode.Click += (s, e) => InstallNode();
+            bNodeX = new Btn(() => L.T("re_uninstall_node"), Ico.Delete, BtnKind.Ghost) { Visible = false, FontSize = 9f };
+            bNodeX.Click += (s, e) => UninstallNode();
             bSave = new Btn(() => L.T("re_save"), Ico.Save, BtnKind.Secondary) { Visible = false };
             bSave.Click += (s, e) => SaveReport();
             bCopy = new Btn(() => L.T("re_copy"), Ico.Copy, BtnKind.Ghost) { Visible = false };
@@ -522,6 +524,7 @@ namespace FileConverter
             bIcon = new Btn(() => L.T("re_save_icon"), Ico.Photo, BtnKind.Secondary) { Visible = false };
             bIcon.Click += (s, e) => SaveIcon();
             path.Box.TextChanged += (s, e) => RefreshChoices();
+            path.Cleared += () => { if (Cleared != null) Cleared(); };
             view.FadeTarget = this;
             view.FadeArea = () => output.Bounds;
             view.SelectedChanged += (s, e) => ShowOutput();
@@ -529,7 +532,7 @@ namespace FileConverter
             view.Visible = false;
             output.Font = Theme.Mono(9.5f);
             output.Visible = false;
-            Controls.AddRange(new Control[] { path, bFile, bFolder, what, bRun, bSetup, bNode, busy, view, bSave, bCopy, output, bIcon });
+            Controls.AddRange(new Control[] { path, bFile, bFolder, what, bRun, bSetup, bNode, bNodeX, busy, view, bSave, bCopy, output, bIcon });
             EnableDrop(path, what);
             RefreshChoices();
             Restyle();
@@ -544,7 +547,7 @@ namespace FileConverter
             Thread t = new Thread(() =>
             {
                 bool ok; string v = Rea.NodeVersion(out ok);
-                Ui(() => { nodeVer = v; nodeOk = ok; bNode.Visible = !ok; DoLayout(); });
+                Ui(() => { nodeVer = v; nodeOk = ok; bNode.Visible = !ok; bNodeX.Visible = v != null; DoLayout(); });
             });
             t.IsBackground = true; t.Start();
         }
@@ -557,6 +560,10 @@ namespace FileConverter
         /// The file or folder chosen for analysis.
         public string Target { get { return path.Box.Text.Trim().Trim('"'); } }
         public event Action<string> TargetChanged;
+        /// The × in the path box was pressed (File details empties too).
+        public event Action Cleared;
+        /// Empties the path (the file was cleared in File details).
+        public void ClearTarget() { if (!running && path.Box.Text.Length > 0) path.Box.Text = ""; }
 
         void PickFile()
         {
@@ -661,7 +668,8 @@ namespace FileConverter
             int nw = Math.Max(Theme.S(160), bNode.PreferredWidth);
             int iw = bIcon.Visible ? Math.Max(Theme.S(130), bIcon.PreferredWidth) : 0;
             int rightW = rw + Theme.S(12) + sw + (iw > 0 ? iw + Theme.S(12) : 0);
-            int leadW = bNode.Visible ? nw + Theme.S(12) : iconImg != null ? Theme.S(52) : 0;
+            int xw = Math.Max(Theme.S(110), bNodeX.PreferredWidth);
+            int leadW = bNode.Visible ? nw + Theme.S(12) : bNodeX.Visible ? xw + Theme.S(12) : iconImg != null ? Theme.S(52) : 0;
             bool split = w0 - rightW - leadW - Theme.S(12) < Theme.S(260);
             int extra = split ? Theme.S(54) : 0;
             top = new Rectangle(p, Top0, cardW, ip * 2 + Theme.S(44) + Theme.S(14) + Theme.S(24) + whatH + Theme.S(16) + Theme.S(42) + Theme.S(4) + extra);
@@ -680,9 +688,11 @@ namespace FileConverter
             Place(bSetup, new Rectangle(x + w - rw - Theme.S(12) - sw, by, sw, Theme.S(42)));
             if (bIcon.Visible) Place(bIcon, new Rectangle(x + w - rw - sw - Theme.S(24) - iw, by, iw, Theme.S(42)));
             Place(bNode, new Rectangle(x, y, nw, Theme.S(42)));
+            bool showX = bNodeX.Wanted && !bNode.Wanted;
+            if (showX) Place(bNodeX, new Rectangle(x, y, xw, Theme.S(42)));
             iconR = Rectangle.Empty;
-            int lead = bNode.Wanted ? nw + Theme.S(12) : 0;
-            if (iconImg != null && !bNode.Wanted)
+            int lead = bNode.Wanted ? nw + Theme.S(12) : showX ? xw + Theme.S(12) : 0;
+            if (iconImg != null && !bNode.Wanted && !showX)
             {
                 iconR = new Rectangle(x, y + Theme.S(1), Theme.S(40), Theme.S(40));
                 lead = Theme.S(52);
@@ -715,6 +725,9 @@ namespace FileConverter
             }
             string eng = !checkedNode || (nodeVer == null && !checkedNode) ? L.T("re_checking") :
                          nodeVer == null ? L.T("re_node_missing") : nodeOk ? L.T("re_ready", nodeVer, Rea.Package.Replace("rea-agents@", "")) : L.T("re_node_old", nodeVer);
+            // where Node.js is (it can be uninstalled with the button beside this)
+            string node = nodeVer != null ? Rea.NodeExe : null;
+            if (node != null) eng += "\n" + L.T("re_node_where", Path.GetDirectoryName(node));
             Label(g, eng, Theme.F(8.75f), nodeOk ? Theme.InkSoft : Theme.Warn, engineR, Align.Start, true, true);
             if (!string.IsNullOrEmpty(status)) Label(g, status, Theme.F(9f), statusColor, statusR, Align.Start, true, true);
             if (!output.Visible)
@@ -896,6 +909,44 @@ namespace FileConverter
             catch (Exception ex) { ShowToast(ex.Message, false, null, null); }
         }
 
+        /// Removes Node.js (asks first: other programs may use it too). Through winget when it can, else Windows' app list.
+        void UninstallNode()
+        {
+            string node = Rea.NodeExe;
+            if (node == null) return;
+            string dir = Path.GetDirectoryName(node);
+            if (!Ask.Confirm(FindForm(), L.T("re_uninstall_q"), L.T("re_uninstall_d", dir), L.T("re_uninstall_yes"), L.T("cancel"), AskKind.Warning)) return;
+            string winget = Tools.WinGet;
+            bNodeX.Enabled = false;
+            SetStatus(L.T("re_uninstalling_node"), Theme.InkSoft);
+            busy.Visible = true; busy.SetIndeterminate(true);
+            Thread t = new Thread(() =>
+            {
+                string o;
+                // 1. Node.js's own Windows installer entry: removed straight away (Windows asks once for permission)
+                bool declined = !NodeRemover.ByInstaller(dir);
+                // 2. installed with winget
+                if (!declined && Rea.NodeExe != null && winget != null)
+                {
+                    try { Tools.RunHidden(winget, "uninstall -e --id OpenJS.NodeJS.LTS --silent --accept-source-agreements", 10 * 60 * 1000, out o); } catch { }
+                    if (Rea.NodeExe != null) try { Tools.RunHidden(winget, "uninstall -e --id OpenJS.NodeJS --silent --accept-source-agreements", 10 * 60 * 1000, out o); } catch { }
+                }
+                // 3. a plain folder (unzipped, or a version manager's copy): the folder goes
+                if (!declined && Rea.NodeExe != null) NodeRemover.DeleteFolder(dir);
+                bool ok; string v = Rea.NodeVersion(out ok);
+                Ui(() =>
+                {
+                    busy.SetIndeterminate(false); busy.Visible = false; bNodeX.Enabled = true;
+                    nodeVer = v; nodeOk = ok; bNode.Visible = !ok; bNodeX.Visible = v != null;
+                    if (v == null) SetStatus(L.T("re_node_removed"), Theme.Success);
+                    else if (declined) SetStatus(L.T("re_node_declined"), Theme.InkSoft);
+                    else SetStatus(L.T("re_node_failed_x", Path.GetDirectoryName(Rea.NodeExe ?? node)), Theme.Warn);
+                    DoLayout(); Invalidate();
+                });
+            });
+            t.IsBackground = true; t.Start();
+        }
+
         void InstallNode()
         {
             string winget = Tools.WinGet;
@@ -911,12 +962,77 @@ namespace FileConverter
                 Ui(() =>
                 {
                     busy.SetIndeterminate(false); busy.Visible = false; bNode.Enabled = true;
-                    nodeVer = v; nodeOk = ok; bNode.Visible = !ok;
+                    nodeVer = v; nodeOk = ok; bNode.Visible = !ok; bNodeX.Visible = v != null;
                     SetStatus(ok ? L.T("re_node_ok", v) : L.T("re_node_failed"), ok ? Theme.Success : Theme.Error);
                     DoLayout();
                 });
             });
             t.IsBackground = true; t.Start();
+        }
+    }
+
+    /// Removes Node.js without sending you to Windows Settings: through its own installer entry (silently, with one
+    /// permission prompt), or by deleting the folder when it was just unzipped somewhere.
+    static class NodeRemover
+    {
+        /// false = the permission prompt was declined (nothing else should be tried then).
+        public static bool ByInstaller(string nodeDir)
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return true;
+            foreach (string code in InstallerCodes())
+            {
+                try
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo("msiexec.exe", "/x " + code + " /qn /norestart") { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden };
+                    using (Process p = Process.Start(psi)) if (p != null) p.WaitForExit(10 * 60 * 1000);
+                }
+                catch (System.ComponentModel.Win32Exception ex) { if (ex.NativeErrorCode == 1223) return false; }   // "No" on the prompt
+                catch { }
+                if (Rea.NodeExe == null || !File.Exists(Path.Combine(nodeDir, "node.exe"))) break;
+            }
+            return true;
+        }
+
+        /// The Windows Installer product codes of everything called "Node.js" (for this user and for the whole PC).
+        static List<string> InstallerCodes()
+        {
+            List<string> codes = new List<string>();
+            foreach (Microsoft.Win32.RegistryHive hive in new[] { Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryHive.CurrentUser })
+                foreach (Microsoft.Win32.RegistryView view in new[] { Microsoft.Win32.RegistryView.Registry64, Microsoft.Win32.RegistryView.Registry32 })
+                {
+                    try
+                    {
+                        using (Microsoft.Win32.RegistryKey root = Microsoft.Win32.RegistryKey.OpenBaseKey(hive, view))
+                        using (Microsoft.Win32.RegistryKey un = root.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall"))
+                        {
+                            if (un == null) continue;
+                            foreach (string name in un.GetSubKeyNames())
+                                using (Microsoft.Win32.RegistryKey k = un.OpenSubKey(name))
+                                {
+                                    string dn = k == null ? null : k.GetValue("DisplayName") as string;
+                                    if (dn == null || !dn.StartsWith("Node.js", StringComparison.OrdinalIgnoreCase)) continue;
+                                    if (name.StartsWith("{") && !codes.Contains(name)) codes.Add(name);
+                                }
+                        }
+                    }
+                    catch { }
+                }
+            return codes;
+        }
+
+        /// A Node.js folder that no installer knows about (only when it really is one: node.exe and npm inside).
+        public static void DeleteFolder(string dir)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(dir) || !File.Exists(Path.Combine(dir, "node.exe"))) return;
+                if (!File.Exists(Path.Combine(dir, "npm.cmd")) && !Directory.Exists(Path.Combine(dir, "node_modules"))) return;
+                string full = Path.GetFullPath(dir).TrimEnd('\\');
+                // never a top folder like C:\ or Program Files itself
+                if (full.Length < 8 || Path.GetPathRoot(full).TrimEnd('\\') == full) return;
+                Directory.Delete(full, true);
+            }
+            catch { }
         }
     }
 }

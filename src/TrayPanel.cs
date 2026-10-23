@@ -14,6 +14,10 @@ namespace FileConverter
         static TrayPanel open;
         [DllImport("gdi32.dll")] static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
         [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+        [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vKey);
+        readonly Timer watch = new Timer { Interval = 40 };
+        bool wasDown;
+        static DateTime closedByClick = DateTime.MinValue;
 
         public static event Action OpenRequested, ExitRequested, CustomizeRequested, SettingsRequested;
 
@@ -32,6 +36,8 @@ namespace FileConverter
         public static void Toggle(Point at)
         {
             if (open != null && !open.IsDisposed) { open.Dismiss(); return; }
+            // the click on the icon that just closed it (as a click outside) shouldn't open it again
+            if ((DateTime.Now - closedByClick).TotalMilliseconds < 400) return;
             open = new TrayPanel();
             open.PlaceNear(at);
             open.Opacity = Fx.Motion ? 0 : 1;
@@ -65,13 +71,13 @@ namespace FileConverter
             tg[2].CheckedChanged += (s, e) => { Settings.Set("WatchLinks", tg[2].Checked ? "1" : "0"); DragWheel.NotifyChanged(); };
             tg[3].CheckedChanged += (s, e) => { Notifier.Enabled = tg[3].Checked; DragWheel.NotifyChanged(); };
 
-            bCustomize = new Btn(() => L.T("tp_customize"), Ico.Edit, BtnKind.Ghost) { FontSize = 8f, GlyphSize = 8f, InkColor = Theme.AccentColor };
+            bCustomize = new Btn(() => "", Ico.Edit, BtnKind.Ghost) { GlyphSize = 8.5f, InkColor = Theme.AccentColor, AccessibleName = L.T("tp_customize") };
             bCustomize.Click += (s, e) => After(CustomizeRequested);
-            bOpen = new Btn(() => L.T("tp_open"), Ico.Open, BtnKind.Primary) { FontSize = 9f, GlyphSize = 9.5f };
+            bOpen = new Btn(() => L.T("tp_open"), Ico.Open, BtnKind.Primary) { FontSize = 8.5f, GlyphSize = 8.5f };
             bOpen.Click += (s, e) => After(OpenRequested);
-            bSettings = new Btn(() => "", Ico.Settings, BtnKind.Secondary) { AccessibleName = L.T("tp_settings"), GlyphSize = 9.5f };
+            bSettings = new Btn(() => "", Ico.Settings, BtnKind.Secondary) { AccessibleName = L.T("tp_settings"), GlyphSize = 8.5f };
             bSettings.Click += (s, e) => After(SettingsRequested);
-            bExit = new Btn(() => L.T("tray_exit"), "", BtnKind.Ghost) { InkColor = Theme.Error, FontSize = 9f, GlyphSize = 9.5f };
+            bExit = new Btn(() => L.T("tray_exit"), "", BtnKind.Ghost) { InkColor = Theme.Error, FontSize = 8.5f, GlyphSize = 8.5f };
             bExit.Click += (s, e) => After(ExitRequested);
             Controls.AddRange(new Control[] { bCustomize, bOpen, bSettings, bExit });
             foreach (Control c in Controls) { UiControl u = c as UiControl; if (u != null) u.Surface = Surface.Card; }
@@ -79,6 +85,22 @@ namespace FileConverter
             DoLayout();
             Deactivate += (s, e) => Dismiss();
             anim.Tick += (s, e) => Step();
+            // a click anywhere else closes it, even when Windows didn't let it take the focus
+            // (it never stays in the way of the taskbar or other apps)
+            watch.Tick += (s, e) =>
+            {
+                try { WatchClicks(); } catch { watch.Stop(); }
+            };
+            Shown += (s, e) => { wasDown = true; watch.Start(); };
+        }
+
+        void WatchClicks()
+        {
+            {
+                bool down = (GetAsyncKeyState(0x01) & 0x8000) != 0 || (GetAsyncKeyState(0x02) & 0x8000) != 0 || (GetAsyncKeyState(0x04) & 0x8000) != 0;
+                if (down && !wasDown && !Bounds.Contains(Cursor.Position)) { closedByClick = DateTime.Now; Dismiss(); }
+                wasDown = down;
+            }
         }
 
         /// Closes, then does what was picked (after the panel is gone, so a window it opens comes to the front).
@@ -88,33 +110,35 @@ namespace FileConverter
             if (a != null) { Form o = Notifier.Owner; try { if (o != null && !o.IsDisposed) o.BeginInvoke(a); else a(); } catch { } }
         }
 
+        const int RowPx = 30;
         void DoLayout()
         {
-            int W = Theme.S(268), p = Theme.S(14), rowH = Theme.S(36);
-            logoR = new Rectangle(p, p, Theme.S(30), Theme.S(30));
-            titleR = new Rectangle(p + Theme.S(40), p - Theme.S(3), W - p * 2 - Theme.S(40), Theme.S(19));
-            statusR = new Rectangle(p + Theme.S(40), p + Theme.S(15), W - p * 2 - Theme.S(40), Theme.S(18));
-            int y = logoR.Bottom + Theme.S(10);
+            // compact, like a menu: one header line, a row per switch, one row of buttons
+            int W = Theme.S(232), p = Theme.S(10), rowH = Theme.S(RowPx);
+            logoR = new Rectangle(p, p, Theme.S(22), Theme.S(22));
+            titleR = new Rectangle(p + Theme.S(30), p, Theme.S(90), Theme.S(22));
+            statusR = new Rectangle(titleR.Right + Theme.S(4), p, W - p - titleR.Right - Theme.S(4), Theme.S(22));
+            int y = logoR.Bottom + Theme.S(8);
             line1 = new Rectangle(p, y, W - p * 2, 1);
-            y += Theme.S(4);
-            int cw = Math.Max(Theme.S(80), bCustomize.PreferredWidth);
+            y += Theme.S(3);
             for (int i = 0; i < 4; i++)
             {
-                rows[i] = new Rectangle(p, y, W - p * 2, i == 0 ? rowH + Theme.S(16) : rowH);
-                Rectangle t = new Rectangle(rows[i].Right - Theme.S(40), rows[i].Y + (rowH - Theme.S(24)) / 2, Theme.S(40), Theme.S(24));
+                rows[i] = new Rectangle(p, y, W - p * 2, rowH);
+                Rectangle t = new Rectangle(rows[i].Right - Theme.S(34), rows[i].Y + (rowH - Theme.S(20)) / 2, Theme.S(34), Theme.S(20));
                 tg[i].Bounds = Theme.Mirror(t, W);
                 y = rows[i].Bottom;
             }
-            // "Customize wheel" sits under the Donut Wheel switch's words
-            bCustomize.Bounds = Theme.Mirror(new Rectangle(rows[0].X + Theme.S(18), rows[0].Y + rowH - Theme.S(9), cw, Theme.S(24)), W);
-            y += Theme.S(4);
+            // a small pencil beside the Donut Wheel switch: customize it
+            int cs = Theme.S(24);
+            bCustomize.Bounds = Theme.Mirror(new Rectangle(rows[0].Right - Theme.S(34) - Theme.S(4) - cs, rows[0].Y + (rowH - cs) / 2, cs, cs), W);
+            y += Theme.S(3);
             line2 = new Rectangle(p, y, W - p * 2, 1);
-            y += Theme.S(10);
-            int bh = Theme.S(32), sw = bh;
-            int ew = Math.Max(Theme.S(64), bExit.PreferredWidth);
-            int ow = W - p * 2 - sw - ew - Theme.S(10);
+            y += Theme.S(8);
+            int bh = Theme.S(28), sw = bh;
+            int ew = Math.Max(Theme.S(56), bExit.PreferredWidth);
+            int ow = W - p * 2 - sw - ew - Theme.S(8);
             bOpen.Bounds = Theme.Mirror(new Rectangle(p, y, ow, bh), W);
-            bSettings.Bounds = Theme.Mirror(new Rectangle(p + ow + Theme.S(5), y, sw, bh), W);
+            bSettings.Bounds = Theme.Mirror(new Rectangle(p + ow + Theme.S(4), y, sw, bh), W);
             bExit.Bounds = Theme.Mirror(new Rectangle(W - p - ew, y, ew, bh), W);
             ClientSize = new Size(W, y + bh + p);
         }
@@ -124,9 +148,11 @@ namespace FileConverter
         {
             Screen sc = Screen.FromPoint(at);
             Rectangle wa = sc.WorkingArea, b = sc.Bounds;
-            int m = Theme.S(10), w = Width, h = Height;
+            int m = Theme.S(8), w = Width, h = Height;
             int x = at.X - w / 2, y = at.Y - h - m;
-            if (wa.Bottom < b.Bottom) y = wa.Bottom - h - m;                  // taskbar at the bottom
+            bool inFlyout = wa.Contains(at);   // the "hidden icons" box sits above the taskbar: open beside it, not over it
+            if (inFlyout) { x = Theme.RTL ? at.X + m * 3 : at.X - w - m * 3; y = at.Y - h + m * 2; }
+            else if (wa.Bottom < b.Bottom) y = wa.Bottom - h - m;             // taskbar at the bottom
             else if (wa.Top > b.Top) y = wa.Top + m;                          // at the top
             else if (wa.Right < b.Right) { x = wa.Right - w - m; y = at.Y - h / 2; }   // on the right
             else if (wa.Left > b.Left) { x = wa.Left + m; y = at.Y - h / 2; }         // on the left
@@ -162,7 +188,7 @@ namespace FileConverter
             rise = 0.3f; anim.Start();
         }
 
-        protected override void OnFormClosed(FormClosedEventArgs e) { anim.Stop(); anim.Dispose(); if (open == this) open = null; base.OnFormClosed(e); }
+        protected override void OnFormClosed(FormClosedEventArgs e) { watch.Stop(); watch.Dispose(); anim.Stop(); anim.Dispose(); if (open == this) open = null; base.OnFormClosed(e); }
 
         protected override CreateParams CreateParams
         {
@@ -188,7 +214,7 @@ namespace FileConverter
             using (SolidBrush b = new SolidBrush(Theme.Card)) g.FillRectangle(b, ClientRectangle);
             using (Pen pn = new Pen(Theme.CardBorder)) g.DrawPath(pn, Theme.Round(new RectangleF(0.5f, 0.5f, Width - 2, Height - 2), Theme.S(9)));
             Theme.DrawLogo(g, Theme.Mirror(logoR, W));
-            Theme.Text(g, L.T("app_name"), Theme.F(10f, FontStyle.Bold), Theme.Ink, Theme.Mirror(titleR, W), Align.Start);
+            Theme.Text(g, L.T("app_name"), Theme.F(9f, FontStyle.Bold), Theme.Ink, Theme.Mirror(titleR, W), Align.Start, true, false, true);
             int n = Activity.RunningCount;
             bool busy = n > 0;
             // a little dot: green while it works on something, quiet otherwise
@@ -197,18 +223,18 @@ namespace FileConverter
             int d = Theme.S(6);
             Rectangle dot = Theme.Mirror(new Rectangle(statusR.X, statusR.Y + (statusR.Height - d) / 2, d, d), W);
             using (SolidBrush b = new SolidBrush(busy ? Theme.AccentColor : Theme.Success)) g.FillEllipse(b, dot);
-            Theme.Text(g, status, Theme.F(8f), Theme.InkSoft, Theme.Mirror(new Rectangle(statusR.X + Theme.S(11), statusR.Y, statusR.Width - Theme.S(11), statusR.Height), W), Align.Start, true, false, true);
+            Theme.Text(g, status, Theme.F(7.5f), Theme.InkSoft, Theme.Mirror(new Rectangle(statusR.X + Theme.S(11), statusR.Y, statusR.Width - Theme.S(11), statusR.Height), W), Align.Start, true, false, true);
             using (Pen lp = new Pen(Theme.Line))
             {
                 Rectangle a = Theme.Mirror(line1, W), b = Theme.Mirror(line2, W);
                 g.DrawLine(lp, a.X, a.Y, a.Right, a.Y); g.DrawLine(lp, b.X, b.Y, b.Right, b.Y);
             }
-            int rowH = Theme.S(36);
+            int rowH = Theme.S(RowPx);
             for (int i = 0; i < 4; i++)
             {
                 Rectangle r = rows[i];
-                Theme.Glyph(g, glyphs[i], 9f, tg[i].Checked ? Theme.AccentColor : Theme.InkFaint, Theme.Mirror(new Rectangle(r.X, r.Y, Theme.S(16), rowH), W));
-                Theme.Text(g, L.T(keys[i]), Theme.F(8.75f), Theme.Ink, Theme.Mirror(new Rectangle(r.X + Theme.S(24), r.Y, r.Width - Theme.S(24) - Theme.S(48), rowH), W), Align.Start, true, false, true);
+                Theme.Glyph(g, glyphs[i], 8f, tg[i].Checked ? Theme.AccentColor : Theme.InkFaint, Theme.Mirror(new Rectangle(r.X, r.Y, Theme.S(16), rowH), W));
+                Theme.Text(g, L.T(keys[i]), Theme.F(8.25f), Theme.Ink, Theme.Mirror(new Rectangle(r.X + Theme.S(20), r.Y, r.Width - Theme.S(20) - Theme.S(i == 0 ? 70 : 40), rowH), W), Align.Start, true, false, true);
             }
         }
 

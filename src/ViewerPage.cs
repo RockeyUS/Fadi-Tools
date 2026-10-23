@@ -717,10 +717,14 @@ namespace FileConverter
         public event Action<string> OpenProjectFile;   // studio: a recent video project was picked
         public event Action BrowseProjects;
         readonly RecentStrip recents = new RecentStrip();
+        /// The empty Studio (Photos / PDF): the same drop area as Convert and Compress.
+        DropZone emptyDrop;
         string DropText { get { return L.T(InStudio ? "studio_drop_any" : "v_drop"); } }
 
         /// Studio: "PDF tools" / "Pages" was clicked: the PDF page tools, with this PDF (null = nothing open).
         public event Action<string> OrganizePages;
+        /// A PDF chosen in the Studio (with Open, or dropped): it goes to the PDF tools.
+        public event Action<string> PdfPicked;
         /// The PDF (or other document) open now, or null.
         public string DocPath { get { return docSource; } }
         public int PageIndex { get { return index; } }
@@ -797,7 +801,17 @@ namespace FileConverter
             recents.Open += f => { if (OpenProjectFile != null) OpenProjectFile(f); };
             recents.Browse += () => { if (BrowseProjects != null) BrowseProjects(); };
             if (studio) { Controls.Add(recents); recents.BringToFront(); }
-            EnableDrop(canvas);
+            if (studio)
+            {
+                emptyDrop = new DropZone(() => L.T("studio_pdrop"), () => L.T("studio_pdrop_sub")) { Tips = new[] { "tip_studio_layer", "tip_studio_pdf", "tip_ocr", "tip_ctrl_tab" }, Visible = false };
+                emptyDrop.Glyph = Ico.Photo;
+                emptyDrop.Click += (s, e) => PickFile();
+                emptyDrop.ExtrasTitle = () => L.T("recent");
+                emptyDrop.Extras = () => RecentFiles.Extras("studio", 4, f => AcceptFiles(new[] { f }));
+                Controls.Add(emptyDrop);
+                EnableDrop(canvas, emptyDrop);
+            }
+            else EnableDrop(canvas);
             try
             {
                 Directory.CreateDirectory(TempDir);
@@ -932,8 +946,8 @@ namespace FileConverter
             bar = new Rectangle(p, Top0, W - p * 2, Theme.S(68));
             cards.Add(bar);
             int y = bar.Y + Theme.S(16), h = Theme.S(36), x = bar.Right - Theme.S(16);
-            foreach (Control c in new Control[] { bPrev, bNext, bRotL, bRotR, bOpen, bEdit, bText, bSave, bConvert, bFolder }) c.Visible = !editing;
-            bool showPages = InStudio && !editing && (DocIsPdf || files.Count == 0);
+            foreach (Control c in new Control[] { bPrev, bNext, bRotL, bRotR, bOpen, bEdit, bText, bSave, bConvert, bFolder }) c.Visible = !editing && (files.Count > 0 || c == bOpen);   // nothing open: only Open (and PDF tools)
+            bool showPages = InStudio && !editing && DocIsPdf;   // (the PDF tools have a tab of their own at the top)
             bPages.Visible = showPages;
             bUndoH.Visible = bRedoH.Visible = editing && !editor.S.Video;
             if (editing && !editor.S.Video)
@@ -957,9 +971,9 @@ namespace FileConverter
                 bText.Label = tiny ? (Func<string>)(() => "") : () => L.T("ocr_btn");
                 bool pagesIcon = compact && files.Count > 0;   // nothing open: "PDF tools" keeps its name, so it's easy to find
                 bPages.Label = pagesIcon ? (Func<string>)(() => "") : () => L.T(DocIsPdf ? "v_pages" : "v_pdf_tools");
-                bool openIcon = compact && showPages;   // one more button: make room for the file name
+                bool openIcon = compact && showPages && files.Count > 0;   // one more button: make room for the file name
                 bOpen.Label = openIcon ? (Func<string>)(() => "") : () => L.T("v_open");
-                List<Btn> right = new List<Btn> { bFolder, bConvert, bSave, bText, bEdit };
+                List<Btn> right = files.Count > 0 ? new List<Btn> { bFolder, bConvert, bSave, bText, bEdit } : new List<Btn>();
                 if (showPages) right.Add(bPages);
                 right.Add(bOpen);
                 foreach (Btn b in right)
@@ -971,6 +985,7 @@ namespace FileConverter
                 x -= Theme.S(8);
                 foreach (Btn b in new[] { bRotR, bRotL, bNext, bPrev })
                 {
+                    if (files.Count == 0) break;
                     x -= h; Place(b, new Rectangle(x, y, h, h)); x -= Theme.S(6);
                     if (b == bRotL) x -= Theme.S(8);
                 }
@@ -995,6 +1010,19 @@ namespace FileConverter
                 Place(canvas, new Rectangle(0, top, W, ch));
                 if (ShowStrip) Place(strip, new Rectangle(0, top + ch, W, StripH));
             }
+            bool empty = emptyDrop != null && files.Count == 0 && !editing;
+            if (emptyDrop != null)
+            {
+                emptyDrop.Visible = empty;
+                canvas.Visible = !empty;
+                if (empty)
+                {
+                    bool rec = TrimPage.RecentProjects.Count > 0;
+                    Rectangle ec = new Rectangle(p, bar.Bottom + Theme.S(16), W - p * 2, H - bar.Bottom - Theme.S(16) - p - (rec ? Theme.S(96) : 0));
+                    cards.Add(ec);
+                    Place(emptyDrop, new Rectangle(ec.X + Theme.S(20), ec.Y + Theme.S(20), ec.Width - Theme.S(40), ec.Height - Theme.S(40)));
+                }
+            }
             strip.Visible = ShowStrip;
             if (ShowStrip) { strip.Count = files.Count; strip.Current = index; }
             editor.Visible = editing;
@@ -1008,6 +1036,8 @@ namespace FileConverter
             }
             Invalidate();
         }
+
+        protected override void DragHighlight(bool on) { if (emptyDrop != null) { emptyDrop.DragHot = on; emptyDrop.Invalidate(); } }
 
         protected override void PaintContent(Graphics g)
         {
@@ -1369,11 +1399,13 @@ namespace FileConverter
 
         public void LoadFiles(string[] paths)
         {
+            if (InStudio && paths != null && paths.Length == 1) RecentFiles.Add("studio", paths[0]);
             if (InStudio && OpenMedia != null && paths != null && paths.Length > 0)
             {
                 Category c = Formats.CategoryOf(Formats.Ext(paths[0]));
                 if (c == Category.Video || c == Category.Audio) { OpenMedia(paths[0]); return; }
             }
+            if (InStudio && paths != null && paths.Length == 1 && Formats.Ext(paths[0]) == "pdf" && PdfPicked != null && File.Exists(paths[0]) && !editing) { PdfPicked(paths[0]); return; }
             if (InStudio && paths != null && paths.Length == 1 && DocPages.IsDoc(paths[0]) && File.Exists(paths[0])) { OpenDocument(paths[0]); return; }
             if (!docLoading && !editing && DocChanged && !ConfirmDiscard()) return;
             if (editing)

@@ -64,7 +64,7 @@ namespace FileConverter
 
         readonly PanelBody body = new PanelBody();
         readonly Segments tabs, fmt, bgMode;
-        readonly Btn bAdd, bDel, bApply, bSave, bDone, bBgRun, bUndo, bRedo;
+        readonly Btn bAdd, bDel, bApply, bSave, bDone, bBgRun, bBgDel, bUndo, bRedo;
         readonly MultiField text = new MultiField();
         readonly DropDown font = new DropDown { PreviewFonts = true };
         readonly Slider size = new Slider(), opacity = new Slider { Min = 10, Max = 100, Value = 100 }, blur = new Slider { Min = 0, Max = 100, Value = 40 };
@@ -96,7 +96,7 @@ namespace FileConverter
         TextLayer style = new TextLayer();           // style used for the next new text
         bool loading, saving, bgBusy, previewingFont, aiMask;
         string bgStatus = "";
-        Rectangle footerLine, saveLabel, infoRow, hintRow, bgInfoRow, bgHintRow;
+        Rectangle footerLine, saveLabel, infoRow, hintRow, bgInfoRow, bgHintRow, bgWhereRow, bgPathRow;
         EdTab[] tabList = { EdTab.Text, EdTab.Resize, EdTab.Background };
 
         public static readonly string[] FontChoices = {
@@ -229,6 +229,8 @@ namespace FileConverter
             bBgRun = new Btn(() => BgRemover.Ready ? (aiMask ? L.T("bg_again") : L.T("bg_remove")) : L.T("bg_download"), Ico.Photo, BtnKind.Primary);
             bBgRun.FontSize = 9.5f;
             bBgRun.Click += (s, e) => RemoveBackground();
+            bBgDel = new Btn(() => L.T("bg_engine_remove"), Ico.Delete, BtnKind.Ghost) { FontSize = 8.75f, GlyphSize = 9.5f };
+            bBgDel.Click += (s, e) => RemoveBgEngine();
             bgMode = new Segments(() => L.T("bg_original"), () => L.T("bg_transparent"), () => L.T("bg_color"), () => L.T("bg_blur"));
             bgMode.FontSize = 8.5f;
             bgMode.SelectedChanged += (s, e) => SetBgMode(bgMode.SelectedIndex);
@@ -259,7 +261,7 @@ namespace FileConverter
             body.Controls.AddRange(new Control[] { boxColors, cropPresets, bCropApply, bCropCancel, bCropReset, bFonts, bgTool, brush, tolerance, everywhere });
             body.Controls.AddRange(new Control[] { bUndo, bRedo });
             body.Controls.AddRange(new Control[] { bPic, outColors, outWidth, rotate, picStyles });
-            body.Controls.AddRange(new Control[] { tabs, bAdd, bDel, text, font, size, colors, styles, position, opacity, fw, fh, keep, presets, bApply, bBgRun, bgMode, bgColors, blur, bgProgress });
+            body.Controls.AddRange(new Control[] { tabs, bAdd, bDel, text, font, size, colors, styles, position, opacity, fw, fh, keep, presets, bApply, bBgRun, bBgDel, bgMode, bgColors, blur, bgProgress });
             body.Scrolled += DoLayout;
             body.ExtraPaint = PaintBodyExtras;
             Controls.AddRange(new Control[] { body, fmt, bSave, bDone });
@@ -972,6 +974,16 @@ namespace FileConverter
         }
 
         // ------------------------------------------------------------------ background removal
+        /// Deletes the background remover's AI engine (it downloads again the next time it's used).
+        void RemoveBgEngine()
+        {
+            if (!BgRemover.Ready) return;
+            if (!Ask.Confirm(FindForm(), L.T("bg_engine_remove_q"), L.T("bg_engine_remove_d", Theme.HumanSize(BgRemover.SizeOnDisk)), L.T("bg_engine_remove"), L.T("cancel"), AskKind.Warning)) return;
+            try { BgRemover.Uninstall(); }
+            catch (Exception ex) { bgStatus = ex.Message; }
+            DoLayout(); body.Invalidate();
+        }
+
         void RemoveBackground()
         {
             if (bgBusy || S.Video || S.Source == null) return;
@@ -1227,7 +1239,7 @@ namespace FileConverter
             EdTab tab = CurrentTab;
             Control[] textCtl = { bAdd, bPic, bDel, text, font, size, colors, styles, position, opacity, rotate };
             Control[] sizeCtl = { fw, fh, keep, presets, bApply };
-            Control[] bgCtl = { bBgRun, bgMode, bgColors, blur, bgProgress, bgTool, brush, tolerance, everywhere };
+            Control[] bgCtl = { bBgRun, bBgDel, bgMode, bgColors, blur, bgProgress, bgTool, brush, tolerance, everywhere };
             foreach (Control c in textCtl) c.Visible = tab == EdTab.Text;
             foreach (Control c in sizeCtl) c.Visible = tab == EdTab.Resize;
             foreach (Control c in bgCtl) c.Visible = false;
@@ -1339,7 +1351,16 @@ namespace FileConverter
             }
             else if (tab == EdTab.Background)
             {
-                bgInfoRow = new Rectangle(p, y, cw, Theme.S(BgRemover.Ready ? 70 : 84)); y += bgInfoRow.Height + gap;
+                bgInfoRow = new Rectangle(p, y, cw, Theme.S(BgRemover.Ready ? 70 : 84)); y += bgInfoRow.Height + Theme.S(4);
+                // where the AI engine lives (and a way to remove it again)
+                int dw = BgRemover.Ready ? Math.Max(Theme.S(84), bBgDel.PreferredWidth) : 0;
+                // a line saying it's there (and its size) with Remove beside it, then the folder in full under it
+                bgWhereRow = new Rectangle(p, y, cw - (dw > 0 ? dw + Theme.S(6) : 0), Theme.S(30));
+                bBgDel.Visible = BgRemover.Ready && !bgBusy;
+                if (bBgDel.Visible) BodyPlace(bBgDel, new Rectangle(p + cw - dw, y - Theme.S(1), dw, Theme.S(32)));
+                y += Theme.S(30);
+                bgPathRow = new Rectangle(p, y, cw, Theme.S(34));
+                y += Theme.S(34) + gap;
                 bBgRun.Visible = true;
                 BodyPlace(bBgRun, new Rectangle(p, y, cw, Theme.S(40))); y += Theme.S(40) + gap;
                 if (bgBusy || bgStatus.Length > 0)
@@ -1514,6 +1535,21 @@ namespace FileConverter
                 Theme.Glyph(g, "", 10f, Theme.PrimaryInk, ic);
                 Rectangle tr = Theme.Mirror(new Rectangle(bgInfoRow.X + Theme.S(52), bgInfoRow.Y + Theme.S(8), bgInfoRow.Width - Theme.S(62), bgInfoRow.Height - Theme.S(14)), body.Width);
                 Theme.Text(g, L.T(BgRemover.Ready ? "bg_info_ready" : "bg_info"), Theme.F(8.5f), Theme.InkSoft, tr, Align.Start, true, true);
+                string where = BgRemover.Ready ? L.T("bg_engine_size", Theme.HumanSize(BgRemover.SizeOnDisk)) : L.T("bg_engine_will_head");
+                Theme.Text(g, where, Theme.F(8.5f, FontStyle.Bold), Theme.InkSoft, Theme.Mirror(bgWhereRow, body.Width), Align.Start, true, false, true);
+                // the folder can be long: it breaks after a \ instead of being cut off
+                Font pf = Theme.F(8f);
+                List<string> rows = new List<string>(); string cur = "";
+                foreach (string part in BgRemover.Dir.Split('\\'))
+                {
+                    string next = cur.Length == 0 ? part : cur + "\\" + part;
+                    if (cur.Length > 0 && Theme.Measure(next, pf) > bgPathRow.Width) { rows.Add(cur + "\\"); cur = part; }
+                    else cur = next;
+                }
+                if (cur.Length > 0) rows.Add(cur);
+                int lh = bgPathRow.Height / 2;
+                for (int i = 0; i < rows.Count && i < 2; i++)
+                    Theme.Text(g, rows[i], pf, Theme.InkFaint, Theme.Mirror(new Rectangle(bgPathRow.X, bgPathRow.Y + i * lh, bgPathRow.Width, lh), body.Width), Align.Start, true, false, true);
                 Theme.Text(g, L.T("bg_manual"), Theme.F(9f, FontStyle.Bold), Theme.InkSoft, Theme.Mirror(bgManualR, body.Width), Align.Start);
                 int tool = bgTool.SelectedIndex;
                 Theme.Text(g, L.T(tool == 0 ? "bg_hint_off" : tool == 3 ? "bg_hint_wand" : "bg_hint_brush"), Theme.F(8.5f), Theme.InkFaint, Theme.Mirror(bgToolHintR, body.Width), Align.Start, false, true);

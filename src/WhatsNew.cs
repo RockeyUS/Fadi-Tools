@@ -14,6 +14,16 @@ namespace FileConverter
         /// glyph, title key, text key
         public static readonly string[][] Items =
         {
+            // 1.6.4
+            new[] { Ico.Contrast, "wn_look164_t", "wn_look164_d" },
+            new[] { Ico.Search, "wn_empty164_t", "wn_empty164_d" },
+            new[] { Ico.Doc, "wn_studio164_t", "wn_studio164_d" },
+            // 1.6.3
+            new[] { Ico.Edit, "wn_pdfedit_t", "wn_pdfedit_d" },
+            new[] { Ico.Upscale, "wn_wheeltools_t", "wn_wheeltools_d" },
+            new[] { "\uE73F", "wn_cmpslider_t", "wn_cmpslider_d" },
+            new[] { Ico.Recipe, "wn_recipes_t", "wn_recipes_d" },
+            new[] { "\uE7E7", "wn_startup_t", "wn_startup_d" },
             // 1.6.2
             new[] { Ico.Crop, "wn_crop_t", "wn_crop_d" },
             new[] { "\uE73F", "wn_cmpwin_t", "wn_cmpwin_d" },
@@ -123,7 +133,7 @@ namespace FileConverter
             int W = ClientSize.Width;
             Rectangle lr = Theme.Mirror(logoR, W);
             Theme.DrawLogo(g, lr);
-            Theme.Text(g, L.T("wn_title", Shell.Version), Theme.Serif(16f), Theme.Ink, Theme.Mirror(titleR, W), Align.Start);
+            Theme.Text(g, L.T("wn_title", Shell.Version), Theme.Display(16f), Theme.Ink, Theme.Mirror(titleR, W), Align.Start);
             Theme.Text(g, L.T("wn_sub"), Theme.F(9.5f), Theme.InkSoft, Theme.Mirror(subR, W), Align.Start);
         }
 

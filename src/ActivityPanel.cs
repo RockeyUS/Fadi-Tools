@@ -35,7 +35,7 @@ namespace FileConverter
             {
                 // the finished rows are swept away one after another
                 List<Rectangle> done = rows.VisibleRows(i => i < rows.Jobs.Count && !rows.Jobs[i].Running);
-                Fx.SweepAway(rows, done, () => { Activity.ClearFinished(); Refresh2(); });
+                Fx.SweepAway(rows, done, () => { Activity.ClearFinished(); Refresh2(); FitHeight(); });
             };
             rows.Picked += j => { Dismiss(); if (Navigate != null && j.Source != null) Navigate(j.Source); };
             rows.GlyphOf = c => GlyphOf != null ? GlyphOf(c) : null;
@@ -68,7 +68,7 @@ namespace FileConverter
             Rectangle wa = Screen.FromControl(sidebar).WorkingArea;
             int w = Theme.S(400);
             int n = Math.Max(1, rows.Jobs.Count);
-            int h = Theme.S(70) + (rows.Jobs.Count == 0 ? Theme.S(110) : Math.Min(Theme.S(5.5f * 68), n * Theme.S(68))) + Theme.S(10);
+            int h = Theme.S(70) + (rows.Jobs.Count == 0 ? Theme.S(130) : Math.Min(Theme.S(5.5f * 68), n * Theme.S(68))) + Theme.S(10);
             Rectangle side = sidebar.RectangleToScreen(sidebar.ClientRectangle);
             int x = Theme.RTL ? side.X - w - Theme.S(6) : side.Right + Theme.S(6);
             int y = a.Bottom - h;
@@ -83,6 +83,20 @@ namespace FileConverter
             // opens out of the Activity row: it grows from the row's corner, with a little spring, and fades in
             IntPtr hh = Handle;   // made now, so its picture can be taken before it shows
             Fx.PopIn(this, owner, a, Theme.S(9), 150, () => { if (!IsDisposed) Show(owner); });
+        }
+
+        /// After clearing: the panel takes the height its rows need now (its bottom stays where it was).
+        void FitHeight()
+        {
+            int n = Math.Max(1, rows.Jobs.Count);
+            int h = Theme.S(70) + (rows.Jobs.Count == 0 ? Theme.S(130) : Math.Min(Theme.S(5.5f * 68), n * Theme.S(68))) + Theme.S(10);
+            if (h == Height) return;
+            int bottom = Bottom;
+            Bounds = new Rectangle(Left, bottom - h, Width, h);
+            rows.Bounds = new Rectangle(Theme.S(6), Theme.S(66), Width - Theme.S(12), h - Theme.S(66) - Theme.S(6));
+            int r = Theme.S(18);
+            try { Region = Region.FromHrgn(CreateRoundRectRgn(0, 0, Width + 1, Height + 1, r, r)); } catch { }
+            Invalidate(true);
         }
 
         /// Shrinks back towards the Activity row and fades out, then closes.
@@ -115,7 +129,7 @@ namespace FileConverter
             Theme.Smooth(g);
             using (GraphicsPath p = Theme.Round(new RectangleF(0.5f, 0.5f, Width - 2, Height - 2), Theme.S(9)))
             using (Pen pen = new Pen(Theme.CardBorder)) g.DrawPath(pen, p);
-            Theme.Text(g, L.T("act_title"), Theme.Serif(14f), Theme.Ink, Theme.Mirror(new Rectangle(Theme.S(18), Theme.S(12), Width - Theme.S(150), Theme.S(28)), Width));
+            Theme.Text(g, L.T("act_title"), Theme.Display(14f), Theme.Ink, Theme.Mirror(new Rectangle(Theme.S(18), Theme.S(12), Width - Theme.S(150), Theme.S(28)), Width));
             int run = Activity.RunningCount, fin = Activity.FinishedCount;
             string sub = run == 0 && fin == 0 ? L.T("act_none_short") : run > 0 ? L.T("act_running_n", run) + (fin > 0 ? "  ·  " + L.T("act_finished_n", fin) : "") : L.T("act_finished_n", fin);
             Theme.Text(g, sub, Theme.F(8.75f), Theme.InkFaint, Theme.Mirror(new Rectangle(Theme.S(18), Theme.S(38), Width - Theme.S(150), Theme.S(18)), Width));
@@ -183,7 +197,7 @@ namespace FileConverter
             Rectangle ic = new Rectangle(Width / 2 - Theme.S(18), Theme.S(14), Theme.S(36), Theme.S(36));
             Theme.FillRound(g, ic, Theme.S(10), Theme.CardInner);
             Theme.Glyph(g, "", 12f, Theme.InkFaint, ic);
-            Theme.Text(g, L.T("act_empty"), Theme.F(9f), Theme.InkSoft, new Rectangle(Theme.S(24), Theme.S(56), Width - Theme.S(48), Theme.S(40)), Align.Center, false, true);
+            Theme.Text(g, L.T("act_empty"), Theme.F(9f), Theme.InkSoft, new Rectangle(Theme.S(24), Theme.S(56), Width - Theme.S(48), Math.Max(Theme.S(60), Height - Theme.S(60))), Align.Center, false, true);
         }
 
         static string Ago(DateTime t)

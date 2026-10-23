@@ -14,6 +14,14 @@ namespace FileConverter
         static readonly Dictionary<char, string> Paths = new Dictionary<char, string>
         {
             { '\uF406', "M6 2V16a2 2 0 0 0 2 2H22M2 6H16a2 2 0 0 1 2 2V22" },                         // crop
+            { '\uF409', "M12 3L13.9 8.1L19 10L13.9 11.9L12 17L10.1 11.9L5 10L10.1 8.1ZM19 2V6M17 4H21M5 17V21M3 19H7" },    // AI scale (sparkles)
+            { '\uF40A', "M7 4H4V20H7M17 4H20V20H17M9 12H15" },    // trim
+            { '\uF40B', "R8 7 12 14 1.5M4 17V5a2 2 0 0 1 2-2H16" },    // combine / merge
+            { '\uF40C', "M12 3V21M8 7L3 12L8 17ZM16 7L21 12L16 17Z" },    // flip horizontal
+            { '\uF40D', "M3 12H21M7 8L12 3L17 8ZM7 16L12 21L17 16Z" },    // flip vertical
+            { '\uF40E', "M15 3H21V9M9 21H3V15M21 3L14 10M3 21L10 14" },    // resize
+            { '\uF40F', "M3 7V5a2 2 0 0 1 2-2H7M17 3H19a2 2 0 0 1 2 2V7M21 17V19a2 2 0 0 1-2 2H17M7 21H5a2 2 0 0 1-2-2V17M8 12H16M12 8V16" },    // watch folder
+            { '\uF410', "M4 6H14M4 12H10M4 18H8M17 8L20 11L17 14M14 11H20" },    // recipe
             { '\uE8FD', "M9 6H21M9 12H21M9 18H21M4 6H4.01M4 12H4.01M4 18H4.01" },                // list view
             { '\uF0E2', "R3 4 8 7 1.5R13 4 8 7 1.5R3 13 8 7 1.5R13 13 8 7 1.5" },                   // previews (picture view)
             { '', "M12 5V19M5 12H19" },                                                         // add

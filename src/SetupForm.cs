@@ -132,7 +132,7 @@ namespace FileConverter
         {
             Func<Rectangle, Rectangle> M = r => Theme.Mirror(r, ClientSize.Width);
             Theme.Smooth(g);
-            if (Theme.Logo != null) g.DrawImage(Theme.Logo, M(logoR));
+            Theme.DrawLogo(g, M(logoR));
             Theme.Text(g, L.T("setup_welcome"), Theme.F(16f, FontStyle.Bold), Theme.Ink, M(titleR), Align.Start, false);
             Theme.Text(g, L.T("setup_tag"), Theme.F(9.75f), Theme.InkSoft, M(subR), Align.Start, false);
             Theme.Text(g, portable ? L.T("setup_note_portable") : needEngines ? L.T("setup_note_dl") : L.T("setup_note_ready"), Theme.F(9.5f), Theme.InkSoft, M(noteR), Align.Start, false, true);

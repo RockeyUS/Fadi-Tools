@@ -162,6 +162,13 @@ namespace FileConverter
                 verb = args[1].ToLowerInvariant();
                 string[] rest = new string[args.Length - 2]; Array.Copy(args, 2, rest, 0, rest.Length); args = rest;
             }
+            // started with Windows (Settings → "Start Fadi Tools when Windows starts"): straight to the icon by the clock
+            if (args.Length > 0 && args[0].Equals("/startup", StringComparison.OrdinalIgnoreCase))
+            {
+                MainForm.StartHidden = true;
+                string[] rest = new string[args.Length - 1]; Array.Copy(args, 1, rest, 0, rest.Length); args = rest;
+                if (!Tools.EnginesReady || (!Paths.Portable && !Shell.WasInstalled)) return 0;   // nothing to set up at sign-in
+            }
             bool view = args.Length > 0 && args[0].Equals("/view", StringComparison.OrdinalIgnoreCase);
             List<string> files = new List<string>();
             for (int i = view ? 1 : 0; i < args.Length; i++) if (args[i].Trim() != "") files.Add(args[i]);
@@ -203,7 +210,16 @@ namespace FileConverter
                 }
                 catch { }
             }
+            // the installed copy of a new version (an update, or the file replaced by hand): refresh the shortcuts,
+            // right-click menu and "Open with" once, so they match this version (e.g. no "Image Viewer" entry since 1.6.0)
+            if (!Paths.Portable && Shell.IsInstalledCopy && Settings.Get("IntegratedVersion", "") != Shell.Version)
+            {
+                try { Shell.Integrate(Settings.Get("IntDesktop", "1") == "1", Settings.Get("IntMenu", "1") == "1", Settings.Get("IntViewer", "1") == "1"); } catch { }
+                Shell.ApplyStartup();
+                Settings.Set("IntegratedVersion", Shell.Version);
+            }
             Shell.SetBrowserEmulation();
+            BgRemover.FinishRemoval();
             // tidy up quietly: the old FileConverter.exe, and engine programs Fadi Tools never uses (about 330 MB)
             new Thread(() => { Shell.RemoveOldCopy(); Tools.Slim(); }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
 

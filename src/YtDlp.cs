@@ -14,6 +14,7 @@ namespace FileConverter
         public int Height;
         public double Tbr, Abr;
         public long Size;      // exact or approximate, -1 unknown
+        public string Url = "", Protocol = "";
         public bool HasVideo { get { return VCodec != "none" && VCodec != ""; } }
         public bool HasAudio { get { return ACodec != "none" && ACodec != ""; } }
     }
@@ -146,7 +147,22 @@ namespace FileConverter
             int code = Tools.Stream(yt, args, l => outb.AppendLine(l), l => errb.AppendLine(l), cancelled, Env());
             if (code == -2) throw new OperationCanceledException();
             string json = outb.ToString().Trim();
+            if ((code != 0 || !json.StartsWith("{")) && errb.ToString().IndexOf("impersonate", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                // a site behind Cloudflare's "are you a browser?" check: ask again looking like a browser
+                outb.Length = 0; errb.Length = 0;
+                code = Tools.Stream(yt, Impersonate + args, l => outb.AppendLine(l), l => errb.AppendLine(l), cancelled, Env());
+                if (code == -2) throw new OperationCanceledException();
+                json = outb.ToString().Trim();
+                if (code == 0 && json.StartsWith("{")) lock (browserLike) browserLike.Add(HostOf(url));
+            }
             if (code != 0 || !json.StartsWith("{")) throw new UserError(CleanError(errb.ToString()));
+            return ParseJson(url, json);
+        }
+
+        /// Reads yt-dlp's -J output.
+        public static YtInfo ParseJson(string url, string json)
+        {
             JsonObject o = new JsonParser(json).Parse() as JsonObject;
             YtInfo info = new YtInfo { Url = url, Site = Resolver.Site(url) };
             foreach (KeyValuePair<string, object> kv in o)
@@ -181,14 +197,22 @@ namespace FileConverter
                                 JsonObject f = fo as JsonObject; if (f == null) continue;
                                 YtFormat yf = new YtFormat { Size = -1 };
                                 long exact = -1, approx = -1;
+                                double vbr = 0; int width = 0;
+                                string videoExt = null, audioExt = null; bool vKnown = false, aKnown = false;
                                 foreach (KeyValuePair<string, object> fk in f)
                                 {
                                     switch (fk.Key)
                                     {
                                         case "format_id": yf.Id = Str(fk.Value); break;
                                         case "height": yf.Height = (int)Num(fk.Value); break;
-                                        case "vcodec": yf.VCodec = Str(fk.Value); break;
-                                        case "acodec": yf.ACodec = Str(fk.Value); break;
+                                        case "vcodec": yf.VCodec = Str(fk.Value); vKnown = fk.Value != null && yf.VCodec.Length > 0; break;
+                                        case "acodec": yf.ACodec = Str(fk.Value); aKnown = fk.Value != null && yf.ACodec.Length > 0; break;
+                                        case "video_ext": videoExt = Str(fk.Value); break;
+                                        case "audio_ext": audioExt = Str(fk.Value); break;
+                                        case "width": width = (int)Num(fk.Value); break;
+                                        case "vbr": vbr = Num(fk.Value); break;
+                                        case "url": yf.Url = Str(fk.Value); break;
+                                        case "protocol": yf.Protocol = Str(fk.Value); break;
                                         case "ext": yf.Ext = Str(fk.Value); break;
                                         case "tbr": yf.Tbr = Num(fk.Value); break;
                                         case "abr": yf.Abr = Num(fk.Value); break;
@@ -196,6 +220,19 @@ namespace FileConverter
                                         case "filesize_approx": if (fk.Value != null) approx = (long)Num(fk.Value); break;
                                     }
                                 }
+                                // Instagram, X and others often leave the codecs out: go by the video/audio extensions
+                                // (a video of unknown make-up from these sites carries its sound too)
+                                if (!vKnown)
+                                {
+                                    bool v = (videoExt != null && videoExt != "none" && videoExt.Length > 0) || yf.Height > 0 || width > 0;
+                                    yf.VCodec = v ? "unknown" : "none";
+                                }
+                                if (!aKnown)
+                                {
+                                    bool a = audioExt != null ? audioExt != "none" && audioExt.Length > 0 : yf.HasVideo || yf.Abr > 0;
+                                    yf.ACodec = a ? "unknown" : "none";
+                                }
+                                if (yf.Tbr <= 0 && vbr + yf.Abr > 0) yf.Tbr = vbr + yf.Abr;
                                 yf.Size = exact > 0 ? exact : approx;
                                 if (yf.Size <= 0 && yf.Tbr > 0 && info.Duration > 0) yf.Size = (long)(yf.Tbr * 1000 / 8 * info.Duration);
                                 if (yf.Id.Contains("storyboard") || yf.Ext == "mhtml") continue;
@@ -206,6 +243,7 @@ namespace FileConverter
                 }
             }
             info.Heights.Sort();
+            FillMissingSizes(info);
             if (!info.IsPlaylist && info.Formats.Count == 0 && info.Thumbnail.Length > 0)
             {
                 // e.g. image-only posts: offer the picture itself
@@ -216,6 +254,27 @@ namespace FileConverter
                 return img;
             }
             return info;
+        }
+
+        /// Still no size for the formats that would be picked (no bitrate given): ask the server how big the file is
+        /// (a quick HEAD request, nothing is downloaded). Streamed formats (m3u8) can't be asked; they keep -1.
+        static void FillMissingSizes(YtInfo info)
+        {
+            if (info.IsPlaylist || info.Formats.Count == 0) return;
+            if (Estimate(info, new YtOptions()) > 0) return;
+            List<YtFormat> ask = new List<YtFormat>();
+            foreach (YtFormat f in info.Formats)
+                if (f.Size <= 0 && f.Url.StartsWith("http", StringComparison.OrdinalIgnoreCase) && !f.Protocol.Contains("m3u8") && !f.Protocol.Contains("dash") && !f.Url.Contains(".m3u8"))
+                    ask.Add(f);
+            // the biggest videos first, and the best sound: at most a handful of quick requests
+            ask.Sort((a, b) => b.Height != a.Height ? b.Height.CompareTo(a.Height) : b.Abr.CompareTo(a.Abr));
+            int n = 0;
+            foreach (YtFormat f in ask)
+            {
+                if (n++ >= 6) break;
+                long len = Resolver.Size(f.Url);
+                if (len > 0) f.Size = len;
+            }
         }
 
         // ------------------------------------------------------------------ size estimate
@@ -291,12 +350,18 @@ namespace FileConverter
             }
         }
 
+        const string Impersonate = "--extractor-args \"generic:impersonate\" ";
+        static readonly HashSet<string> browserLike = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        static string HostOf(string url) { try { return new Uri(url).Host; } catch { return ""; } }
+
         static List<string> RunYtDlpOnce(string url, YtOptions opt, string outDir, long expected, Action<YtProgress> progress, Func<bool> cancelled, bool playlist, bool fast)
         {
             string yt = Tools.YtDlp;
             if (yt == null) throw new UserError(L.T("not_installed"));
             StringBuilder a = new StringBuilder();
             a.Append("--newline --no-colors --progress --no-mtime --windows-filenames --no-warnings ");
+            bool like; lock (browserLike) like = browserLike.Contains(HostOf(url));
+            if (like) a.Append(Impersonate);
             if (fast)
             {
                 // YouTube limits each connection; DASH pieces downloaded 8 at a time are much faster
@@ -383,13 +448,34 @@ namespace FileConverter
                     Ffmpeg("-hide_banner -y -i " + Q(url) + " -c copy -bsf:a aac_adtstoasc -movflags +faststart -f mp4 " + Q(dest), progress, p, cancelled);
                     return;
                 }
-                Net.Download(url, dest, (g, t) =>
+                try
                 {
-                    double secs = Math.Max(0.2, (DateTime.Now - start).TotalSeconds);
-                    p.Done = g; p.Total = t; p.Percent = t > 0 ? g / (double)t : 0; p.Speed = g / secs;
-                    p.Eta = t > 0 && p.Speed > 0 ? (t - g) / p.Speed : -1;
-                    progress(p);
-                }, cancelled);
+                    Net.Download(url, dest, (g, t) =>
+                    {
+                        double secs = Math.Max(0.2, (DateTime.Now - start).TotalSeconds);
+                        p.Done = g; p.Total = t; p.Percent = t > 0 ? g / (double)t : 0; p.Speed = g / secs;
+                        p.Eta = t > 0 && p.Speed > 0 ? (t - g) / p.Speed : -1;
+                        progress(p);
+                    }, cancelled);
+                }
+                catch (System.Net.WebException ex)
+                {
+                    // turned away as "not a browser" (Cloudflare): yt-dlp fetches the file looking like one
+                    System.Net.HttpWebResponse r = ex.Response as System.Net.HttpWebResponse;
+                    if (r == null || ((int)r.StatusCode != 403 && (int)r.StatusCode != 503)) throw;
+                    try { if (File.Exists(dest)) File.Delete(dest); } catch { }
+                    StringBuilder err = new StringBuilder();
+                    int code = Tools.YtDlp == null ? 1 : Tools.Stream(Tools.YtDlp, Impersonate + "--no-playlist --no-part --no-warnings -o " + Q(dest) + " " + Q(url), null, l => err.AppendLine(l), cancelled, Env());
+                    if (code == -2) throw new OperationCanceledException();
+                    if (code != 0 || !File.Exists(dest))
+                    {
+                        // last: a real Edge window (off the screen) fetches it, like a browser would
+                        p.Stage = "download"; progress(p);
+                        bool ok = false;
+                        using (BrowserSession b = BrowserSession.Start(url)) if (b != null) ok = b.SaveFile(url, dest, 45000);
+                        if (!ok) throw new UserError(err.Length > 0 ? CleanError(err.ToString()) : ex.Message);
+                    }
+                }
             };
             bool wantVideo = opt.Mode == SaveAs.Video, wantGif = opt.Mode == SaveAs.Gif;
             // GIF sites also offer an MP4 of the same clip

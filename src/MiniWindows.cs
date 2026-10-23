@@ -396,15 +396,16 @@ namespace FileConverter
 
         public void ResetCrop() { ratio = 0; crop = new RectangleF(0, 0, ImageSize.Width, ImageSize.Height); Moved(true); }
 
-        /// Snaps the frame to a ratio: the biggest frame of that shape inside the current one's middle area.
+        /// Snaps the frame to a ratio: the biggest frame of that shape on the picture.
         public void SetRatio(float r)
         {
             ratio = r;
             if (r <= 0 || ImageSize.Width <= 0) { Moved(true); return; }
+            // the biggest frame of that shape the whole picture holds, around the middle of the current frame
+            // (not inside the current frame: switching ratios back and forth kept making it smaller)
             float cx = crop.X + crop.Width / 2, cy = crop.Y + crop.Height / 2;
-            float w = crop.Width, h = w / r;
-            if (h > crop.Height) { h = crop.Height; w = h * r; }
-            if (w < 8 || h < 8) { w = ImageSize.Width; h = w / r; if (h > ImageSize.Height) { h = ImageSize.Height; w = h * r; } }
+            float w = ImageSize.Width, h = w / r;
+            if (h > ImageSize.Height) { h = ImageSize.Height; w = h * r; }
             crop = Clamp(new RectangleF(cx - w / 2, cy - h / 2, w, h));
             Moved(true);
         }
@@ -602,66 +603,116 @@ namespace FileConverter
 
     // ====================================================================== Compress
 
-    /// Donut Wheel → Compress: how much smaller (and an optional size to aim for), then it compresses right here,
-    /// showing how much was saved. The smaller copy is saved next to the original.
+    /// Donut Wheel → Compress: a slider for the size you want (50% = half the file, 200% = twice it) with the new size
+    /// shown as you move it, then it compresses right here and shows how it went. The new copy is saved next to the
+    /// original. Files that can't aim for a size (PDF, Word…) get Light / Balanced / Strong instead.
     public class CompressWindow : MiniWindow
     {
         readonly string[] files;
+        readonly Slider pct;
         readonly Segments level;
-        readonly TextField target;
         readonly Progress bar = new Progress { Visible = false };
         readonly Btn bGo, bCancel, bShow;
         readonly Control activitySource;
-        Rectangle fileR, levelLbl, hintR, targetLbl, statusR;
+        readonly bool sized;          // every file can aim for a size (pictures, videos, songs)
+        readonly bool canGrow;        // … and be made bigger too
+        Rectangle fileR, bigR, subR, sliderLbl, scaleR, levelLbl, hintR, statusR;
         string status; Color statusColor;
         bool busy, cancel, done;
         string lastOut;
         readonly long before;
         readonly string kindGlyph;
+        float shownBytes = -1;        // the big number glides to the new size
+        readonly System.Windows.Forms.Timer glide = new System.Windows.Forms.Timer { Interval = 15 };
 
         public static void Open(string[] files, Point at, Control activitySource)
         {
             new CompressWindow(files, activitySource).ShowNear(at);
         }
 
-        CompressWindow(string[] files, Control activitySource) : base(() => L.T("wh_compress"), "")
+        public static bool CanAim(string f)
+        {
+            string e = Formats.Ext(f);
+            Category c = Formats.CategoryOf(e);
+            if (c == Category.Video || c == Category.Audio) return true;
+            if (c == Category.Image) return Tools.Magick != null || e == "jpg" || e == "jpeg";
+            return false;
+        }
+
+        CompressWindow(string[] files, Control activitySource) : base(() => L.T("wh_compress"), "\uE73F")
         {
             this.files = files; this.activitySource = activitySource;
             foreach (string f in files) try { before += new FileInfo(f).Length; } catch { }
             kindGlyph = Formats.GlyphFor(Formats.CategoryOf(Formats.Ext(files[0])));
+            sized = true; canGrow = true;
+            foreach (string f in files) { if (!CanAim(f)) sized = false; if (!Compressor.CanGrow(f)) canGrow = false; }
+
+            int saved; int.TryParse(Settings.Get("WheelCmpPct", "50"), out saved);
+            pct = new Slider { Surface = Surface.Card, Min = 10, Max = canGrow ? 200 : 100, Format = v => Snap(v) + "%" };
+            pct.SetValue(Math.Max(10, Math.Min(pct.Max, saved <= 0 ? 50 : saved)), false);
+            pct.ValueChanged += (s, e) => { glide.Start(); UpdateGo(); Invalidate(); };
+            pct.Committed += (s, e) => Settings.Set("WheelCmpPct", Snap(pct.Value).ToString(CultureInfo.InvariantCulture));
             level = new Segments(() => L.T("cmp_light"), () => L.T("cmp_balanced"), () => L.T("cmp_strong")) { Surface = Surface.Card };
             int lv; level.SelectedIndex = int.TryParse(Settings.Get("WheelCmpLevel", "1"), out lv) ? Math.Max(0, Math.Min(2, lv)) : 1;
             level.SelectedChanged += (s, e) => { Settings.Set("WheelCmpLevel", level.SelectedIndex.ToString()); Invalidate(); };
-            target = new TextField(() => L.T("cmp_fit_hint"), null) { Surface = Surface.Card, ForceLtr = true };
-            target.Box.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Go(); } };
-            bGo = new Btn(() => L.T("cmp_go"), "", BtnKind.Primary) { Surface = Surface.Card };
+            pct.Visible = sized; level.Visible = !sized;
+
+            bGo = new Btn(() => L.T(done ? "wn_ok" : Grow ? "cmp_go_bigger" : "cmp_go"), "\uE73F", BtnKind.Primary) { Surface = Surface.Card };
             bGo.Click += (s, e) => { if (done) Dismiss(); else Go(); };
             bCancel = new Btn(() => L.T(busy ? "cancel" : "close"), null, BtnKind.Secondary) { Surface = Surface.Card };
             bCancel.Click += (s, e) => { if (busy) cancel = true; else Dismiss(); };
             bShow = new Btn(() => L.T(files.Length == 1 ? "show_file" : "open_folder"), Ico.FolderOpen, BtnKind.Ghost) { Surface = Surface.Card, Visible = false, FontSize = 9f };
             bShow.Click += (s, e) => { if (lastOut != null) { if (files.Length == 1) ShowInFolder(lastOut); else try { Process.Start(Path.GetDirectoryName(lastOut)); } catch { } } };
-            Controls.AddRange(new Control[] { level, target, bar, bGo, bCancel, bShow });
-            ClientSize = new Size(Theme.S(440), Theme.S(404));
+            Controls.AddRange(new Control[] { pct, level, bar, bGo, bCancel, bShow });
+            glide.Tick += (s, e) =>
+            {
+                float target = TargetBytes;
+                if (shownBytes < 0 || !Fx.Motion) shownBytes = target;
+                else shownBytes += (target - shownBytes) * Animator.Rate(0.25f);
+                if (Math.Abs(shownBytes - target) < Math.Max(1, target * 0.002f)) { shownBytes = target; glide.Stop(); }
+                Invalidate(bigR.IsEmpty ? ClientRectangle : Rectangle.Union(M(bigR), M(subR)));
+            };
+            UpdateGo();
+            ClientSize = new Size(Theme.S(440), sized ? Theme.S(420) : Theme.S(372));
         }
+
+        /// The slider rests on whole fives (and exactly on 100%).
+        public static int Snap(float v) { int n = (int)Math.Round(v / 5f) * 5; return Math.Max(10, Math.Min(200, n)); }
+        int Percent { get { return Snap(pct.Value); } }
+        bool Grow { get { return sized && Percent > 100; } }
+        float TargetBytes { get { return before * Percent / 100f; } }
+
+        void UpdateGo() { if (bGo != null) { bGo.Enabled = !busy && (done || !sized || Percent != 100); bGo.Invalidate(); } }
 
         protected override void DoLayout()
         {
             base.DoLayout();
-            if (level == null) return;
+            if (pct == null) return;
             int W = ClientSize.Width, H = ClientSize.Height, p = Pad;
             fileR = new Rectangle(p, Head + Theme.S(4), W - p * 2, Theme.S(56));
-            int y = fileR.Bottom + Theme.S(16);
-            levelLbl = new Rectangle(p, y, W - p * 2, Theme.S(20));
-            level.Bounds = M(new Rectangle(p, y + Theme.S(24), W - p * 2, Theme.S(38)));
-            hintR = new Rectangle(p, y + Theme.S(66), W - p * 2, Theme.S(38));
-            y += Theme.S(112);
-            targetLbl = new Rectangle(p, y, W - p * 2 - Theme.S(130), Theme.S(38));
-            target.Bounds = M(new Rectangle(W - p - Theme.S(120), y, Theme.S(120), Theme.S(38)));
-            y += Theme.S(52);
+            int y = fileR.Bottom + Theme.S(14);
+            if (sized)
+            {
+                // the new size, big, then the slider under it
+                bigR = new Rectangle(p, y, W - p * 2, Theme.S(44));
+                subR = new Rectangle(p, y + Theme.S(44), W - p * 2, Theme.S(22));
+                y += Theme.S(76);
+                sliderLbl = new Rectangle(p, y, W - p * 2, Theme.S(20));
+                pct.Bounds = M(new Rectangle(p - Theme.S(8), y + Theme.S(22), W - p * 2 + Theme.S(8), Theme.S(36)));
+                scaleR = new Rectangle(p, y + Theme.S(58), W - p * 2 - Theme.S(52), Theme.S(18));
+                y += Theme.S(86);
+            }
+            else
+            {
+                levelLbl = new Rectangle(p, y, W - p * 2, Theme.S(20));
+                level.Bounds = M(new Rectangle(p, y + Theme.S(24), W - p * 2, Theme.S(38)));
+                hintR = new Rectangle(p, y + Theme.S(66), W - p * 2, Theme.S(38));
+                y += Theme.S(112);
+            }
             bar.Bounds = M(new Rectangle(p, y + Theme.S(4), W - p * 2, Theme.S(6)));
-            statusR = new Rectangle(p, y + Theme.S(12), W - p * 2, Theme.S(36));
+            statusR = new Rectangle(p, y + Theme.S(12), W - p * 2, Theme.S(40));
             int by = H - Theme.S(20) - Theme.S(40);
-            int gw = Math.Max(Theme.S(120), bGo.PreferredWidth + Theme.S(12)), cw = Math.Max(Theme.S(96), bCancel.PreferredWidth);
+            int gw = Math.Max(Theme.S(130), bGo.PreferredWidth + Theme.S(12)), cw = Math.Max(Theme.S(96), bCancel.PreferredWidth);
             bGo.Bounds = M(new Rectangle(W - p - gw, by, gw, Theme.S(40)));
             bCancel.Bounds = M(new Rectangle(W - p - gw - Theme.S(8) - cw, by, cw, Theme.S(40)));
             bShow.Bounds = M(new Rectangle(p - Theme.S(8), by + Theme.S(3), Math.Max(Theme.S(110), bShow.PreferredWidth), Theme.S(34)));
@@ -676,25 +727,47 @@ namespace FileConverter
             string name = files.Length == 1 ? Path.GetFileName(files[0]) : L.T("n_files", files.Length);
             Theme.Text(g, name, Theme.F(10f, FontStyle.Bold), Theme.Ink, M(new Rectangle(ic.Right + Theme.S(12), fileR.Y + Theme.S(6), fileR.Right - ic.Right - Theme.S(12), Theme.S(24))), Align.Start, true, false, true);
             Theme.Text(g, Theme.HumanSize(before), Theme.F(9f), Theme.InkSoft, M(new Rectangle(ic.Right + Theme.S(12), fileR.Y + Theme.S(28), fileR.Right - ic.Right - Theme.S(12), Theme.S(22))), Align.Start);
-            Theme.Text(g, L.T("cmp_how"), Theme.F(8.75f, FontStyle.Bold), Theme.InkSoft, M(levelLbl), Align.Start);
-            string hk = new[] { "cmp_hint_light", "cmp_hint_balanced", "cmp_hint_strong" }[Math.Max(0, level.SelectedIndex)];
-            Theme.Text(g, L.T(hk), Theme.F(8.75f), Theme.InkSoft, M(hintR), Align.Start, false, true);
-            Theme.Text(g, L.T("cmp_fit"), Theme.F(9.25f), Theme.Ink, M(targetLbl), Align.Start, true, true);
+            if (sized)
+            {
+                long shown = (long)(shownBytes < 0 ? TargetBytes : shownBytes);
+                int pc = Percent;
+                Color ink = pc < 100 ? Theme.Ink : pc == 100 ? Theme.InkSoft : Theme.AccentColor;
+                Theme.Text(g, "≈ " + Theme.HumanSize(shown), Theme.Serif(20f), ink, M(bigR), Align.Start, true, false, true);
+                string what = pc == 100 ? L.T("cmp_pct_same") : pc < 100 ? L.T("cmp_pct_smaller", 100 - pc) : L.T("cmp_pct_bigger", (pc / 100f).ToString("0.##", CultureInfo.CurrentCulture));
+                Theme.Text(g, L.T("cmp_pct_of", pc, Theme.HumanSize(before)) + "  ·  " + what, Theme.F(9f), Theme.InkSoft, M(subR), Align.Start, true, false, true);
+                Theme.Text(g, L.T("cmp_pct_label"), Theme.F(8.75f, FontStyle.Bold), Theme.InkSoft, M(sliderLbl), Align.Start);
+                // a little scale under the slider: smaller ← 100% → bigger
+                Theme.Text(g, L.T("cmp_pct_left"), Theme.F(8f), Theme.InkFaint, M(scaleR), Align.Start);
+                if (canGrow) Theme.Text(g, L.T("cmp_pct_right"), Theme.F(8f), Theme.InkFaint, M(scaleR), Align.End);
+            }
+            else
+            {
+                Theme.Text(g, L.T("cmp_how"), Theme.F(8.75f, FontStyle.Bold), Theme.InkSoft, M(levelLbl), Align.Start);
+                string hk = new[] { "cmp_hint_light", "cmp_hint_balanced", "cmp_hint_strong" }[Math.Max(0, level.SelectedIndex)];
+                Theme.Text(g, L.T(hk), Theme.F(8.75f), Theme.InkSoft, M(hintR), Align.Start, false, true);
+            }
             if (status != null) Theme.Text(g, status, Theme.F(9.25f, done ? FontStyle.Bold : FontStyle.Regular), statusColor, M(statusR), Align.Start, true, true);
         }
 
         protected override bool CanClose() { if (busy) { cancel = true; return false; } return true; }
+        protected override void OnFormClosed(FormClosedEventArgs e) { glide.Stop(); glide.Dispose(); base.OnFormClosed(e); }
+
+        /// A size in the unit the compressor counts in (pictures: 1 MB = 1,000,000 bytes; the rest 1,048,576).
+        public static double MbFor(string f, double bytes)
+        {
+            return Formats.CategoryOf(Formats.Ext(f)) == Category.Image ? bytes / 1000.0 / 1000.0 : bytes / 1024.0 / 1024.0;
+        }
 
         void Go()
         {
             if (busy || done) return;
-            double mb = 0;
-            string tt = target.Box.Text.Trim().Replace(',', '.');
-            if (tt.Length > 0 && (!double.TryParse(tt, NumberStyles.Float, CultureInfo.InvariantCulture, out mb) || mb <= 0)) { status = L.T("crop_bad_number"); statusColor = Theme.Error; Invalidate(); return; }
+            int pc = sized ? Percent : 0;
+            if (sized && pc == 100) return;
             Compressor.Level lv = level.SelectedIndex == 0 ? Compressor.Level.Light : level.SelectedIndex == 2 ? Compressor.Level.Strong : Compressor.Level.Balanced;
+            if (sized) lv = Compressor.Level.Balanced;
             busy = true; cancel = false;
-            level.Enabled = target.Enabled = bGo.Enabled = false;
-            bCancel.Invalidate();
+            pct.Enabled = level.Enabled = false;
+            UpdateGo(); bCancel.Invalidate();
             bar.Visible = true; bar.Value = 0;
             status = L.T("cmp_working", 1, files.Length); statusColor = Theme.InkSoft; Invalidate();
             string title = files.Length == 1 ? Path.GetFileName(files[0]) : L.T("n_files", files.Length);
@@ -710,7 +783,10 @@ namespace FileConverter
                     try
                     {
                         string outDir = DragWheel.OutDirFor(f);
-                        Job job = Compressor.Build(f, outDir, lv, mb);
+                        double mb = pc > 0 ? MbFor(f, b * pc / 100.0) : 0;
+                        bool grow = pc > 100;
+                        Job job = grow && Formats.CategoryOf(Formats.Ext(f)) == Category.Image ? Compressor.BuildGrow(f, outDir, mb)
+                                : Compressor.Build(f, outDir, lv, mb, true, 0, grow);
                         Action<double> prog = p =>
                         {
                             double all = (index + p) / files.Length;
@@ -727,35 +803,36 @@ namespace FileConverter
                         }
                         if (e != null) throw new Exception(e);
                         long got = File.Exists(job.Output) ? new FileInfo(job.Output).Length : b;
-                        if (got >= b * 0.98 && mb <= 0)
+                        if (!grow && got >= b * 0.98)
                         {
                             // no real gain: the original stays as it is
                             try { File.Delete(job.Output); } catch { }
                             after += b;
                         }
-                        else { after += got; saved += Math.Max(0, b - got); lastOut = job.Output; }
+                        else { after += got; saved += b - got; lastOut = job.Output; }
                         ok++;
                     }
                     catch (Exception ex) { if (!cancel) err = ex.Message; }
                 }
-                int pct = before > 0 ? (int)Math.Round(100.0 * saved / before) : 0;
-                string detail = saved > 0 ? L.T("cmp_saved", Theme.HumanSize(saved), pct) : ok > 0 ? L.T("cmp_nothing") : null;
+                int pctSaved = before > 0 ? (int)Math.Round(100.0 * Math.Abs(saved) / before) : 0;
+                string detail = saved > 0 ? L.T("cmp_saved", Theme.HumanSize(saved), pctSaved) : saved < 0 ? L.T("cmp_grew_to", Theme.HumanSize(after)) : ok > 0 ? L.T("cmp_nothing") : null;
                 Activity.End(act, ok == 0 && !cancel ? (err ?? L.T("cmp_none")) : null, cancel, detail, files.Length == 1 ? lastOut : (lastOut != null ? Path.GetDirectoryName(lastOut) : null));
                 Ui(() =>
                 {
                     busy = false; bar.Visible = false;
-                    if (cancel) { status = L.T("cancelled"); statusColor = Theme.InkSoft; level.Enabled = target.Enabled = bGo.Enabled = true; bCancel.Invalidate(); Invalidate(); return; }
-                    done = ok > 0;
-                    if (saved > 0) { status = Theme.HumanSize(before) + "  →  " + Theme.HumanSize(after) + "   ·   " + L.T("cmp_saved", Theme.HumanSize(saved), pct); statusColor = Theme.Success; }
-                    else if (ok > 0) { status = files.Length == 1 ? L.T("cmp_already") : L.T("cmp_nothing"); statusColor = Theme.InkSoft; }
+                    if (cancel) { status = L.T("cancelled"); statusColor = Theme.InkSoft; pct.Enabled = level.Enabled = true; UpdateGo(); bCancel.Invalidate(); Invalidate(); return; }
+                    done = ok > 0 && lastOut != null;
+                    if (saved > 0) { status = Theme.HumanSize(before) + "  →  " + Theme.HumanSize(after) + "   ·   " + L.T("cmp_saved", Theme.HumanSize(saved), pctSaved); statusColor = Theme.Success; }
+                    else if (saved < 0) { status = Theme.HumanSize(before) + "  →  " + Theme.HumanSize(after); statusColor = Theme.Success; }
+                    else if (ok > 0) { status = files.Length == 1 ? L.T("cmp_already") : L.T("cmp_nothing"); statusColor = Theme.InkSoft; done = true; }
                     else { status = err ?? L.T("cmp_none"); statusColor = Theme.Error; }
-                    bGo.Label = () => L.T(done ? "wn_ok" : "cmp_go");
-                    bGo.Glyph = done ? Ico.Check : "";
-                    bGo.Enabled = true; level.Enabled = target.Enabled = !done;
+                    bGo.Glyph = done ? Ico.Check : "\uE73F";
+                    pct.Enabled = level.Enabled = !done;
                     bShow.Visible = lastOut != null;
                     if (done) bCancel.Visible = false;
+                    UpdateGo();
                     DoLayout(); Invalidate(); bGo.Invalidate();
-                    if (done && lastOut != null && Settings.OpenAfter) { if (files.Length == 1) ShowInFolder(lastOut); else try { Process.Start(Path.GetDirectoryName(lastOut)); } catch { } }
+                    if (lastOut != null && Settings.OpenAfter) { if (files.Length == 1) ShowInFolder(lastOut); else try { Process.Start(Path.GetDirectoryName(lastOut)); } catch { } }
                 });
             });
             th.IsBackground = true; th.Start();

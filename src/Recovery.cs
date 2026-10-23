@@ -230,7 +230,7 @@ namespace FileConverter
             Rectangle ic = Theme.Mirror(new Rectangle(pad, pad, Theme.S(44), Theme.S(44)), Width);
             using (SolidBrush b = new SolidBrush(Theme.WarnBg)) g.FillEllipse(b, ic);
             Theme.Glyph(g, Ico.Warning, 14f, Theme.Warn, ic);
-            Theme.Text(g, L.T("crash_title"), Theme.Serif(15f), Theme.Ink, Theme.Mirror(new Rectangle(tx, pad - Theme.S(2), tw, Theme.S(30)), Width), Align.Start, false);
+            Theme.Text(g, L.T("crash_title"), Theme.Display(15f), Theme.Ink, Theme.Mirror(new Rectangle(tx, pad - Theme.S(2), tw, Theme.S(30)), Width), Align.Start, false);
             Theme.Text(g, L.T(fatal ? "crash_fatal" : "crash_body"), Theme.F(9.75f), Theme.InkSoft, Theme.Mirror(new Rectangle(tx, pad + Theme.S(32), tw, Theme.S(44)), Width), Align.Start, false, true);
             int y = pad + Theme.S(82);
             Rectangle mr = Theme.Mirror(new Rectangle(tx, y, tw, Theme.S(48)), Width);

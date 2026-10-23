@@ -143,6 +143,13 @@ namespace FileConverter
 
         Rectangle previewCard, pickCard, onRow, fmtHead, actHead, hintR, captionR, sizeLbl;
         readonly Slider size;
+        // recipes for this kind of file: listed under the choices, each opens its editor
+        readonly Btn bNewRecipe;
+        List<Recipe> recList = new List<Recipe>();
+        Rectangle recHead, recEmpty;
+        readonly List<Rectangle> recR = new List<Rectangle>();
+        int hotRecipe = -1;
+        bool RecipesHere { get { return Array.IndexOf(Recipes.Kinds, Kind) >= 0; } }
         readonly List<Rectangle> fmtR = new List<Rectangle>(), actR = new List<Rectangle>();
         string[] pool = new string[0], actPool = new string[0];
         List<string> formats = new List<string>(), actions = new List<string>();
@@ -183,7 +190,9 @@ namespace FileConverter
             size = new Slider { Min = WheelConfig.MinSize, Max = WheelConfig.MaxSize, Value = WheelConfig.SizePct, Format = v => ((int)Math.Round(v)) + "%" };
             size.ValueChanged += (s, e) => preview.SetSize((int)Math.Round(360f * Theme.Scale * size.Value / 100f));
             size.Committed += (s, e) => WheelConfig.SizePct = (int)Math.Round(size.Value);
-            Controls.AddRange(new Control[] { back, reset, kinds, onOff, preview, size });
+            bNewRecipe = new Btn(() => L.T("rc_new_short"), Ico.Add, BtnKind.Secondary) { FontSize = 9f };
+            bNewRecipe.Click += (s, e) => EditRecipe(null);
+            Controls.AddRange(new Control[] { back, reset, kinds, onOff, preview, size, bNewRecipe });
             Cursor = Cursors.Default;
         }
 
@@ -206,6 +215,7 @@ namespace FileConverter
             actPool = WheelConfig.ActionPool(Kind);
             formats = WheelConfig.FormatsFor(Kind);
             actions = WheelConfig.ActionsFor(Kind);
+            recList = Recipes.All().FindAll(x => x.For == Kind);
             foreach (string f in pool) lit["f:" + f] = formats.Contains(f) ? 1 : 0;
             foreach (string a in actPool) lit["a:" + a] = actions.Contains(a) ? 1 : 0;
             Refresh2(animate);
@@ -223,6 +233,21 @@ namespace FileConverter
 
         void Save() { WheelConfig.Save(Kind, formats, actions); Refresh2(true); Animator.Start(this); }
 
+        /// A new recipe (null) or one to change; a new one goes on the wheel straight away when there's room.
+        void EditRecipe(Recipe existing)
+        {
+            Recipe done = RecipeDialog.Edit(FindForm(), existing, Kind);
+            if (done == null) return;
+            if (existing == null && Array.IndexOf(Recipes.Kinds, done.For) >= 0)
+            {
+                List<string> acts = WheelConfig.ActionsFor(done.For);
+                if (acts.Count < WheelConfig.MaxActions && !acts.Contains(done.Id)) { acts.Add(done.Id); WheelConfig.Save(done.For, WheelConfig.FormatsFor(done.For), acts); }
+                int ki = Array.IndexOf(WheelConfig.Kinds, done.For);
+                if (ki >= 0 && ki != kinds.SelectedIndex) { kinds.SelectedIndex = ki; return; }
+            }
+            Load(true);
+        }
+
         void MoveSlice(bool outerRing, int from, int to)
         {
             List<string> l = outerRing ? formats : actions;
@@ -238,7 +263,7 @@ namespace FileConverter
                 string a = actPool[chip - 100];
                 if (actions.Contains(a)) actions.Remove(a);
                 else if (actions.Count < WheelConfig.MaxActions) actions.Add(a);
-                else return;
+                else { ShowToast(L.T("whp_full_actions", WheelConfig.MaxActions), false, null, null); return; }
             }
             else
             {
@@ -308,8 +333,22 @@ namespace FileConverter
             for (int i = 0; i < actPool.Length; i++) actR.Add(new Rectangle(x + (i % acols) * (aw + cg), cy + (i / acols) * (chipH + cg), aw, chipH));
             cy += ((actPool.Length + acols - 1) / acols) * (chipH + cg) + Theme.S(8);
             hintR = new Rectangle(x, cy, w, Theme.S(40));
+            cy += Theme.S(48);
+            recR.Clear();
+            bNewRecipe.Visible = RecipesHere;
+            if (RecipesHere)
+            {
+                recHead = new Rectangle(x, cy, w, Theme.S(34));
+                int nw = Math.Max(Theme.S(140), bNewRecipe.PreferredWidth);
+                Place(bNewRecipe, new Rectangle(x + w - nw, cy, nw, Theme.S(34)));
+                cy += Theme.S(42);
+                if (recList.Count == 0) { recEmpty = new Rectangle(x, cy, w, Theme.S(40)); cy += Theme.S(44); }
+                foreach (Recipe rc in recList) { recR.Add(new Rectangle(x, cy, w, Theme.S(52))); cy += Theme.S(58); }
+                hintR.Height = Theme.S(40);
+            }
+            Rectangle lastR = recR.Count > 0 ? recR[recR.Count - 1] : RecipesHere ? (recList.Count == 0 ? recEmpty : recHead) : hintR;
             // a short window: the page scrolls (the narrow layout stacks the wheel over the choices)
-            int need = hintR.Bottom + Theme.S(16) - pickCard.Y;
+            int need = lastR.Bottom + Theme.S(16) - pickCard.Y;
             if (pickCard.Height < need) { pickCard.Height = need; cards[1] = pickCard; }
             int bottom = Math.Max(previewCard.Bottom, pickCard.Bottom) + p + ScrollY;
             maxScroll = Math.Max(0, bottom - H);
@@ -331,7 +370,9 @@ namespace FileConverter
         {
             base.OnMouseMove(e);
             int c = ChipAt(Ltr(e.Location));
-            if (c != hotChip) { hotChip = c; Cursor = c >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
+            int hr = -1; Point pt = Ltr(e.Location);
+            for (int i = 0; i < recR.Count; i++) if (recR[i].Contains(pt)) hr = i;
+            if (c != hotChip || hr != hotRecipe) { hotChip = c; hotRecipe = hr; Cursor = c >= 0 || hr >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
         }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (hotChip != -1) { hotChip = -1; Invalidate(); } }
         protected override void OnMouseClick(MouseEventArgs e)
@@ -340,6 +381,11 @@ namespace FileConverter
             if (e.Button != MouseButtons.Left) return;
             int c = ChipAt(Ltr(e.Location));
             if (c >= 0) Toggle(c);
+            else
+            {
+                Point pt = Ltr(e.Location);
+                for (int i = 0; i < recR.Count; i++) if (recR[i].Contains(pt)) { EditRecipe(recList[i]); return; }
+            }
         }
 
         protected override void PaintContent(Graphics g)
@@ -361,7 +407,7 @@ namespace FileConverter
                 Chip(g, fmtR[i], f.ToUpperInvariant(), null, lit.ContainsKey("f:" + f) ? lit["f:" + f] : 0, order, hotChip == i,
                      order < 0 && formats.Count >= WheelConfig.MaxFormats);
             }
-            Head(g, actHead, L.T("whp_actions"), actions.Count + " / " + actPool.Length);
+            Head(g, actHead, L.T("whp_actions"), actions.Count + " / " + WheelConfig.MaxActions);
             for (int i = 0; i < actR.Count; i++)
             {
                 WheelItem it = WheelConfig.ActionItem(actPool[i]);
@@ -369,6 +415,25 @@ namespace FileConverter
                 Chip(g, actR[i], it.Label(), it.Glyph, lit.ContainsKey("a:" + actPool[i]) ? lit["a:" + actPool[i]] : 0, order, hotChip == 100 + i, false);
             }
             Label(g, L.T("whp_hint"), Theme.F(8.5f), Theme.InkFaint, hintR, Align.Start, false, true);
+            if (RecipesHere)
+            {
+                using (Pen lp = new Pen(Theme.Line)) { Rectangle l = M(new Rectangle(recHead.X, recHead.Y - Theme.S(8), recHead.Width, 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
+                Label(g, L.T("rc_title").ToUpperInvariant(), Theme.F(8.25f, FontStyle.Bold), Theme.InkSoft, new Rectangle(recHead.X, recHead.Y, recHead.Width - Theme.S(160), recHead.Height), Align.Start);
+                if (recList.Count == 0) Label(g, L.T("rc_none"), Theme.F(8.75f), Theme.InkFaint, recEmpty, Align.Start, true, true);
+                for (int i = 0; i < recR.Count && i < recList.Count; i++)
+                {
+                    Rectangle r = recR[i];
+                    Theme.FillRound(g, M(r), Theme.S(12), hotRecipe == i ? Theme.Hover : Theme.CardInner);
+                    Rectangle ic = new Rectangle(r.X + Theme.S(10), r.Y + (r.Height - Theme.S(32)) / 2, Theme.S(32), Theme.S(32));
+                    Theme.FillRound(g, M(ic), Theme.S(9), Theme.AccentSoft);
+                    Theme.Glyph(g, Ico.Recipe, 9.5f, Theme.AccentColor, M(ic));
+                    bool on = actions.Contains(recList[i].Id);
+                    Label(g, recList[i].Name, Theme.F(9.5f, FontStyle.Bold), Theme.Ink, new Rectangle(ic.Right + Theme.S(10), r.Y + Theme.S(7), r.Width - Theme.S(220), Theme.S(20)), Align.Start);
+                    Label(g, Recipes.Summary(recList[i]), Theme.F(8.25f), Theme.InkSoft, new Rectangle(ic.Right + Theme.S(10), r.Y + Theme.S(27), r.Width - Theme.S(100), Theme.S(18)), Align.Start);
+                    Label(g, L.T(on ? "rc_on_wheel" : "rc_off_wheel"), Theme.F(8f, FontStyle.Bold), on ? Theme.AccentColor : Theme.InkFaint, new Rectangle(r.Right - Theme.S(150), r.Y + Theme.S(7), Theme.S(118), Theme.S(20)), Align.End);
+                    Theme.Glyph(g, Ico.Edit, 8.5f, Theme.InkSoft, M(new Rectangle(r.Right - Theme.S(30), r.Y, Theme.S(22), r.Height)));
+                }
+            }
         }
 
         void Head(Graphics g, Rectangle r, string text, string count)
@@ -382,7 +447,7 @@ namespace FileConverter
         {
             Rectangle r = M(ltr);
             Color off = hover && !full ? Theme.Hover : Theme.CardInner;
-            Color fill = Theme.Mix(off, Theme.AccentColor, on);
+            Color fill = Theme.Mix(off, Theme.AccentFill, on);
             Theme.FillRound(g, r, Theme.S(10), fill);
             if (on < 0.5f) Theme.StrokeRound(g, new RectangleF(r.X + 0.5f, r.Y + 0.5f, r.Width - 1, r.Height - 1), Theme.S(10), hover && !full ? Theme.Mix(Theme.ChipBorder, Theme.AccentColor, 0.5f) : Theme.ChipBorder);
             Color ink = Theme.Mix(full ? Theme.InkFaint : Theme.Ink, Theme.PrimaryInk, on);
@@ -411,8 +476,13 @@ namespace FileConverter
     {
         public WheelEntry() { Surface = Surface.Background; Cursor = Cursors.Hand; TabStop = true; }
         protected override AccessibleRole AccRole { get { return AccessibleRole.PushButton; } }
-        protected override string AccName { get { return L.T("whp_open"); } }
-        protected override string AccAction { get { return L.T("whp_open"); } }
+        protected virtual string TitleKey { get { return "whp_open"; } }
+        protected virtual string SubKey { get { return "whp_open_d"; } }
+        protected virtual bool IsOn { get { return DragWheel.On; } }
+        protected virtual string StateText { get { return L.T(IsOn ? "whp_state_on" : "whp_state_off"); } }
+        protected virtual void DrawArt(Graphics g, Rectangle r, float hot) { DrawMini(g, r, hot * 45f); }
+        protected override string AccName { get { return L.T(TitleKey); } }
+        protected override string AccAction { get { return L.T(TitleKey); } }
         protected override void AccDo() { OnClick(EventArgs.Empty); }
         protected override bool IsInputKey(Keys k) { return k == Keys.Enter || k == Keys.Space || base.IsInputKey(k); }
         protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space) { OnClick(EventArgs.Empty); e.Handled = true; } base.OnKeyDown(e); }
@@ -429,27 +499,27 @@ namespace FileConverter
             Func<Rectangle, Rectangle> M = r => Theme.Mirror(r, Width);
             int ip = Theme.S(20), d = Height - Theme.S(28);
             Rectangle wr = M(new Rectangle(ip, (Height - d) / 2, d, d));
-            DrawMini(g, wr, hot * 45f);
+            DrawArt(g, wr, hot);
             int tx = ip + d + Theme.S(16), ar = Theme.S(34), pillW = Theme.S(56);
             int tw = Width - tx - ip - ar - pillW - Theme.S(12);
-            Theme.Text(g, L.T("whp_open"), Theme.F(11f, FontStyle.Bold), Theme.Ink, M(new Rectangle(tx, Theme.S(18), tw, Theme.S(26))), Align.Start, true, false, true);
-            Theme.Text(g, L.T("whp_open_d"), Theme.F(8.75f), Theme.InkSoft, M(new Rectangle(tx, Theme.S(44), tw, Theme.S(36))), Align.Start, false, true);
+            Theme.Text(g, L.T(TitleKey), Theme.F(11f, FontStyle.Bold), Theme.Ink, M(new Rectangle(tx, Theme.S(18), tw, Theme.S(26))), Align.Start, true, false, true);
+            Theme.Text(g, L.T(SubKey), Theme.F(8.75f), Theme.InkSoft, M(new Rectangle(tx, Theme.S(44), tw, Theme.S(36))), Align.Start, false, true);
             // on / off
-            bool on = DragWheel.On;
+            bool on = IsOn;
             Rectangle pill = M(new Rectangle(Width - ip - ar - Theme.S(8) - pillW, (Height - Theme.S(24)) / 2, pillW, Theme.S(24)));
             Theme.FillRound(g, pill, Theme.S(12), on ? Theme.SuccessBg : Theme.Selected);
-            Theme.Text(g, L.T(on ? "whp_state_on" : "whp_state_off"), Theme.F(8f, FontStyle.Bold), on ? Theme.Success : Theme.InkFaint, pill, Align.Center, true, false, true);
+            Theme.Text(g, StateText, Theme.F(8f, FontStyle.Bold), on ? Theme.Success : Theme.InkFaint, pill, Align.Center, true, false, true);
             // the arrow nudges forward when pointed at
             int nudge = (int)(hot * Theme.S(4)) * (rtl ? -1 : 1);
             Rectangle a = M(new Rectangle(Width - ip - ar, (Height - ar) / 2, ar, ar));
             a.Offset(nudge, 0);
-            Theme.FillRound(g, a, ar / 2f, Theme.Mix(Theme.CardInner, Theme.AccentColor, hot * 0.9f));
+            Theme.FillRound(g, a, ar / 2f, Theme.Mix(Theme.CardInner, Theme.AccentFill, hot * 0.9f));
             Theme.Glyph(g, rtl ? Ico.Back : Ico.Forward, 9f, Theme.Mix(Theme.Ink, Theme.PrimaryInk, hot), a);
             PaintFocus(g, card, Theme.S(14));
         }
 
         /// A small donut: eight formats round the outside, four actions inside, the logo's colour in the middle.
-        static void DrawMini(Graphics g, Rectangle r, float turn)
+        public static void DrawMini(Graphics g, Rectangle r, float turn)
         {
             float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f, R = r.Width / 2f;
             Color acc = Theme.AccentColor;

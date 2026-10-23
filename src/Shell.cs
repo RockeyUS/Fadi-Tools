@@ -13,7 +13,7 @@ namespace FileConverter
     /// Windows integration: install location, shortcuts, right-click menu, file associations, uninstall.
     public static class Shell
     {
-        public const string Version = "1.6.2";
+        public const string Version = "1.6.4";
 
         [DllImport("shell32.dll")]
         static extern void SHChangeNotify(int eventId, int flags, IntPtr item1, IntPtr item2);
@@ -108,6 +108,39 @@ namespace FileConverter
         {
             using (RegistryKey k = Registry.CurrentUser.CreateSubKey(key))
                 k.SetValue(name ?? "", value);
+        }
+
+        // ------------------------------------------------------------------ start with Windows
+        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        const string RunName = "Fadi Tools";
+
+        /// Settings → "Start Fadi Tools when Windows starts" (off unless turned on). It starts by the clock, without a window.
+        public static bool StartsWithWindows { get { return Settings.Get("RunAtStartup", "0") == "1"; } }
+
+        public static void SetStartsWithWindows(bool on)
+        {
+            Settings.Set("RunAtStartup", on ? "1" : "0");
+            ApplyStartup();
+        }
+
+        /// Writes (or removes) the sign-in entry, pointing at the copy that should run (the installed one when there is one).
+        public static void ApplyStartup()
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return;
+            try
+            {
+                using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RunKey))
+                {
+                    if (k == null) return;
+                    if (StartsWithWindows)
+                    {
+                        string exe = !Paths.Portable && File.Exists(Paths.InstalledExe) ? Paths.InstalledExe : Application.ExecutablePath;
+                        k.SetValue(RunName, "\"" + exe + "\" /startup");
+                    }
+                    else if (k.GetValue(RunName) != null) k.DeleteValue(RunName, false);
+                }
+            }
+            catch { }
         }
 
         public static void Integrate(bool desktop, bool contextMenu, bool viewer)
@@ -252,6 +285,7 @@ namespace FileConverter
             if (!Ask.Confirm(owner, L.T("uninstall_title"), L.T("uninstall_q"), L.T("uninstall_btn"), L.T("cancel"), AskKind.Danger)) return false;
 
             RegistryKey cu = Registry.CurrentUser;
+            try { using (RegistryKey rk = cu.OpenSubKey(RunKey, true)) if (rk != null) rk.DeleteValue(RunName, false); } catch { }
             foreach (string k in new[] { @"Software\Classes\*\shell\FileConverter.Convert", MenuKey, TextKey, @"Software\Classes\FadiTools.Project", @"Software\Classes\." + TrimPage.ProjectExt, @"Software\Classes\FileConverter.Image",
                                          AppKey, OldAppKey, @"Software\Microsoft\Windows\CurrentVersion\Uninstall\FileConverter" })
                 try { cu.DeleteSubKeyTree(k, false); } catch { }

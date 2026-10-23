@@ -21,11 +21,44 @@ namespace FileConverter
         const long ModelBytes = 178648008;
 
         public static bool IsWindows { get { return Environment.OSVersion.Platform == PlatformID.Win32NT; } }
-        public static bool Ready { get { return File.Exists(RuntimePath) && File.Exists(ModelPath) && new FileInfo(ModelPath).Length > 1000000; } }
+        /// How much room the engine takes on the disk.
+        public static long SizeOnDisk
+        {
+            get
+            {
+                long n = 0;
+                try { if (Directory.Exists(Dir)) foreach (string f in Directory.GetFiles(Dir, "*", SearchOption.AllDirectories)) try { n += new FileInfo(f).Length; } catch { } } catch { }
+                return n;
+            }
+        }
+
+        /// Removes the engine (the model and its runtime); it can be downloaded again any time.
+        public static void Uninstall()
+        {
+            try { if (Directory.Exists(Dir)) Directory.Delete(Dir, true); }
+            catch
+            {
+                // in use since it was loaded this time: what can go goes now, the rest the next time the app starts
+                try { foreach (string f in Directory.GetFiles(Dir)) try { File.Delete(f); } catch { } } catch { }
+                try { File.WriteAllText(RemoveMark, ""); } catch { }
+            }
+        }
+
+        static string RemoveMark { get { return Path.Combine(Paths.ToolsDir, "bg.remove"); } }
+
+        /// Finishes a removal that had to wait for the app to close (call when the app starts).
+        public static void FinishRemoval()
+        {
+            if (!File.Exists(RemoveMark)) return;
+            try { if (Directory.Exists(Dir)) Directory.Delete(Dir, true); File.Delete(RemoveMark); } catch { }
+        }
+
+        public static bool Ready { get { return !File.Exists(RemoveMark) && File.Exists(RuntimePath) && File.Exists(ModelPath) && new FileInfo(ModelPath).Length > 1000000; } }
 
         /// Downloads the runtime (~7 MB) and the model (~170 MB). progress: 0..1
         public static void Install(Action<double, string> progress, Func<bool> cancelled)
         {
+            try { File.Delete(RemoveMark); } catch { }
             Directory.CreateDirectory(Dir);
             if (!File.Exists(RuntimePath))
             {

@@ -23,6 +23,8 @@ namespace FileConverter
             if (u.Contains("pinterest.") || u.Contains("pin.it")) return "Pinterest";
             if (u.Contains("giphy.com")) return "GIPHY";
             if (u.Contains("tenor.com")) return "Tenor";
+            if (u.Contains("klipy.com")) return "KLIPY";
+            if (u.Contains("discordapp.") || u.Contains("discord.com") || u.Contains("discord.gg")) return "Discord";
             if (u.Contains("twitter.com") || u.Contains("x.com/")) return "X";
             if (u.Contains("reddit.com") || u.Contains("redd.it")) return "Reddit";
             if (u.Contains("imgur.com")) return "Imgur";
@@ -48,9 +50,11 @@ namespace FileConverter
         public static YtInfo TryResolve(string url, Func<bool> cancelled)
         {
             string site = Site(url);
-            if (site == "GIPHY") return Giphy(url);
+            if (site == "Discord") url = Discord(url);
+            if (site == "GIPHY" || Site(url) == "GIPHY") return Giphy(url);
             if (IsDirectMedia(url)) return Direct(url, null, null);
-            if (site == "Tenor") return Tenor(url);
+            if (Site(url) == "KLIPY") return Klipy(url);
+            if (Site(url) == "Tenor") return Tenor(url);
             if (site == "Pinterest") return Pinterest(url);
             return null;
         }
@@ -87,6 +91,25 @@ namespace FileConverter
             using (HttpWebResponse r = (HttpWebResponse)req.GetResponse())
             using (StreamReader sr = new StreamReader(r.GetResponseStream(), Encoding.UTF8))
                 return sr.ReadToEnd();
+        }
+
+        /// A page as Microsoft Edge sees it (run hidden, without a window): for sites that only answer real browsers.
+        public static string BrowserGet(string url)
+        {
+            string edge = Tools.Edge;
+            if (edge == null) return null;
+            string profile = Path.Combine(Path.GetTempPath(), "fadi_edge_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                string args = "--headless=new --disable-gpu --no-first-run --no-default-browser-check --disable-extensions --mute-audio " +
+                              "--user-data-dir=" + Tools.Quote(profile) + " --user-agent=" + Tools.Quote(UA) + " --virtual-time-budget=9000 --dump-dom " + Tools.Quote(url);
+                byte[] b = Media.Capture(edge, args, 45000);
+                if (b == null || b.Length == 0) return null;
+                string html = Encoding.UTF8.GetString(b);
+                return html.IndexOf("Just a moment", StringComparison.OrdinalIgnoreCase) >= 0 && html.IndexOf("og:image", StringComparison.OrdinalIgnoreCase) < 0 ? null : html;
+            }
+            catch { return null; }
+            finally { try { Directory.Delete(profile, true); } catch { } }
         }
 
         static string FinalUrl(string url)
@@ -167,6 +190,72 @@ namespace FileConverter
             info.Site = "Tenor";
             Match mp4 = Regex.Match(html, @"https://media\d*\.tenor\.com/[^""'\s<>]+?\.mp4");
             if (mp4.Success) info.AltVideoUrl = mp4.Value;
+            return info;
+        }
+
+        // ------------------------------------------------------------------ Discord and KLIPY (Discord's GIFs since 2026)
+        /// A link copied in Discord: its picture proxy ("images-ext-1.discordapp.net/external/…/https/media.tenor.com/x.gif")
+        /// gives the real file; a resized preview ("media.discordapp.net/…?width=320") gives the full-size one.
+        static string Discord(string url)
+        {
+            Match ext = Regex.Match(url, @"discordapp\.net/external/[^/]+/(?:[^/]*/)?(https?)/(.+)$", RegexOptions.IgnoreCase);
+            if (ext.Success)
+            {
+                string inner = ext.Groups[2].Value;
+                int q = inner.IndexOf('?');
+                if (q >= 0 && !Regex.IsMatch(inner.Substring(q), @"[?&](ex|is|hm)=")) inner = inner.Substring(0, q);
+                return ext.Groups[1].Value + "://" + inner;
+            }
+            if (url.IndexOf("media.discordapp.net/attachments/", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                // keep Discord's signature (ex, is, hm), drop the preview size and format
+                int q = url.IndexOf('?');
+                string head = url.Replace("media.discordapp.net", "cdn.discordapp.com");
+                if (q < 0) return head;
+                head = head.Substring(0, head.IndexOf('?'));
+                List<string> keep = new List<string>();
+                foreach (string part in url.Substring(q + 1).Split('&'))
+                {
+                    string k = part.Split('=')[0].ToLowerInvariant();
+                    if (k.Length == 0 || k == "width" || k == "height" || k == "format" || k == "quality") continue;
+                    keep.Add(part);
+                }
+                return keep.Count > 0 ? head + "?" + string.Join("&", keep.ToArray()) : head;
+            }
+            return url;
+        }
+
+        static bool HasOg(string html) { return html != null && html.IndexOf("og:image", StringComparison.OrdinalIgnoreCase) >= 0 && html.IndexOf("Just a moment", StringComparison.OrdinalIgnoreCase) < 0; }
+
+        /// A KLIPY GIF page (klipy.com/gifs/name): the GIF itself, with its MP4 as the video choice.
+        static YtInfo Klipy(string url)
+        {
+            // KLIPY's pages sit behind Cloudflare, which turns away plain requests: then the page is read by
+            // Microsoft Edge itself, hidden (it passes the check like any browser would)
+            string html = null;
+            try { html = Get(url); } catch { }
+            if (!HasOg(html)) html = BrowserGet(url) ?? html;
+            if (!HasOg(html))
+            {
+                // still turned away: a real Edge window (off the screen) opens the page, passes the check, and reads it
+                using (BrowserSession b = BrowserSession.Start(url))
+                    if (b != null) html = b.HtmlWhen("meta[property='og:image']", 30000) ?? html;
+            }
+            if (!HasOg(html)) return null;
+            string title = Meta(html, "og:title") ?? "KLIPY GIF";
+            if (title.StartsWith("KLIPY: ")) title = title.Substring(7);
+            string gif = Meta(html, "og:image") ?? Meta(html, "twitter:image");
+            if (gif == null || !gif.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
+            {
+                Match g = Regex.Match(html, @"https://[\w.-]*klipy\.com/[^""'\s<>]+?\.gif");
+                if (g.Success) gif = g.Value;
+            }
+            string mp4 = Meta(html, "og:video:secure_url") ?? Meta(html, "og:video");
+            if (mp4 == null) { Match v = Regex.Match(html, @"https://[\w.-]*klipy\.com/[^""'\s<>]+?\.mp4"); if (v.Success) mp4 = v.Value; }
+            if (gif == null && mp4 == null) return null;
+            YtInfo info = Direct((gif ?? mp4).Replace("\\u002F", "/"), title, gif);
+            info.Site = "KLIPY";
+            if (gif != null && mp4 != null) info.AltVideoUrl = mp4;
             return info;
         }
 

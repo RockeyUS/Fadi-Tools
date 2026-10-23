@@ -139,7 +139,7 @@ namespace FileConverter
     {
         Rectangle head, body, emptyCard, nameR, typeR;
         DropZone drop;
-        Btn btnConvert, btnWindows, btnOther, btnSaveAs, btnPlay, btnRe;
+        Btn btnConvert, btnWindows, btnOther, btnSaveAs, btnPlay, btnRe, btnClear;
         Notice mismatch;
 
         Segments tabs;
@@ -164,6 +164,8 @@ namespace FileConverter
             drop = new DropZone(() => L.T("insp_drop"), () => L.T("insp_drop_sub")) { Tips = new[] { "tip_fake_ext", "tip_paste" } };
             drop.Glyph = Ico.Search;
             drop.Click += (s, e) => Browse();
+            drop.ExtrasTitle = () => L.T("recent");
+            drop.Extras = () => RecentFiles.Extras("inspect", 4, f => AcceptFiles(new[] { f }));
             btnConvert = new Btn(() => L.T("send_convert"), Ico.Sync, BtnKind.Primary);
             btnConvert.FontSize = 9.5f;
             btnConvert.Click += (s, e) => { if (file != null && SendToConverter != null) SendToConverter(file); };
@@ -173,6 +175,8 @@ namespace FileConverter
             btnRe.Click += (s, e) => { if (file != null && SendToRe != null) SendToRe(file); };
             btnOther = new Btn(() => L.T("open_other"), Ico.FolderOpen, BtnKind.Ghost);
             btnOther.Click += (s, e) => Browse();
+            btnClear = new Btn(() => "", Ico.Close, BtnKind.Ghost) { AccessibleName = L.T("insp_clear"), GlyphSize = 10f };
+            btnClear.Click += (s, e) => ClearFile();
             btnSaveAs = new Btn(() => sniff != null ? L.T("save_as_real", sniff.Ext) : "", Ico.Save, BtnKind.Secondary);
             btnSaveAs.Click += (s, e) => SaveAsReal();
             btnPlay = new Btn(() => L.T("play"), Ico.Play, BtnKind.Secondary);
@@ -194,7 +198,7 @@ namespace FileConverter
             encSeg.SelectedChanged += (s2, e2) => { text.Tag = null; ShowTab(); };
             preview = new FrameView();
             noPreview = new Label { TextAlign = ContentAlignment.MiddleCenter, Font = Theme.F(10f) };
-            Controls.AddRange(new Control[] { drop, btnConvert, btnWindows, btnOther, btnRe, btnSaveAs, btnPlay, mismatch, tabs, details, hex, text, strings, preview, noPreview, textMode, encSeg });
+            Controls.AddRange(new Control[] { drop, btnClear, btnConvert, btnWindows, btnOther, btnRe, btnSaveAs, btnPlay, mismatch, tabs, details, hex, text, strings, preview, noPreview, textMode, encSeg });
             EnableDrop(drop, details, hex, strings, preview);
             Restyle();
             ShowState();
@@ -223,7 +227,7 @@ namespace FileConverter
         {
             bool has = file != null;
             drop.Visible = !has;
-            foreach (Control c in new Control[] { btnConvert, btnWindows, btnOther, tabs }) c.Visible = has;
+            foreach (Control c in new Control[] { btnConvert, btnWindows, btnOther, btnClear, tabs }) c.Visible = has;
             btnRe.Visible = has && ReFits;
             bool mis = has && sniff != null && sniff.Ext.Length > 0 && !SameExt(Formats.Ext(file), sniff.Ext);
             mismatch.Visible = mis; btnSaveAs.Visible = mis;
@@ -259,8 +263,9 @@ namespace FileConverter
             body = new Rectangle(p, head.Bottom + Theme.S(16), W - p * 2, H - head.Bottom - Theme.S(16) - p);
             cards.Add(head); cards.Add(body);
             int x = head.X + ip, w = head.Width - ip * 2;
-            nameR = new Rectangle(x + Theme.S(66), head.Y + Theme.S(18), w - Theme.S(66), Theme.S(26));
-            typeR = new Rectangle(x + Theme.S(66), head.Y + Theme.S(44), w - Theme.S(66), Theme.S(20));
+            nameR = new Rectangle(x + Theme.S(66), head.Y + Theme.S(18), w - Theme.S(66) - Theme.S(44), Theme.S(26));
+            typeR = new Rectangle(x + Theme.S(66), head.Y + Theme.S(44), w - Theme.S(66) - Theme.S(44), Theme.S(20));
+            Place(btnClear, new Rectangle(head.Right - Theme.S(12) - Theme.S(34), head.Y + Theme.S(12), Theme.S(34), Theme.S(34)));
             int by = head.Y + Theme.S(74);
             int cw = Math.Max(Theme.S(160), btnConvert.PreferredWidth), ww = Math.Max(Theme.S(160), btnWindows.PreferredWidth), ow = Math.Max(Theme.S(140), btnOther.PreferredWidth);
             Place(btnConvert, new Rectangle(x, by, cw, Theme.S(36)));
@@ -338,8 +343,28 @@ namespace FileConverter
         public override void AcceptFiles(string[] paths)
         {
             if (paths == null || paths.Length == 0 || !File.Exists(paths[0])) return;
+            RecentFiles.Add("inspect", paths[0]);
             Inspect(paths[0]);
             if (FileShown != null) FileShown(paths[0]);
+        }
+        /// Back to the empty page (the × at the top of the file card, or Esc). Reverse engineer is emptied too.
+        public void ClearFile()
+        {
+            if (file == null) return;
+            token++;
+            file = null; sniff = null; media = null; hashes = null;
+            text.Tag = null; text.Text = ""; strings.Tag = null; if (web != null) { web.Tag = null; web.Visible = false; }
+            if (preview.Frame != null) { preview.Frame.Dispose(); preview.Frame = null; }
+            hex.Close(); hex.Invalidate();
+            details.Rows.Clear();
+            ShowState();
+            if (Cleared != null) Cleared();
+        }
+        public event Action Cleared;
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == Keys.Escape && file != null && Visible) { ClearFile(); return true; }
+            return base.ProcessCmdKey(ref msg, keyData);
         }
         /// The file being looked at now (the Reverse engineer tab gets the same one).
         public event Action<string> FileShown;

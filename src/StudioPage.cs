@@ -40,18 +40,18 @@ namespace FileConverter
             fileTabs.AddClicked += () => { ViewerPage v = NewTab(); Show(v); };
             Controls.Add(fileTabs);
             activePhoto = NewTab();
-            // the two sides of the Studio
-            tabs = new Segments(() => L.T("studio_t_photos_pdf"), () => L.T("studio_t_videos")) { FontSize = 9f, Surface = Surface.Background };
-            tabs.Glyphs = new[] { Ico.Photo, Ico.Video };
-            tabs.SelectedChanged += (s, e) => Show(tabs.SelectedIndex == 1 ? (Page)Videos : photoSide ?? activePhoto);
+            // the three sides of the Studio: photos, PDFs, videos
+            tabs = new Segments(() => L.T("studio_t_photos"), () => "PDF", () => L.T("studio_t_videos")) { FontSize = 9f, Surface = Surface.Background };
+            tabs.Glyphs = new[] { Ico.Photo, Ico.Doc, Ico.Video };
+            tabs.SelectedChanged += (s, e) => Show(tabs.SelectedIndex == 2 ? (Page)Videos : tabs.SelectedIndex == 1 ? (Page)Pdf : activePhoto);
             Controls.Add(tabs);
             active = activePhoto; photoSide = activePhoto; activePhoto.Visible = true;
-            // close the open photo/video (several photo tabs: close this tab); in the PDF tools: back to the viewer
-            bClose = new Btn(() => active == Pdf ? L.T("studio_back") : L.T("studio_close"), Ico.Close, BtnKind.Secondary) { Visible = false };
+            // close the open photo, PDF or video (several photo tabs: close this tab)
+            bClose = new Btn(() => L.T("studio_close"), Ico.Close, BtnKind.Secondary) { Visible = false };
             bClose.FontSize = 9f;
             bClose.Click += (s, e) =>
             {
-                if (active == Pdf) { Show(activePhoto); return; }
+                if (active == Pdf) { if (Pdf.PdfPath != null) Pdf.CloseFile(); UpdateClose(); return; }
                 if (active == Videos) { if (Videos.CloseFile()) Show(activePhoto); UpdateClose(); return; }
                 CloseTab(activePhoto);
             };
@@ -76,6 +76,7 @@ namespace FileConverter
                 else Show(Pdf);
             };
             v.DropTo = AcceptFiles;
+            v.PdfPicked += f => { if (!v.HasFile && photoTabs.Count > 1) DropTab(v); OpenInPdfTools(f); };
             v.Visible = false;
             v.Toast = Toast; v.Owner = Owner; v.Glyph = Glyph;
             Controls.Add(v);
@@ -122,9 +123,20 @@ namespace FileConverter
             return v;
         }
 
+        /// A PDF opens with the PDF tools: its pages, and everything that can be done to them.
+        public void OpenInPdfTools(string pdf)
+        {
+            if (Pdf.Busy) return;
+            Pdf.StartMode(1, false);
+            Show(Pdf);
+            Pdf.OpenPdf(pdf);
+            UpdateClose();
+        }
+
         /// Opens photos (or a document) on the photo side; newTab = in a tab of their own when this one is in use.
         void OpenPhotos(string[] paths, bool newTab)
         {
+            if (paths.Length == 1 && Formats.Ext(paths[0]) == "pdf") { OpenInPdfTools(paths[0]); return; }
             ViewerPage v = newTab ? TabForNew() : activePhoto;
             Show(v);
             if (paths.Length == 1 && DocPages.IsDoc(paths[0])) v.OpenDocument(paths[0]);
@@ -141,7 +153,7 @@ namespace FileConverter
             if (p != Videos) photoSide = p;
             foreach (ViewerPage v in photoTabs) v.Visible = v == p;
             Videos.Visible = p == Videos; Pdf.Visible = p == Pdf;
-            tabs.SetQuietly(p == Videos ? 1 : 0);
+            tabs.SetQuietly(p == Videos ? 2 : p == Pdf ? 1 : 0);
             DoLayout();
             UpdateClose();
             p.OnShown();
@@ -181,8 +193,8 @@ namespace FileConverter
 
         void UpdateClose()
         {
-            bool v = active == Pdf ? true : active == Videos ? Videos.HasFile : (activePhoto.HasFile || photoTabs.Count > 1);
-            bClose.Glyph = active == Pdf ? Ico.Back : Ico.Close;
+            bool v = active == Pdf ? Pdf.PdfPath != null : active == Videos ? Videos.HasFile : (activePhoto.HasFile || photoTabs.Count > 1);
+            bClose.Glyph = Ico.Close;
             bool layout = false;
             if (bClose.Wanted != v) { bClose.Visible = v; if (v) bClose.BringToFront(); layout = true; }
             else bClose.Invalidate();
@@ -193,7 +205,7 @@ namespace FileConverter
         public override void DoLayout()
         {
             if (fileTabs == null || activePhoto == null) return;
-            int tw = Math.Min(Theme.S(320), Math.Max(Theme.S(230), Width / 4));
+            int tw = Math.Min(Theme.S(360), Math.Max(Theme.S(250), Width / 4));
             int w = Math.Max(Theme.S(110), bClose.PreferredWidth + Theme.S(12));
             bool showTabs = TabsShown;
             List<Page> all = new List<Page>(photoTabs); all.Add(Videos); all.Add(Pdf);
@@ -205,7 +217,7 @@ namespace FileConverter
                 p.Bounds = ClientRectangle;
             }
             active.DoLayout();
-            tabs.Glyphs = tw >= Theme.S(250) ? new[] { Ico.Photo, Ico.Video } : null;
+            tabs.Glyphs = tw >= Theme.S(300) ? new[] { Ico.Photo, Ico.Doc, Ico.Video } : null;
             tabs.Bounds = Theme.Mirror(new Rectangle(Width - Pad - tw, Theme.S(30), tw, Theme.S(38)), Width);
             bClose.Bounds = Theme.Mirror(new Rectangle(Width - Pad - tw - Theme.S(10) - w, Theme.S(30), w, Theme.S(38)), Width);
             bClose.Surface = Surface.Background;
@@ -234,6 +246,8 @@ namespace FileConverter
             bool allPdf = paths.Length > 1;
             foreach (string p in paths) if (Formats.Ext(p) != "pdf") allPdf = false;
             if (allPdf) { Pdf.StartMode(0, false); Show(Pdf); Pdf.AcceptFiles(paths); return; }
+            // one PDF: straight into the PDF tools (pages, Edit text, Add text & pictures, sign…), all in one place
+            if (paths.Length == 1 && Formats.Ext(paths[0]) == "pdf") { OpenInPdfTools(paths[0]); return; }
             if (Formats.Ext(paths[0]) == TrimPage.ProjectExt) { Show(Videos); Videos.OpenProject(paths[0], false); return; }
             Category c = Formats.CategoryOf(Formats.Ext(paths[0]));
             // pictures dropped on a video being edited go on top of it

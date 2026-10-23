@@ -31,8 +31,21 @@ namespace FileConverter
 
         public DuplicatesPage() : base("dup_title", "dup_sub")
         {
-            drop = new DropZone(() => L.T("dup_drop"), () => L.T("dup_drop_sub")) { Glyph = Ico.Copy, Tips = new[] { "tip_dup_bin", "tip_palette" } };
+            drop = new DropZone(() => L.T("dup_drop"), () => L.T("dup_drop_sub")) { Glyph = Ico.Copy, Tips = new[] { "tip_dup_bin", "tip_dup_content" } };
             drop.Click += (s, e) => Browse();
+            // one click: look in a common folder straight away
+            drop.ExtrasTitle = () => L.T("dup_quick");
+            drop.Extras = () =>
+            {
+                List<DropExtra> l = new List<DropExtra>();
+                foreach (string[] f in new[] { new[] { Paths.Downloads, "downloads", Ico.Download }, new[] { Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "dup_pictures", Ico.Photo }, new[] { Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "dup_desktop", "\uE7F4" } })
+                {
+                    string dir = f[0];
+                    if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
+                    l.Add(new DropExtra { Text = L.T(f[1]), Glyph = f[2], Run = () => { AcceptFiles(new[] { dir }); Scan(); } });
+                }
+                return l;
+            };
             kind = new Segments(() => L.T("dup_k_all"), () => L.T("dup_k_media"), () => L.T("dup_k_music"), () => L.T("dup_k_docs")) { FontSize = 8.75f };
             int k0; int.TryParse(Settings.Get("DupKind", "0"), out k0); kind.SetSilently(Math.Max(0, Math.Min(3, k0)));
             kind.SelectedChanged += (s, e) => Settings.Set("DupKind", kind.SelectedIndex.ToString());

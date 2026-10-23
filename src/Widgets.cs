@@ -25,7 +25,7 @@ namespace FileConverter
     {
         public List<FileItem> Items = new List<FileItem>();
         public bool Locked;
-        bool hoverX;
+        bool hoverX, hoverShow;
         public event Action Changed;
         public event Action<FileItem> Opened;
 
@@ -49,15 +49,33 @@ namespace FileConverter
             return Theme.RTL ? new Rectangle(r.X + Theme.S(10), x.Y, s, s) : x;
         }
 
+        /// A finished file can be shown in its folder: "Show", under its "Done".
+        static bool CanShow(FileItem it) { return it.State == ItemState.Done && !string.IsNullOrEmpty(it.Output) && System.IO.File.Exists(it.Output); }
+
+        Rectangle ShowRect(Rectangle row)
+        {
+            Rectangle b = previews ? new Rectangle(row.X, row.Y + (row.Height - Theme.S(64)) / 2, row.Width, Theme.S(64)) : row;
+            int xw = Theme.S(50), statusW = Theme.S(130);
+            Rectangle pill = Mir(new Rectangle(b.Right - xw - statusW, b.Y + Theme.S(12), statusW - Theme.S(8), Theme.S(22)), b);
+            int w = Theme.Measure(L.T("show_short"), Theme.F(8.5f, FontStyle.Bold)) + Theme.S(32);
+            return Theme.RTL ? new Rectangle(pill.X, pill.Bottom + Theme.S(3), w, Theme.S(22)) : new Rectangle(pill.Right - w, pill.Bottom + Theme.S(3), w, Theme.S(22));
+        }
+
         protected override void RowHover(int index, Point local, Rectangle row)
         {
             bool x = !Locked && XRect(row).Contains(local);
-            if (x != hoverX) { hoverX = x; Invalidate(); }
-            Cursor = x ? Cursors.Hand : Cursors.Default;
+            bool sh = !x && index >= 0 && index < Items.Count && CanShow(Items[index]) && ShowRect(row).Contains(local);
+            if (x != hoverX || sh != hoverShow) { hoverX = x; hoverShow = sh; Invalidate(); }
+            Cursor = x || sh ? Cursors.Hand : Cursors.Default;
         }
 
         protected override void RowClick(int index, Point local, Rectangle row)
         {
+            if (index >= 0 && index < Items.Count && CanShow(Items[index]) && ShowRect(row).Contains(local) && !(!Locked && XRect(row).Contains(local)))
+            {
+                try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + Items[index].Output + "\""); } catch { }
+                return;
+            }
             if (!Locked && XRect(row).Contains(local))
             {
                 Items.RemoveAt(index);
@@ -149,6 +167,18 @@ namespace FileConverter
                 }
                 else Theme.Text(g, label, pf, fg, pr, Align.Center);
             }
+            if (CanShow(it))
+            {
+                // "Show": opens the folder with the new file picked
+                Rectangle sr = ShowRect(whole);
+                bool hs = hover && hoverShow;
+                if (hs) Theme.FillRound(g, sr, sr.Height / 2f, Theme.Pressed);
+                Color sc = hs ? Theme.Ink : Theme.InkSoft;
+                Rectangle gr = Theme.RTL ? new Rectangle(sr.Right - Theme.S(24), sr.Y, Theme.S(18), sr.Height) : new Rectangle(sr.X + Theme.S(7), sr.Y, Theme.S(18), sr.Height);
+                Theme.Glyph(g, Ico.FolderOpen, 7.5f, sc, gr);
+                Rectangle tr = Theme.RTL ? new Rectangle(sr.X + Theme.S(6), sr.Y, sr.Width - Theme.S(30), sr.Height) : new Rectangle(sr.X + Theme.S(25), sr.Y, sr.Width - Theme.S(30), sr.Height);
+                Theme.Text(g, L.T("show_short"), Theme.F(8.5f, FontStyle.Bold), sc, tr, Align.Center);
+            }
 
             if (!Locked && hover)
             {
@@ -211,11 +241,18 @@ namespace FileConverter
             Theme.FillRound(g, icon, Theme.S(9), Theme.Selected);
             Theme.Glyph(g, Settings.OutputIsDefault ? Ico.Download : Ico.Folder, 12f, Theme.Ink, icon);
             int tx = Theme.S(12) + ic + Theme.S(12);
-            int cw = Theme.S(70);
+            // "Change" sits in its own outlined pill so it reads as a button, not as more text
+            Font cf = Theme.F(9f, FontStyle.Bold);
+            int pw = Theme.Measure(L.T("change"), cf) + Theme.S(24), ph = Theme.S(28);
+            int cw = pw + Theme.S(12) + Theme.S(10);
             Theme.Text(g, name, Theme.F(10f, FontStyle.Bold), Theme.Ink, Theme.Mirror(new Rectangle(tx, Theme.S(8), Width - tx - cw, Height / 2 - Theme.S(6)), Width), Align.Start, false);
-            Theme.Text(g, dir, Theme.F(8.25f), Theme.InkSoft, Theme.Mirror(new Rectangle(tx, Height / 2, Width - tx - cw, Height / 2 - Theme.S(6)), Width), Align.Start, false, false, true);
-            Rectangle ch = Theme.Mirror(new Rectangle(Width - cw, 0, cw - Theme.S(10), Height), Width);
-            Theme.Text(g, L.T("change"), Theme.F(9f, FontStyle.Bold), Theme.Mix(Theme.InkSoft, Theme.Ink, hot), ch, Align.End);
+            // long paths lose their middle (C:\Users\...\Downloads), not their end
+            Rectangle pr = Theme.Mirror(new Rectangle(tx, Height / 2, Width - tx - cw, Height / 2 - Theme.S(6)), Width);
+            TextFormatFlags pf = TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.Top | TextFormatFlags.PathEllipsis | (Theme.RTL ? TextFormatFlags.Right : TextFormatFlags.Left);
+            TextRenderer.DrawText(g, dir, Theme.F(8.25f), pr, Theme.InkSoft, pf);
+            Rectangle ch = Theme.Mirror(new Rectangle(Width - Theme.S(12) - pw, (Height - ph) / 2, pw, ph), Width);
+            Theme.StrokeRound(g, ch, Theme.S(8), Theme.Mix(Theme.FieldBorder, Theme.InkFaint, hot));
+            Theme.Text(g, L.T("change"), cf, Theme.Ink, ch, Align.Center);
             PaintFocus(g, r, Theme.S(11));
         }
     }

@@ -301,7 +301,7 @@ namespace FileConverter
             bool ah = hoverAction == i;
             if (it.State == ItemState.Done && it.Output != null)
             {
-                Theme.FillRound(g, ar, Theme.S(9), ah ? Theme.Mix(Theme.AccentColor, Color.Black, 0.1f) : Theme.AccentColor);
+                Theme.FillRound(g, ar, Theme.S(9), ah ? Theme.Mix(Theme.AccentFill, Color.Black, 0.1f) : Theme.AccentFill);
                 Theme.Glyph(g, Ico.FolderOpen, 10f, Theme.PrimaryInk, ar);
             }
             else if (!Locked && it.State != ItemState.Working)
@@ -316,6 +316,14 @@ namespace FileConverter
     public class CompressPage : Page
     {
         Rectangle left, opts, acts, filesTitleR, headR, footR, levelLblR, hintR, targetLblR, mbR, targetHintR, engineR, statusR, actsLblR;
+        // "New size %": the same slider as the Donut Wheel's Compress (50% = half the size, 200% = twice as big)
+        readonly Segments mode;
+        readonly Slider pct;
+        Rectangle bigR, subR, pctLblR, scaleR, othersR;
+        float shownBytes = -1;
+        readonly System.Windows.Forms.Timer glide = new System.Windows.Forms.Timer { Interval = 15 };
+        bool PctMode { get { return mode != null && mode.SelectedIndex == 0; } }
+        int Percent { get { return CompressWindow.Snap(pct.Value); } }
         readonly Btn btnAdd, btnClear, btnGo, btnShow, btnMore, btnWipe, btnView;
         bool viewFits = true;
         // "Grow smaller files to this size": pictures, videos and songs under the size are made bigger instead of skipped
@@ -362,17 +370,33 @@ namespace FileConverter
             presets.Items.Add(new PresetChips.Preset { Name = L.T("cmp_p_avatar"), Limit = 1, Value = 1 });
             presets.Picked += i => UsePresetIndex(i);
             presets.Selected = -1;
-            btnGo = new Btn(() => running ? L.T("cancel") : (list.Items.Count > 1 ? L.T("cmp_go_n", list.Items.Count) : L.T("cmp_go")), "", BtnKind.Primary);
+            btnGo = new Btn(() => running ? L.T("cancel") : PctMode && Percent > 100 ? L.T("cmp_go_bigger") : (list.Items.Count > 1 ? L.T("cmp_go_n", list.Items.Count) : L.T("cmp_go")), "", BtnKind.Primary);
             btnGo.FontSize = 11f; btnGo.Radius = 10;
             btnGo.Click += (s, e) => { if (running) { cancel = true; SetStatus(L.T("cancelling"), Theme.InkSoft); } else Start(); };
-            btnShow = new Btn(() => doneCount == 1 ? L.T("show_file") : L.T("open_folder"), Ico.FolderOpen, BtnKind.Ghost) { AlignStart = true };
+            btnShow = new Btn(() => doneCount == 1 ? L.T("show_file") : L.T("open_folder"), Ico.FolderOpen, BtnKind.Secondary);
             btnShow.Click += (s, e) => OpenOutput();
             btnMore = new Btn(() => L.T("cmp_add_more"), Ico.Add, BtnKind.Ghost) { AlignStart = true };
             btnMore.Click += (s, e) => Browse();
             btnWipe = new Btn(() => L.T("cmp_clear_list"), Ico.Delete, BtnKind.Ghost) { AlignStart = true };
             btnWipe.Click += (s, e) => ClearList();
             progress.Visible = false;
-            Controls.AddRange(new Control[] { btnAdd, btnClear, btnView, list, drop, level, targetMb, presets, progress, btnGo, btnShow, btnMore, btnWipe, grow });
+            mode = new Segments(() => L.T("cmp_mode_pct"), () => L.T("cmp_mode_level"));
+            mode.SetSilently(Settings.Get("CompressMode", "pct") == "pct" ? 0 : 1);
+            mode.SelectedChanged += (s, e) => { Settings.Set("CompressMode", PctMode ? "pct" : "level"); shownBytes = -1; UpdateState(); };
+            int savedPct; int.TryParse(Settings.Get("CompressPct", "50"), out savedPct);
+            pct = new Slider { Min = 10, Max = 200, Format = v => CompressWindow.Snap(v) + "%" };
+            pct.SetValue(Math.Max(10, Math.Min(200, savedPct <= 0 ? 50 : savedPct)), false);
+            pct.ValueChanged += (s, e) => { glide.Start(); btnGo.Invalidate(); UpdateGoEnabled(); Invalidate(); };
+            pct.Committed += (s, e) => Settings.Set("CompressPct", Percent.ToString(CultureInfo.InvariantCulture));
+            glide.Tick += (s, e) =>
+            {
+                float target = EstimateBytes();
+                if (shownBytes < 0 || !Fx.Motion) shownBytes = target;
+                else shownBytes += (target - shownBytes) * Animator.Rate(0.25f);
+                if (Math.Abs(shownBytes - target) < Math.Max(1, target * 0.002f)) { shownBytes = target; glide.Stop(); }
+                Invalidate(Rectangle.Union(M(bigR), M(subR)));
+            };
+            Controls.AddRange(new Control[] { btnAdd, btnClear, btnView, list, drop, mode, pct, level, targetMb, presets, progress, btnGo, btnShow, btnMore, btnWipe, grow });
             grow.SetSilently(Settings.Get("CompressGrow", "0") == "1");
             grow.CheckedChanged += (s, e) => Settings.Set("CompressGrow", grow.Checked ? "1" : "0");
             EnableDrop(list, drop);
@@ -409,6 +433,8 @@ namespace FileConverter
         /// For the right-click menu and the quick search: "Compress for Discord" etc. (limit in MB, 0 = none).
         public void UsePreset(string name)
         {
+            if (mode.SelectedIndex != 1) mode.SelectedIndex = 1;   // a size limit lives under "Quality & limit"
+
             for (int i = 0; i < presets.Items.Count; i++) if (string.Equals(presets.Items[i].Name, name, StringComparison.OrdinalIgnoreCase) || (name == "email" && i == 1) || (name == "avatar" && i == 2)) { UsePresetIndex(i); return; }
             UsePresetIndex(-1);
         }
@@ -445,7 +471,7 @@ namespace FileConverter
 
         public override void DoLayout()
         {
-            int W = Width, H = Height, p = Pad, gap = Theme.S(18), rightW = Theme.S(320), ip = Theme.S(20);
+            int W = Width, H = Height, p = Pad, gap = Theme.S(18), rightW = Theme.S(320), ip = Theme.S(20), w0 = rightW;
             left = new Rectangle(p, Top0, W - p * 2 - rightW - gap, H - Top0 - p);
             int rx = left.Right + gap;
             cards.Clear(); cards.Add(left);
@@ -469,40 +495,57 @@ namespace FileConverter
             Place(list, new Rectangle(left.X + Theme.S(6), headR.Bottom + Theme.S(2), left.Width - Theme.S(12), footR.Y - headR.Bottom - Theme.S(6)));
             Place(drop, new Rectangle(left.X + ip, left.Y + Theme.S(62), left.Width - ip * 2, left.Height - Theme.S(62) - ip));
 
-            // right: the big button, options, actions
-            int y = Top0, w = rightW;
-            Place(btnGo, new Rectangle(rx, y, w, Theme.S(52))); y += Theme.S(60);
-            if (progress.Visible || statusText.Length > 0)
-            {
-                Place(progress, new Rectangle(rx + Theme.S(4), y + Theme.S(2), w - Theme.S(8), Theme.S(5)));
-                statusR = new Rectangle(rx + Theme.S(4), y + Theme.S(10), w - Theme.S(8), Theme.S(36)); y += Theme.S(50);
-            }
-            else statusR = Rectangle.Empty;
-            int x = rx + ip, cw = w - ip * 2;
-            int oy = y + Theme.S(16);
-            levelLblR = new Rectangle(x, oy, cw, Theme.S(18)); oy += Theme.S(24);
-            Place(level, new Rectangle(x, oy, cw, Theme.S(36))); oy += Theme.S(42);
-            hintR = new Rectangle(x, oy, cw, Theme.S(36)); oy += Theme.S(44);
-            targetLblR = new Rectangle(x, oy, cw, Theme.S(18)); oy += Theme.S(24);
-            Place(presets, new Rectangle(x, oy, cw, Theme.S(44))); oy += Theme.S(52);
-            Place(targetMb, new Rectangle(x, oy, cw - Theme.S(52), Theme.S(40)));
-            mbR = new Rectangle(x + cw - Theme.S(44), oy, Theme.S(44), Theme.S(40)); oy += Theme.S(46);
-            targetHintR = new Rectangle(x, oy, cw, Theme.S(34)); oy += Theme.S(40);
-            growR = new Rectangle(x, oy, cw - Theme.S(58), Theme.S(30));
-            Place(grow, new Rectangle(x + cw - Theme.S(46), oy + Theme.S(3), Theme.S(46), Theme.S(24))); oy += Theme.S(38);
-            engineR = new Rectangle(x, oy, cw, Theme.S(40)); oy += Theme.S(54);
-            opts = new Rectangle(rx, y, w, oy - y);
+            // right: one card with the options, and the main button at its bottom (like Convert)
+            int x = rx + ip, cw = w0 - ip * 2;
+            opts = new Rectangle(rx, Top0, w0, H - Top0 - p);
             cards.Add(opts);
-            int ay = opts.Bottom + gap;
-            actsLblR = new Rectangle(x, ay + Theme.S(14), cw, Theme.S(18));
-            int ry = ay + Theme.S(38);
-            btnShow.Visible = doneCount > 0;
-            if (btnShow.Visible) { Place(btnShow, new Rectangle(rx + Theme.S(8), ry, w - Theme.S(16), Theme.S(38))); ry += Theme.S(40); }
-            Place(btnMore, new Rectangle(rx + Theme.S(8), ry, w - Theme.S(16), Theme.S(38))); ry += Theme.S(40);
-            btnWipe.Visible = !empty;
-            if (btnWipe.Visible) { Place(btnWipe, new Rectangle(rx + Theme.S(8), ry, w - Theme.S(16), Theme.S(38))); ry += Theme.S(40); }
-            acts = new Rectangle(rx, ay, w, ry - ay + Theme.S(8));
-            if (acts.Bottom < H - p) cards.Add(acts);
+            int bottom = opts.Bottom - ip;
+            int bh = Theme.S(50);
+            btnShow.Visible = doneCount > 0 && !running;
+            if (btnShow.Visible)
+            {
+                int ow = (cw - Theme.S(10)) * 2 / 5;
+                Place(btnShow, new Rectangle(x, bottom - bh, ow, bh));
+                Place(btnGo, new Rectangle(x + ow + Theme.S(10), bottom - bh, cw - ow - Theme.S(10), bh));
+            }
+            else Place(btnGo, new Rectangle(x, bottom - bh, cw, bh));
+            bool showStatus = progress.Visible || statusText.Length > 0;
+            statusR = showStatus ? new Rectangle(x, bottom - bh - Theme.S(46), cw, Theme.S(38)) : Rectangle.Empty;
+            Place(progress, new Rectangle(x, bottom - bh - Theme.S(54), cw, Theme.S(6)));
+            int limit = bottom - bh - (showStatus ? Theme.S(62) : Theme.S(14));
+            btnMore.Visible = btnWipe.Visible = false;
+
+            int oy = opts.Y + Theme.S(18);
+            Place(mode, new Rectangle(x, oy, cw, Theme.S(36))); oy += Theme.S(48);
+            bool pm = PctMode;
+            pct.Visible = pm; level.Visible = targetMb.Visible = presets.Visible = grow.Visible = !pm;
+            if (pm)
+            {
+                // the new size, big, then the slider under it (like the Donut Wheel's Compress)
+                bigR = new Rectangle(x, oy, cw, Theme.S(40)); subR = new Rectangle(x, oy + Theme.S(40), cw, Theme.S(36)); oy += Theme.S(80);
+                pctLblR = new Rectangle(x, oy, cw, Theme.S(18)); oy += Theme.S(20);
+                Place(pct, new Rectangle(x - Theme.S(8), oy, cw + Theme.S(8), Theme.S(36))); oy += Theme.S(36);
+                scaleR = new Rectangle(x, oy, cw - Theme.S(48), Theme.S(18)); oy += Theme.S(26);
+                othersR = OthersCount() > 0 ? new Rectangle(x, oy, cw, Theme.S(36)) : Rectangle.Empty;
+                if (!othersR.IsEmpty) oy += Theme.S(42);
+            }
+            else
+            {
+                // short window: the hints under the choices step aside so nothing overlaps the button
+                bool roomy = limit - oy > Theme.S(390);
+                levelLblR = new Rectangle(x, oy, cw, Theme.S(18)); oy += Theme.S(24);
+                Place(level, new Rectangle(x, oy, cw, Theme.S(36))); oy += Theme.S(42);
+                hintR = roomy ? new Rectangle(x, oy, cw, Theme.S(36)) : Rectangle.Empty; if (roomy) oy += Theme.S(44); else oy += Theme.S(10);
+                targetLblR = new Rectangle(x, oy, cw, Theme.S(18)); oy += Theme.S(24);
+                Place(presets, new Rectangle(x, oy, cw, Theme.S(44))); oy += Theme.S(52);
+                Place(targetMb, new Rectangle(x, oy, cw - Theme.S(52), Theme.S(40)));
+                mbR = new Rectangle(x + cw - Theme.S(44), oy, Theme.S(44), Theme.S(40)); oy += Theme.S(46);
+                targetHintR = roomy ? new Rectangle(x, oy, cw, Theme.S(34)) : Rectangle.Empty; if (roomy) oy += Theme.S(40);
+                growR = new Rectangle(x, oy, cw - Theme.S(58), Theme.S(30));
+                Place(grow, new Rectangle(x + cw - Theme.S(46), oy + Theme.S(3), Theme.S(46), Theme.S(24))); oy += Theme.S(38);
+            }
+            // the note about the graphics card, when there's room for it
+            engineR = oy + Theme.S(40) <= limit ? new Rectangle(x, oy + Theme.S(4), cw, Theme.S(40)) : Rectangle.Empty;
             Invalidate();
         }
 
@@ -545,20 +588,49 @@ namespace FileConverter
 
             // options card
             Func<Rectangle, Rectangle> m0 = r => M(r);
-            Caps(g, this, L.T("cmp_how"), levelLblR, m0);
-            Label(g, L.T(new[] { "cmp_hint_light", "cmp_hint_balanced", "cmp_hint_strong" }[level.SelectedIndex]), Theme.F(8.75f), Theme.InkSoft, hintR, Align.Start, false, true);
-            Caps(g, this, L.T("cmp_fit"), targetLblR, m0);
-            Label(g, "MB", Theme.F(10f, FontStyle.Bold), Theme.InkSoft, mbR, Align.Center);
-            string th = presets.Selected >= 0 ? L.T("cmp_p_hint", presets.Items[presets.Selected].Name, presets.Items[presets.Selected].Limit) : L.T("cmp_target_hint");
-            Label(g, th, Theme.F(8.5f), presets.Selected >= 0 ? Theme.InkSoft : Theme.InkFaint, targetHintR, Align.Start, false, true);
-            Label(g, L.T("cmp_grow"), Theme.F(9f), Theme.Ink, growR, Align.Start, false, true);
-            Rectangle er = M(engineR);
-            Theme.FillRound(g, er, Theme.S(10), Theme.CardInner);
-            Rectangle gi = M(new Rectangle(engineR.X + Theme.S(8), engineR.Y, Theme.S(26), engineR.Height));
-            bool fast = gpuChecked && gpu.Length > 0;
-            Theme.Glyph(g, fast ? "" : Ico.Info, 9.5f, fast ? Theme.AccentColor : Theme.InkFaint, gi);
-            string et = !gpuChecked ? L.T("cmp_engine_check") : fast ? L.T("cmp_engine_gpu", gpu) : L.T("cmp_engine_cpu");
-            Label(g, et, Theme.F(8.5f), Theme.InkSoft, new Rectangle(engineR.X + Theme.S(36), engineR.Y, engineR.Width - Theme.S(44), engineR.Height), Align.Start, true, true);
+            if (PctMode)
+            {
+                int pc = Percent;
+                long now = AimBytes();
+                if (now > 0)
+                {
+                    long shown = (long)(shownBytes < 0 ? EstimateBytes() : shownBytes);
+                    Color ink = pc < 100 ? Theme.Ink : pc == 100 ? Theme.InkSoft : Theme.AccentColor;
+                    Label(g, "≈ " + Theme.HumanSize(shown), Theme.Serif(18f), ink, bigR, Align.Start, true);
+                    string what = pc == 100 ? L.T("cmp_pct_same") : pc < 100 ? L.T("cmp_pct_smaller", 100 - pc) : L.T("cmp_pct_bigger", (pc / 100f).ToString("0.##", CultureInfo.CurrentCulture));
+                    Label(g, L.T("cmp_pct_of", pc, Theme.HumanSize(now)) + "  ·  " + what, Theme.F(8.75f), Theme.InkSoft, subR, Align.Start, false, true);
+                }
+                else
+                {
+                    Label(g, pc + "%", Theme.Serif(18f), Theme.Ink, bigR, Align.Start, true);
+                    Label(g, L.T(list.Items.Count == 0 ? "cmp_pct_empty" : "cmp_pct_none"), Theme.F(8.75f), Theme.InkFaint, subR, Align.Start, false, true);
+                }
+                Caps(g, this, L.T("cmp_pct_label"), pctLblR, m0);
+                Label(g, L.T("cmp_pct_left"), Theme.F(8f), Theme.InkFaint, scaleR, Align.Start);
+                if (pct.Max > 100) Label(g, L.T("cmp_pct_right"), Theme.F(8f), Theme.InkFaint, scaleR, Align.End);
+                int others = OthersCount();
+                if (others > 0 && !othersR.IsEmpty) Label(g, (others == 1 ? L.T("cmp_pct_other1") : L.T("cmp_pct_others", others)), Theme.F(8.5f), Theme.InkFaint, othersR, Align.Start, false, true);
+            }
+            else
+            {
+                Caps(g, this, L.T("cmp_how"), levelLblR, m0);
+                if (!hintR.IsEmpty) Label(g, L.T(new[] { "cmp_hint_light", "cmp_hint_balanced", "cmp_hint_strong" }[level.SelectedIndex]), Theme.F(8.75f), Theme.InkSoft, hintR, Align.Start, false, true);
+                Caps(g, this, L.T("cmp_fit"), targetLblR, m0);
+                Label(g, "MB", Theme.F(10f, FontStyle.Bold), Theme.InkSoft, mbR, Align.Center);
+                string th = presets.Selected >= 0 ? L.T("cmp_p_hint", presets.Items[presets.Selected].Name, presets.Items[presets.Selected].Limit) : L.T("cmp_target_hint");
+                if (!targetHintR.IsEmpty) Label(g, th, Theme.F(8.5f), presets.Selected >= 0 ? Theme.InkSoft : Theme.InkFaint, targetHintR, Align.Start, false, true);
+                Label(g, L.T("cmp_grow"), Theme.F(9f), Theme.Ink, growR, Align.Start, false, true);
+            }
+            if (!engineR.IsEmpty)
+            {
+                Rectangle er = M(engineR);
+                Theme.FillRound(g, er, Theme.S(10), Theme.CardInner);
+                Rectangle gi = M(new Rectangle(engineR.X + Theme.S(8), engineR.Y, Theme.S(26), engineR.Height));
+                bool fast = gpuChecked && gpu.Length > 0;
+                Theme.Glyph(g, fast ? "" : Ico.Info, 9.5f, fast ? Theme.AccentColor : Theme.InkFaint, gi);
+                string et = !gpuChecked ? L.T("cmp_engine_check") : fast ? L.T("cmp_engine_gpu", gpu) : L.T("cmp_engine_cpu");
+                Label(g, et, Theme.F(8.5f), Theme.InkSoft, new Rectangle(engineR.X + Theme.S(36), engineR.Y, engineR.Width - Theme.S(44), engineR.Height), Align.Start, true, true);
+            }
 
             // actions card
             if (cards.Contains(acts)) Caps(g, this, L.T("cmp_actions"), actsLblR, m0);
@@ -566,6 +638,27 @@ namespace FileConverter
         }
 
         void SetStatus(string t, Color c) { statusText = t; statusColor = c; DoLayout(); }
+
+        /// Together, the listed files whose size can be aimed at (pictures, videos, songs).
+        long AimBytes() { long t = 0; foreach (FileItem it in list.Items) if (CompressWindow.CanAim(it.Path)) t += it.Size; return t; }
+        /// Listed files that can't aim at a size (PDFs, Office files…): they're made smaller the usual way.
+        int OthersCount() { int n = 0; foreach (FileItem it in list.Items) if (!CompressWindow.CanAim(it.Path)) n++; return n; }
+        float EstimateBytes() { return AimBytes() * Percent / 100f; }
+
+        /// Above 100% only when every listed file can be made bigger.
+        void FitSliderMax()
+        {
+            bool canGrow = true;
+            foreach (FileItem it in list.Items) if (!CompressWindow.CanAim(it.Path) || !Compressor.CanGrow(it.Path)) canGrow = false;
+            float max = canGrow ? 200 : 100;
+            if (pct.Max != max) { pct.Max = max; if (pct.Value > max) pct.SetValue(max, false); pct.Invalidate(); }
+        }
+
+        void UpdateGoEnabled()
+        {
+            bool ok = running || (list.Items.Count > 0 && !(PctMode && Percent == 100 && OthersCount() == 0));
+            if (btnGo.Enabled != ok) { btnGo.Enabled = ok; btnGo.Invalidate(); }
+        }
 
         /// How much smaller, in whole percent (never "100%" while something is left).
         static long Pct(long before, long after)
@@ -579,10 +672,13 @@ namespace FileConverter
         {
             bool empty = list.Items.Count == 0;
             drop.Visible = empty; list.Visible = !empty; btnClear.Visible = !empty; btnView.Visible = !empty && viewFits;
-            btnClear.Enabled = btnAdd.Enabled = btnMore.Enabled = btnWipe.Enabled = level.Enabled = targetMb.Enabled = presets.Enabled = grow.Enabled = !running;
+            btnClear.Enabled = btnAdd.Enabled = btnMore.Enabled = btnWipe.Enabled = level.Enabled = targetMb.Enabled = presets.Enabled = grow.Enabled = mode.Enabled = pct.Enabled = !running;
+            FitSliderMax();
+            if (!glide.Enabled) shownBytes = -1;
             btnWipe.InkColor = Theme.Error;
             list.Locked = running;
             btnGo.Enabled = running || !empty;
+            UpdateGoEnabled();
             btnGo.Kind = running ? BtnKind.Secondary : BtnKind.Primary;
             btnGo.Glyph = running ? Ico.Stop : "";
             DoLayout();
@@ -621,18 +717,20 @@ namespace FileConverter
         {
             if (list.Items.Count == 0) return;
             double mb = 0;
-            double.TryParse(targetMb.Box.Text.Trim().Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out mb);
+            int pc = PctMode ? Percent : 0;
+            if (pc == 0) double.TryParse(targetMb.Box.Text.Trim().Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out mb);
+            else if (pc == 100 && OthersCount() == 0) return;
             string single = null, outDir;
             if (list.Items.Count == 1)
             {
                 FileItem one = list.Items[0];
-                string oe = Compressor.OutExt(one.Path, mb);
+                string oe = Compressor.OutExt(one.Path, pc > 0 && CompressWindow.CanAim(one.Path) ? CompressWindow.MbFor(one.Path, one.Size * pc / 100.0) : mb);
                 single = SaveAsk.File(FindForm(), Compressor.OutName(one.Path, oe), oe);
                 if (single == null) return;
                 outDir = SaveAsk.Scratch();
             }
             else { outDir = SaveAsk.Folder(FindForm()); if (outDir == null) return; }
-            Compressor.Level lv = (Compressor.Level)level.SelectedIndex;
+            Compressor.Level lv = pc > 0 ? Compressor.Level.Balanced : (Compressor.Level)level.SelectedIndex;
             List<FileItem> items = new List<FileItem>(list.Items);
             foreach (FileItem it in items) { it.State = ItemState.Waiting; it.Message = ""; it.Progress = 0; it.Output = null; it.DoneText = null; it.DoneQuiet = false; }
             running = true; cancel = false; doneCount = 0; lastOutputFile = null; totalBefore = totalAfter = 0;
@@ -642,8 +740,8 @@ namespace FileConverter
             UpdateState();
             shownLimit = presets.Selected >= 0 ? presets.Items[presets.Selected].Limit : mb;
             act = Activity.Begin(this, L.T("act_k_compress"), items.Count == 1 ? items[0].Name : L.T("n_files", items.Count), () => { cancel = true; Ui(() => SetStatus(L.T("cancelling"), Theme.InkSoft)); });
-            bool growOn = grow.Checked;
-            Thread t = new Thread(() => Worker(items, outDir, single, lv, mb, growOn));
+            bool growOn = pc > 100 || (pc == 0 && grow.Checked);
+            Thread t = new Thread(() => Worker(items, outDir, single, lv, mb, growOn, pc));
             t.IsBackground = true; t.Start();
         }
 
@@ -652,7 +750,7 @@ namespace FileConverter
         ActJob act;
         double shownLimit;   // the limit as the person sees it (Discord's 20 MB, while aiming at 19)
 
-        void Worker(List<FileItem> items, string outDir, string single, Compressor.Level lv, double mb, bool growOn)
+        void Worker(List<FileItem> items, string outDir, string single, Compressor.Level lv, double mbAll, bool growOn, int pc)
         {
             long before = 0, after = 0; int ok = 0, fail = 0, fit = 0, grownN = 0;
             DateTime started = DateTime.Now;
@@ -664,8 +762,12 @@ namespace FileConverter
                 Ui(() => { list.RefreshItem(it); SetStatus(L.T("cmp_working", index + 1, items.Count) + "  ·  " + it.Name, Theme.InkSoft); });
                 string error = null;
                 long size0 = 0; try { size0 = new FileInfo(it.Path).Length; } catch { }
+                // "New size %": each file aims at its own share of its size (files that can't aim are just made smaller)
+                double mb = pc > 0 ? (CompressWindow.CanAim(it.Path) ? CompressWindow.MbFor(it.Path, size0 * pc / 100.0) : 0) : mbAll;
+                double shownLimit = pc > 0 ? Math.Round(mb, mb < 10 ? 1 : 0) : this.shownLimit;
+                if (pc == 100 && mb > 0) { it.State = ItemState.Done; it.DoneText = L.T("cmp_pct_same"); it.DoneQuiet = true; before += size0; after += size0; ok++; Ui(() => list.RefreshItem(it)); continue; }
                 long capPre = mb > 0 ? Compressor.CapBytes(it.Path, mb) : 0;
-                bool growIt = growOn && mb > 0 && size0 > 0 && size0 < capPre * 0.9 && Compressor.CanGrow(it.Path);
+                bool growIt = pc > 0 ? pc > 100 && mb > 0 && Compressor.CanGrow(it.Path) : growOn && mb > 0 && size0 > 0 && size0 < capPre * 0.9 && Compressor.CanGrow(it.Path);
                 if (mb > 0 && size0 > 0 && size0 <= capPre && !growIt)
                 {
                     // already under the size asked for: nothing to do (and nothing to wait for)
@@ -729,13 +831,13 @@ namespace FileConverter
                             }
                             if (error == null && File.Exists(job.Output)) got = new FileInfo(job.Output).Length;
                         }
-                        if (error == null && maxH > 0) it.DoneText = L.T("cmp_made_res", maxH, shownLimit.ToString("0.#", CultureInfo.InvariantCulture));
+                        if (error == null && maxH > 0) it.DoneText = pc > 0 ? L.T("cmp_made_res_pct", maxH, pc) : L.T("cmp_made_res", maxH, shownLimit.ToString("0.#", CultureInfo.InvariantCulture));
                         if (error == null && got > cap) it.DoneText = L.T("cmp_still_big", Theme.HumanSize(got));
                     }
                     if (error == null && mb > 0 && !cancel && File.Exists(job.Output) && Formats.CategoryOf(Formats.Ext(it.Path)) == Category.Image)
                     {
                         long got = new FileInfo(job.Output).Length;
-                        if (job.Note != null) it.DoneText = L.T(growIt ? "cmp_img_grow" : "cmp_img_fit", job.Note, shownLimit.ToString("0.#", CultureInfo.InvariantCulture));
+                        if (job.Note != null) it.DoneText = pc > 0 ? L.T("cmp_img_pct", job.Note, pc) : L.T(growIt ? "cmp_img_grow" : "cmp_img_fit", job.Note, shownLimit.ToString("0.#", CultureInfo.InvariantCulture));
                         if (got > Compressor.CapBytes(it.Path, mb)) it.DoneText = L.T("cmp_img_still", Theme.HumanSize(got));
                     }
                     if (error == null)

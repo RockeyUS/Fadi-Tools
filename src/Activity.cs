@@ -209,7 +209,43 @@ namespace FileConverter
         static NotifyIcon icon;
         static Action onClick;
         static Form owner;
+        /// The main window (for the tray panel).
+        public static Form Owner { get { return owner; } }
         public static bool Enabled { get { return Settings.Get("Notify", "1") == "1"; } set { Settings.Set("Notify", value ? "1" : "0"); } }
+        /// Only for work that took a while (or failed): a quick convert from the Donut Wheel doesn't ping every time.
+        public static bool LongOnly { get { return Settings.Get("NotifyLongOnly", "1") == "1"; } set { Settings.Set("NotifyLongOnly", value ? "1" : "0"); } }
+        public const double LongSeconds = 20;
+        /// Whether Windows plays its sound with them (off: they arrive quietly).
+        public static bool Sound { get { return Settings.Get("NotifySound", "0") == "1"; } set { Settings.Set("NotifySound", value ? "1" : "0"); } }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct NOTIFYICONDATA
+        {
+            public int cbSize; public IntPtr hWnd; public int uID; public int uFlags; public int uCallbackMessage; public IntPtr hIcon;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string szTip;
+            public int dwState, dwStateMask;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string szInfo;
+            public int uTimeoutOrVersion;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string szInfoTitle;
+            public int dwInfoFlags; public Guid guidItem; public IntPtr hBalloonIcon;
+        }
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern bool Shell_NotifyIcon(int msg, ref NOTIFYICONDATA data);
+
+        /// The same notice as NotifyIcon.ShowBalloonTip, with Windows' "no sound" flag (false when it couldn't).
+        static bool QuietTip(string title, string text, bool ok)
+        {
+            try
+            {
+                System.Reflection.BindingFlags bf = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                NativeWindow w = typeof(NotifyIcon).GetField("window", bf).GetValue(icon) as NativeWindow;
+                int id = (int)typeof(NotifyIcon).GetField("id", bf).GetValue(icon);
+                if (w == null || w.Handle == IntPtr.Zero) return false;
+                NOTIFYICONDATA d = new NOTIFYICONDATA { hWnd = w.Handle, uID = id, uFlags = 0x10, szInfo = text, szInfoTitle = title, uTimeoutOrVersion = 8000, dwInfoFlags = (ok ? 1 : 2) | 0x10, szTip = "" };
+                d.cbSize = Marshal.SizeOf(typeof(NOTIFYICONDATA));
+                return Shell_NotifyIcon(1, ref d);   // NIM_MODIFY, NIF_INFO, NIIF_NOSOUND
+            }
+            catch { return false; }
+        }
         static bool IsWindows { get { return Environment.OSVersion.Platform == PlatformID.Win32NT; } }
 
         /// "Exit" in the tray icon's menu.
@@ -220,12 +256,12 @@ namespace FileConverter
             if (icon != null) return;
             icon = new NotifyIcon { Icon = f.Icon ?? SystemIcons.Application, Text = L.T("app_name") };
             icon.BalloonTipClicked += (s, e) => { Bring(); Action a = onClick; if (a != null) try { a(); } catch { } };
-            icon.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) Bring(); };
-            ContextMenuStrip menu = new ContextMenuStrip();
-            menu.Items.Add(L.T("tray_open"), null, (s, e) => Bring());
-            menu.Items.Add(L.T("tray_exit"), null, (s, e) => { if (ExitRequested != null) ExitRequested(); });
-            menu.Opening += (s, e) => { menu.Items[0].Text = L.T("tray_open"); menu.Items[1].Text = L.T("tray_exit"); menu.RightToLeft = Theme.RTL ? RightToLeft.Yes : RightToLeft.No; };
-            icon.ContextMenuStrip = menu;
+            // left click: back to the app; right click: the little panel with quick switches (TrayPanel)
+            icon.MouseClick += (s, e) =>
+            {
+                if (e.Button == MouseButtons.Left) Bring();
+                else if (e.Button == MouseButtons.Right) try { TrayPanel.Toggle(Cursor.Position); } catch { }
+            };
         }
 
         /// The icon by the clock all the time the app is open (Settings: "Show Fadi Tools by the clock").
@@ -270,7 +306,10 @@ namespace FileConverter
                 owner = f; onClick = click;
                 Make(f);
                 icon.Visible = true;
-                icon.ShowBalloonTip(8000, title, string.IsNullOrEmpty(text) ? " " : (text.Length > 240 ? text.Substring(0, 237) + "…" : text), ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
+                string body = string.IsNullOrEmpty(text) ? " " : (text.Length > 240 ? text.Substring(0, 237) + "…" : text);
+                if (title.Length > 63) title = title.Substring(0, 62) + "…";
+                if (!Sound && QuietTip(title, body, ok)) return;
+                icon.ShowBalloonTip(8000, title, body, ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
             }
             catch { }
         }

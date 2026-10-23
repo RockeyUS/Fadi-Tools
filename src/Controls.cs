@@ -165,7 +165,7 @@ namespace FileConverter
                         if (!en) bg = Theme.Track;
                         else
                         {
-                            bg = Theme.Mix(bg, Theme.Dark ? Color.White : Color.Black, hot * 0.08f);
+                            bg = Theme.Mix(bg, Theme.Dark ? Color.White : Color.Black, hot * 0.05f);
                             if (pressing) bg = Theme.Mix(bg, Color.Black, 0.12f);
                         }
                         Theme.FillRound(g, r, rad, bg);
@@ -449,7 +449,7 @@ namespace FileConverter
             base.OnMouseClick(e);
             if (hit != null && hit != selected)
             {
-                // the orange chip flows over to the one clicked (its front edge leads, its back edge catches up)
+                // the selection flows over to the one clicked (its front edge leads, its back edge catches up)
                 int was = items.IndexOf(selected);
                 if (was >= 0 && Fx.Motion) { morphFrom = morph < 1 ? PillAt(morph) : CellF(was); morph = 0; Animator.Start(this); }
                 Selected = hit;
@@ -500,8 +500,10 @@ namespace FileConverter
                 Color fg;
                 if (sel)
                 {
-                    Theme.FillRound(g, r, Theme.S(8), Enabled ? Theme.PrimaryTop : Theme.InkFaint);
-                    fg = Theme.PrimaryInk;
+                    // chosen: a soft orange tint with an orange edge (solid orange is kept for the Convert button)
+                    Theme.FillRound(g, r, Theme.S(8), Enabled ? Theme.AccentSoft : Theme.Selected);
+                    Theme.StrokeRound(g, r, Theme.S(8), Enabled ? Theme.AccentColor : Theme.InkFaint, Theme.S(1.6f));
+                    fg = Enabled ? Theme.Ink : Theme.InkFaint;
                 }
                 else
                 {
@@ -522,15 +524,16 @@ namespace FileConverter
                 ring.Inflate(grow, grow);
                 Theme.StrokeRound(g, ring, Theme.S(8) + grow, Color.FromArgb((int)(150 * (1 - p) * (1 - p)), Theme.AccentColor), Theme.S(1.6f));
             }
-            Theme.FillRound(g, pill, Theme.S(8), Enabled ? Theme.PrimaryTop : Theme.InkFaint);
+            Theme.FillRound(g, pill, Theme.S(8), Enabled ? Theme.AccentSoft : Theme.Selected);
+            Theme.StrokeRound(g, pill, Theme.S(8), Enabled ? Theme.AccentColor : Theme.InkFaint, Theme.S(1.6f));
             PaintFocus(g, RectangleF.Inflate(pill, Theme.S(3), Theme.S(3)), Theme.S(10));
-            // the labels under the moving chip turn white where it covers them
+            // the labels under the moving chip are redrawn on top of it
             GraphicsState st = g.Save();
             using (System.Drawing.Drawing2D.GraphicsPath clip = Theme.Round(pill, Theme.S(8)))
             {
                 g.SetClip(clip, System.Drawing.Drawing2D.CombineMode.Intersect);
                 for (int i = 0; i < items.Count; i++)
-                    if (CellF(i).IntersectsWith(pill)) Theme.Text(g, ChipLabel(i), f, Theme.PrimaryInk, Cell(i), Align.Center, true, false, LabelOf == null);
+                    if (CellF(i).IntersectsWith(pill)) Theme.Text(g, ChipLabel(i), f, Theme.Ink, Cell(i), Align.Center, true, false, LabelOf == null);
             }
             g.Restore(st);
         }
@@ -752,7 +755,54 @@ namespace FileConverter
         }
     }
 
-    /// Big dashed drop area with an icon, title and subtitle.
+    /// A shortcut shown in an empty page's drop area: a recent file, or "Scan Downloads".
+    public class DropExtra
+    {
+        public string Text, Glyph;
+        public Action Run;
+    }
+
+    /// Files opened lately, per page ("inspect", "studio"…), newest first; only ones that still exist are given.
+    public static class RecentFiles
+    {
+        const int Keep = 8;
+        public static void Add(string kind, string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            try { path = System.IO.Path.GetFullPath(path); } catch { return; }
+            if (path.StartsWith(System.IO.Path.GetTempPath(), StringComparison.OrdinalIgnoreCase)) return;   // not the app's own scratch copies
+            List<string> l = new List<string>(Settings.Get("Recent." + kind, "").Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries));
+            l.RemoveAll(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase));
+            l.Insert(0, path);
+            if (l.Count > Keep) l.RemoveRange(Keep, l.Count - Keep);
+            Settings.Set("Recent." + kind, string.Join("|", l.ToArray()));
+        }
+        public static List<string> Get(string kind, int max)
+        {
+            List<string> r = new List<string>();
+            foreach (string f in Settings.Get("Recent." + kind, "").Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (r.Count >= max) break;
+                try { if (System.IO.File.Exists(f)) r.Add(f); } catch { }
+            }
+            return r;
+        }
+        /// The recent files as drop-area shortcuts that open them.
+        public static List<DropExtra> Extras(string kind, int max, Action<string> open)
+        {
+            List<DropExtra> l = new List<DropExtra>();
+            foreach (string f in Get(kind, max))
+            {
+                string f0 = f;
+                l.Add(new DropExtra { Text = System.IO.Path.GetFileName(f), Glyph = Formats.GlyphFor(Formats.CategoryOf(Formats.Ext(f))), Run = () => open(f0) });
+            }
+            return l;
+        }
+    }
+
+    /// The drop area of an empty page: a ring with the page's icon (the Donut Wheel's shape), what to drop, and
+    /// what the page does — a live example or a few shortcuts (recent files, quick scans). The dashed frame sits in
+    /// the middle; the whole area takes drops.
     public class DropZone : UiControl
     {
         public Func<string> Title, Sub;
@@ -760,8 +810,16 @@ namespace FileConverter
         public bool DragHot;
         /// Small tips shown at the bottom (keys); a different one each time the page is opened.
         public string[] Tips;
+        /// Shortcuts under the words (asked for each time it's drawn), with a small heading.
+        public Func<List<DropExtra>> Extras;
+        public Func<string> ExtrasTitle;
+        /// A live example, as pairs: before, after (Rename).
+        public Func<string[]> Example;
         static int tipSeed = Environment.TickCount & 0xFFFF;
         int tip = -1;
+        readonly List<Rectangle> chipRects = new List<Rectangle>();
+        List<DropExtra> shown = new List<DropExtra>();
+        int hoverChip = -1;
         protected override void OnVisibleChanged(EventArgs e)
         {
             if (Visible && Tips != null && Tips.Length > 0) tip = (tipSeed++) % Tips.Length;
@@ -772,12 +830,56 @@ namespace FileConverter
         {
             Title = title; Sub = sub; Cursor = Cursors.Hand; AllowDrop = true; TabStop = true;
         }
-        protected override bool IsInputKey(Keys k) { return k == Keys.Enter || k == Keys.Space || base.IsInputKey(k); }
-        protected override void OnKeyDown(KeyEventArgs e) { base.OnKeyDown(e); if (Enabled && (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space)) { e.Handled = true; OnClick(EventArgs.Empty); } }
+        int keyChip = -1;   // a shortcut picked with the arrow keys (-1 = the drop area itself)
+        protected override bool IsInputKey(Keys k) { return k == Keys.Enter || k == Keys.Space || k == Keys.Left || k == Keys.Right || base.IsInputKey(k); }
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (!Enabled) return;
+            if ((e.KeyCode == Keys.Right || e.KeyCode == Keys.Left) && shown.Count > 0)
+            {
+                bool fwd = (e.KeyCode == Keys.Right) != Theme.RTL;
+                keyChip = fwd ? (keyChip + 1 >= shown.Count ? -1 : keyChip + 1) : (keyChip <= -1 ? shown.Count - 1 : keyChip - 1);
+                e.Handled = true; Invalidate(); return;
+            }
+            if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space)
+            {
+                e.Handled = true;
+                if (keyChip >= 0 && keyChip < shown.Count) { try { shown[keyChip].Run(); } catch { } return; }
+                OnClick(EventArgs.Empty);
+            }
+        }
+        protected override void OnLostFocus(EventArgs e) { keyChip = -1; base.OnLostFocus(e); }
         protected override string AccName { get { return Title != null ? Title() : ""; } }
         protected override AccessibleRole AccRole { get { return AccessibleRole.PushButton; } }
         protected override string AccAction { get { return L.T("acc_press"); } }
         protected override void AccDo() { OnClick(EventArgs.Empty); }
+
+        int ChipAt(Point p) { for (int i = 0; i < chipRects.Count; i++) if (chipRects[i].Contains(p)) return i; return -1; }
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            int h = ChipAt(e.Location);
+            if (h != hoverChip) { hoverChip = h; Invalidate(); }
+        }
+        protected override void OnMouseLeave(EventArgs e) { if (hoverChip >= 0) { hoverChip = -1; Invalidate(); } base.OnMouseLeave(e); }
+        protected override void OnClick(EventArgs e)
+        {
+            int c = ChipAt(PointToClient(Cursor.Position));
+            if (c >= 0 && c < shown.Count && !(e is KeyEventArgs)) { try { shown[c].Run(); } catch { } return; }
+            base.OnClick(e);
+        }
+
+        /// The page's ring: a quiet track with an orange arc that sweeps further as the mouse comes near.
+        public static void DrawRing(Graphics g, RectangleF r, float t, string glyph)
+        {
+            float w = Math.Max(3f, r.Width * 0.085f);
+            RectangleF rr = RectangleF.Inflate(r, -w / 2, -w / 2);
+            using (Pen tp = new Pen(Theme.Track, w)) g.DrawEllipse(tp, rr);
+            using (Pen ap = new Pen(Theme.AccentColor, w) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                g.DrawArc(ap, rr, -90, Theme.RTL ? -(110 + 250 * t) : 110 + 250 * t);
+            Theme.Glyph(g, glyph, r.Width * 0.22f / Theme.Scale, Theme.Mix(Theme.InkSoft, Theme.AccentColor, t), Rectangle.Round(r));
+        }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -785,38 +887,116 @@ namespace FileConverter
             PaintBg(g);
             Theme.Smooth(g);
             float t = DragHot ? 1 : hot;
-            RectangleF r = new RectangleF(Theme.S(2), Theme.S(2), Width - Theme.S(4) - 1, Height - Theme.S(4) - 1);
-            Theme.FillRound(g, r, Theme.S(14), DragHot ? Theme.AccentSoft : Theme.Mix(Theme.CardInner, Theme.Hover, t * 0.6f));
-            using (GraphicsPath p = Theme.Round(r, Theme.S(14)))
+            string title = Title(), sub = Sub();
+            shown = Extras != null ? (Extras() ?? new List<DropExtra>()) : new List<DropExtra>();
+            string[] ex = Example != null ? Example() : null;
+            bool roomy = Height > Theme.S(380);
+            if (!roomy) { shown = new List<DropExtra>(); ex = null; }
+
+            // how tall the middle is: ring, title, subtitle, then the example or the shortcuts
+            int ring = Theme.S(roomy ? 72 : 56);
+            int blockH = ring + Theme.S(16) + Theme.S(30) + Theme.S(26);
+            int extraH = shown.Count > 0 ? Theme.S(26 + 40) : ex != null ? Theme.S(26) + (ex.Length / 2) * Theme.S(38) : 0;
+            if (extraH > 0) blockH += Theme.S(24) + extraH;
+            int panelW = Math.Min(Width - Theme.S(4), Math.Max(Theme.S(560), Math.Min(Theme.S(760), (int)(Width * 0.7f))));
+            int panelH = Math.Min(Height - Theme.S(4), blockH + Theme.S(96));
+            if (DragHot || Height < Theme.S(420) || Width < Theme.S(600)) { panelW = Width - Theme.S(4); panelH = Height - Theme.S(4); }
+            int tipRoom = Tips != null && Tips.Length > 0 && Height > Theme.S(300) ? Theme.S(30) : 0;
+            RectangleF r = new RectangleF((Width - panelW) / 2f, Math.Max(Theme.S(2), (Height - panelH - tipRoom) / 2f), panelW - 1, panelH - 1);
+            Theme.FillRound(g, r, Theme.S(18), DragHot ? Theme.AccentSoft : Theme.Mix(Theme.CardInner, Theme.Hover, t * 0.6f));
+            using (GraphicsPath p = Theme.Round(r, Theme.S(18)))
             using (Pen pen = new Pen(DragHot ? Theme.AccentColor : Theme.Mix(Theme.FieldBorder, Theme.InkFaint, t * 0.6f), Theme.S(1.4f)))
             {
                 pen.DashPattern = new float[] { 4f, 3f };
                 g.DrawPath(pen, p);
             }
-            float cx = Width / 2f, cy = Height / 2f - Theme.S(30);
-            float s = Theme.S(56);
-            RectangleF circle = new RectangleF(cx - s / 2, cy - s / 2 - t * Theme.S(3), s, s);
-            Theme.FillRound(g, circle, Theme.S(16), Theme.Mix(Theme.Card, Theme.AccentSoft, t));
-            Theme.StrokeRound(g, circle, Theme.S(16), Theme.CardBorder);
-            Theme.Glyph(g, Glyph, 15f, Theme.Mix(Theme.InkSoft, Theme.AccentColor, t), Rectangle.Round(circle));
-            Rectangle t1 = new Rectangle(Theme.S(10), (int)(cy + s / 2 + Theme.S(16)), Width - Theme.S(20), Theme.S(30));
-            Theme.Text(g, Title(), Theme.Serif(14.5f), Theme.Ink, t1, Align.Center);
-            Rectangle t2 = new Rectangle(Theme.S(10), t1.Bottom + Theme.S(2), Width - Theme.S(20), Theme.S(24));
-            Theme.Text(g, Sub(), Theme.F(9.5f), Theme.InkSoft, t2, Align.Center);
-            if (Tips != null && Tips.Length > 0 && Height > Theme.S(300))
+
+            float cx = Width / 2f, top = r.Y + (r.Height - blockH) / 2f;
+            RectangleF circle = new RectangleF(cx - ring / 2f, top - t * Theme.S(3), ring, ring);
+            DrawRing(g, circle, t, Glyph);
+            int inner = (int)r.Width - Theme.S(40);
+            Rectangle t1 = new Rectangle((int)r.X + Theme.S(20), (int)(top + ring + Theme.S(16)), inner, Theme.S(30));
+            float ts = 15f, ss = 9.5f;
+            while (ts > 10f && Theme.Measure(title, Theme.Display(ts)) > t1.Width) ts -= 0.5f;
+            while (ss > 7.5f && Theme.Measure(sub, Theme.F(ss)) > t1.Width) ss -= 0.25f;
+            Theme.Text(g, title, Theme.Display(ts), Theme.Ink, t1, Align.Center);
+            Rectangle t2 = new Rectangle(t1.X, t1.Bottom + Theme.S(2), inner, Theme.S(24));
+            Theme.Text(g, sub, Theme.F(ss), Theme.InkSoft, t2, Align.Center, true);
+
+            chipRects.Clear();
+            int y = t2.Bottom + Theme.S(24);
+            if (shown.Count > 0)
+            {
+                string head = ExtrasTitle != null ? ExtrasTitle() : "";
+                Theme.Text(g, head.ToUpper(System.Globalization.CultureInfo.CurrentCulture), Theme.F(7.75f, FontStyle.Bold), Theme.InkFaint, new Rectangle(t1.X, y, inner, Theme.S(18)), Align.Center);
+                y += Theme.S(26);
+                Font cf = Theme.F(9f);
+                int gap = Theme.S(8), ch = Theme.S(36), maxW = Theme.S(220);
+                List<int> widths = new List<int>();
+                int total = 0;
+                foreach (DropExtra d in shown)
+                {
+                    int w = Math.Min(maxW, Theme.Measure(d.Text, cf) + Theme.S(46));
+                    if (total + w + (widths.Count > 0 ? gap : 0) > inner) break;
+                    total += w + (widths.Count > 0 ? gap : 0); widths.Add(w);
+                }
+                int x = (int)(cx - total / 2f);
+                for (int i = 0; i < widths.Count; i++)
+                {
+                    Rectangle cr = Theme.Mirror(new Rectangle(x, y, widths[i], ch), Width);
+                    chipRects.Add(cr);
+                    bool hv = i == hoverChip || (KeyFocus && i == keyChip);
+                    Theme.FillRound(g, cr, ch / 2f, hv ? Theme.Hover : Theme.Card);
+                    Theme.StrokeRound(g, cr, ch / 2f, hv ? Theme.Mix(Theme.ChipBorder, Theme.AccentColor, 0.6f) : Theme.ChipBorder);
+                    Rectangle gr = Theme.RTL ? new Rectangle(cr.Right - Theme.S(34), cr.Y, Theme.S(22), ch) : new Rectangle(cr.X + Theme.S(12), cr.Y, Theme.S(22), ch);
+                    Theme.Glyph(g, shown[i].Glyph, 9f, hv ? Theme.AccentColor : Theme.InkSoft, gr);
+                    Rectangle tr = Theme.RTL ? new Rectangle(cr.X + Theme.S(12), cr.Y, cr.Width - Theme.S(46), ch) : new Rectangle(cr.X + Theme.S(36), cr.Y, cr.Width - Theme.S(48), ch);
+                    Theme.Text(g, shown[i].Text, cf, Theme.Ink, tr, Align.Start, true, false, true);
+                    x += widths[i] + gap;
+                }
+                if (widths.Count < shown.Count) shown = shown.GetRange(0, widths.Count);
+            }
+            else if (ex != null && ex.Length >= 2)
+            {
+                string head = ExtrasTitle != null ? ExtrasTitle() : "";
+                Theme.Text(g, head.ToUpper(System.Globalization.CultureInfo.CurrentCulture), Theme.F(7.75f, FontStyle.Bold), Theme.InkFaint, new Rectangle(t1.X, y, inner, Theme.S(18)), Align.Center);
+                y += Theme.S(26);
+                Font ef = Theme.F(9f);
+                int pw = Theme.S(170), aw = Theme.S(36), ph = Theme.S(30);
+                for (int k = 0; k + 1 < ex.Length; k += 2)
+                {
+                    int x0 = (int)(cx - (pw * 2 + aw) / 2f);
+                    Rectangle a = Theme.Mirror(new Rectangle(x0, y, pw, ph), Width), b = Theme.Mirror(new Rectangle(x0 + pw + aw, y, pw, ph), Width);
+                    Rectangle arrow = Theme.Mirror(new Rectangle(x0 + pw, y, aw, ph), Width);
+                    Theme.FillRound(g, a, Theme.S(8), Theme.Card); Theme.StrokeRound(g, a, Theme.S(8), Theme.ChipBorder);
+                    Theme.FillRound(g, b, Theme.S(8), Theme.AccentSoft);
+                    Theme.Text(g, ex[k], ef, Theme.InkSoft, a, Align.Center, true, false, true);
+                    Theme.Text(g, ex[k + 1], Theme.F(9f, FontStyle.Bold), Theme.Ink, b, Align.Center, true, false, true);
+                    Theme.Glyph(g, Theme.RTL ? Ico.Back : Ico.Forward, 8f, Theme.AccentColor, arrow);
+                    y += Theme.S(38);
+                }
+            }
+
+            if (tipRoom > 0)
             {
                 if (tip < 0) tip = (tipSeed++) % Tips.Length;
                 string tt = L.T(Tips[tip % Tips.Length]);
-                Font tf = Theme.F(9f);
+                float tsz = 9f;
+                while (tsz > 7.5f && Theme.Measure(tt, Theme.F(tsz)) > Width - Theme.S(80)) tsz -= 0.25f;
+                Font tf = Theme.F(tsz);
                 int tw = Math.Min(Width - Theme.S(80), Theme.Measure(tt, tf)), gw = Theme.S(18);
-                Rectangle row = new Rectangle((Width - tw - gw - Theme.S(8)) / 2, Height - Theme.S(54), tw + gw + Theme.S(8), Theme.S(30));
+                int ty = Math.Min(Height - Theme.S(44), (int)r.Bottom + Theme.S(14));
+                if (r.Bottom > Height - Theme.S(60)) ty = Height - Theme.S(54);
+                Rectangle row = new Rectangle((Width - tw - gw - Theme.S(8)) / 2, ty, tw + gw + Theme.S(8), Theme.S(30));
                 Rectangle pill = new Rectangle(row.X - Theme.S(12), row.Y, row.Width + Theme.S(24), row.Height);
                 Theme.FillRound(g, pill, Theme.S(15), Theme.Mix(Theme.CardInner, Theme.Card, 0.5f));
                 Rectangle gr = Theme.Mirror(new Rectangle(row.X, row.Y, gw, row.Height), Width);
                 Rectangle tr = Theme.Mirror(new Rectangle(row.X + gw + Theme.S(8), row.Y, tw + 2, row.Height), Width);
                 Theme.Glyph(g, "\uEA80", 9f, Theme.AccentColor, gr);
-                Theme.Text(g, tt, tf, Theme.InkSoft, tr, Align.Start);
+                Theme.Text(g, tt, tf, Theme.InkSoft, tr, Align.Start, true);
             }
+            if (KeyFocus && keyChip < 0) PaintFocus(g, r, Theme.S(18));
+            else if (KeyFocus && keyChip < chipRects.Count) PaintFocus(g, RectangleF.Inflate(chipRects[keyChip], Theme.S(3), Theme.S(3)), Theme.S(21));
         }
     }
 
@@ -1203,8 +1383,12 @@ namespace FileConverter
             PaintBg(g);
             Theme.Smooth(g);
             int tx = Pad;
-            Label(g, L.T(TitleKey), Theme.Serif(20f), Theme.Ink, new Rectangle(tx, Theme.S(18) - ScrollY, Width - Pad - tx - HeaderReserve, Theme.S(40)), Align.Start, false);
-            Label(g, L.T(SubKey), Theme.F(9.75f), Theme.InkSoft, new Rectangle(tx, Theme.S(58) - ScrollY, Width - Pad - tx - HeaderReserve, Theme.S(24)), Align.Start, false);
+            Label(g, L.T(TitleKey), Theme.Display(20f), Theme.Ink, new Rectangle(tx, Theme.S(18) - ScrollY, Width - Pad - tx - HeaderReserve, Theme.S(40)), Align.Start, false);
+            // the whole line under the title: a little smaller when the window is narrow, never cut off
+            string sub = L.T(SubKey); int subW = Width - Pad - tx - HeaderReserve;
+            float ss = 9.75f;
+            while (ss > 8f && Theme.Measure(sub, Theme.F(ss)) > subW) ss -= 0.25f;
+            Label(g, sub, Theme.F(ss), Theme.InkSoft, new Rectangle(tx, Theme.S(58) - ScrollY, subW, Theme.S(24)), Align.Start, false);
             foreach (Rectangle c in cards) Theme.PaintCard(g, M(c));
             PaintContent(g);
         }

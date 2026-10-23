@@ -486,7 +486,7 @@ foreach ($path in $In.Split('|')) {
             Rectangle ic = Theme.Mirror(new Rectangle(pad, Theme.S(20), Theme.S(40), Theme.S(40)), Width);
             Theme.FillRound(g, ic, Theme.S(10), Theme.AccentSoft);
             Theme.Glyph(g, "", 12f, Theme.AccentColor, ic);
-            Theme.Text(g, title, Theme.Serif(14f), Theme.Ink, Theme.Mirror(new Rectangle(pad + Theme.S(54), Theme.S(16), Width - pad * 2 - Theme.S(54), Theme.S(26)), Width));
+            Theme.Text(g, title, Theme.Display(14f), Theme.Ink, Theme.Mirror(new Rectangle(pad + Theme.S(54), Theme.S(16), Width - pad * 2 - Theme.S(54), Theme.S(26)), Width));
             Theme.Text(g, sub + "  ·  " + (sub2 ?? L.T("ocr_hint")), Theme.F(8.75f), Theme.InkSoft, Theme.Mirror(new Rectangle(pad + Theme.S(54), Theme.S(42), Width - pad * 2 - Theme.S(54), Theme.S(20)), Width));
         }
     }

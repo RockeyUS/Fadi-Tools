@@ -29,7 +29,7 @@ namespace FileConverter
         public static readonly string[] KindKeys = { "wk_image", "wk_video", "wk_audio", "wk_pdf", "wk_doc", "wk_data" };
         public static readonly string[] KindGlyphs = { Ico.Photo, Ico.Video, Ico.Music, Ico.Page, Ico.Doc, Ico.Code };
         public static readonly string[] Samples = { "photo.jpg", "clip.mp4", "song.mp3", "report.pdf", "letter.docx", "table.csv" };
-        public const int MaxFormats = 8, MaxActions = 6;
+        public const int MaxFormats = 8, MaxActions = 8;
 
         /// The wheel's size, in % of 360 px (Settings → Donut Wheel → Size).
         public const int MinSize = 55, MaxSize = 130, DefaultSize = 80;
@@ -71,19 +71,43 @@ namespace FileConverter
             return new string[0];
         }
 
-        /// The actions that work for this kind of file.
+        /// The actions that work for this kind of file (the middle ring is chosen from these), and your recipes for it.
         public static string[] ActionPool(string kind)
+        {
+            List<string> l = new List<string>(BasePool(kind));
+            l.AddRange(Recipes.IdsFor(kind));
+            return l.ToArray();
+        }
+
+        static string[] BasePool(string kind)
         {
             switch (kind)
             {
-                case "image": return new[] { "compress", "crop", "nobg", "edit", "text", "info" };
-                case "video": return new[] { "compress", "edit", "info" };
-                case "audio": return new[] { "compress", "info" };
+                case "image": return new[] { "compress", "crop", "resize", "rotate", "upscale", "nobg", "edit", "text", "info" };
+                case "video": return new[] { "compress", "trim", "edit", "info" };
+                case "audio": return new[] { "compress", "trim", "info" };
                 case "pdf": return new[] { "compress", "edit", "text", "info" };
                 case "doc": return new[] { "compress", "edit", "info" };
                 default: return new[] { "info" };
             }
         }
+
+        /// What the middle ring starts with.
+        static string DefaultActions(string kind)
+        {
+            switch (kind)
+            {
+                case "image": return "compress,crop,resize,upscale,nobg,edit,text,info";
+                case "video": return "compress,trim,edit,info";
+                case "audio": return "compress,trim,info";
+                case "pdf": return "compress,edit,text,info";
+                case "doc": return "compress,edit,info";
+                default: return "info";
+            }
+        }
+
+        /// Actions that work on one file at a time (left out when several files are dragged).
+        public static bool SingleOnly(string a) { return a == "crop" || a == "resize" || a == "rotate" || a == "upscale" || a == "trim" || a == "text" || a == "info"; }
 
         static string DefaultFormats(string kind)
         {
@@ -113,18 +137,34 @@ namespace FileConverter
         public static List<string> FormatsFor(string kind) { return Read("Wheel." + kind, DefaultFormats(kind), Pool(kind), MaxFormats); }
         public static List<string> ActionsFor(string kind)
         {
-            // 1.6.2 added Crop for pictures: a wheel set up before then gets it once (after Compress), if there's room
-            if (kind == "image" && Settings.Get("WheelCropAdded", "0") != "1")
-            {
-                Settings.Set("WheelCropAdded", "1");
-                string saved = Settings.Get("WheelAct.image", "");
-                if (saved.Length > 0 && saved != "-" && Array.IndexOf(saved.Split(','), "crop") < 0)
-                {
-                    List<string> l = Read("WheelAct.image", "", ActionPool(kind), MaxActions);
-                    if (l.Count < MaxActions) { int at = l.IndexOf("compress"); l.Insert(at >= 0 ? at + 1 : 0, "crop"); Settings.Set("WheelAct.image", string.Join(",", l.ToArray())); }
-                }
-            }
-            return Read("WheelAct." + kind, string.Join(",", ActionPool(kind)), ActionPool(kind), MaxActions);
+            Migrate();
+            return Read("WheelAct." + kind, DefaultActions(kind), ActionPool(kind), MaxActions);
+        }
+
+        /// New actions reach a middle ring set up before they existed: once, in a sensible place, when there's room.
+        static void Migrate()
+        {
+            // 1.6.2: Crop (pictures)
+            Add("WheelCropAdded", "image", "crop", "compress");
+            // 1.6.3: AI Scale and Resize (pictures), Trim (videos and songs)
+            Add("WheelMig163.up", "image", "upscale", "crop");
+            Add("WheelMig163.rs", "image", "resize", "crop");
+            Add("WheelMig163.tv", "video", "trim", "compress");
+            Add("WheelMig163.ta", "audio", "trim", "compress");
+        }
+
+        static void Add(string flag, string kind, string action, string after)
+        {
+            if (Settings.Get(flag, "0") == "1") return;
+            Settings.Set(flag, "1");
+            string saved = Settings.Get("WheelAct." + kind, "");
+            if (saved.Length == 0 || saved == "-" || Array.IndexOf(saved.Split(','), action) >= 0) return;
+            List<string> l = new List<string>(saved.Split(','));
+            l.RemoveAll(x => x.Trim().Length == 0);
+            if (l.Count >= MaxActions) return;
+            int at = l.IndexOf(after);
+            l.Insert(at >= 0 ? at + 1 : 0, action);
+            Settings.Set("WheelAct." + kind, string.Join(",", l.ToArray()));
         }
 
         public static void Save(string kind, List<string> formats, List<string> actions)
@@ -137,23 +177,30 @@ namespace FileConverter
         public static void Reset(string kind)
         {
             Settings.Set("Wheel." + kind, DefaultFormats(kind));
-            Settings.Set("WheelAct." + kind, string.Join(",", ActionPool(kind)));
+            Settings.Set("WheelAct." + kind, DefaultActions(kind));
         }
 
         public static bool IsDefault(string kind)
         {
-            return string.Join(",", FormatsFor(kind).ToArray()) == DefaultFormats(kind) && string.Join(",", ActionsFor(kind).ToArray()) == string.Join(",", ActionPool(kind));
+            return string.Join(",", FormatsFor(kind).ToArray()) == DefaultFormats(kind) && string.Join(",", ActionsFor(kind).ToArray()) == DefaultActions(kind);
         }
 
         public static WheelItem Format(string t) { return new WheelItem { Target = t, Label = () => t.ToUpperInvariant() }; }
 
         public static WheelItem ActionItem(string a)
         {
+            if (Recipes.IsRecipe(a)) return Recipes.Item(a);
             switch (a)
             {
                 case "compress": return new WheelItem { Action = a, Glyph = "\uE73F", Label = () => L.T("wh_compress") };
                 case "crop": return new WheelItem { Action = a, Glyph = Ico.Crop, Label = () => L.T("wh_crop") };
-                case "nobg": return new WheelItem { Action = a, Glyph = Ico.Cut, Label = () => L.T("wh_nobg") };
+                case "resize": return new WheelItem { Action = a, Glyph = Ico.Scale, Label = () => L.T("wh_resize") };
+                case "rotate": return new WheelItem { Action = a, Glyph = Ico.Rotate, Label = () => L.T("wh_rotate") };
+                case "upscale": return new WheelItem { Action = a, Glyph = Ico.Upscale, Label = () => L.T("wh_upscale") };
+                case "trim": return new WheelItem { Action = a, Glyph = Ico.Trim, Label = () => L.T("wh_trim") };
+                case "combine": return new WheelItem { Action = a, Glyph = Ico.Combine, Label = () => L.T("wh_combine") };
+                case "merge": return new WheelItem { Action = a, Glyph = Ico.Combine, Label = () => L.T("wh_merge") };
+                case "nobg": return new WheelItem { Action = a, Glyph = Ico.Cut, Label = () => L.T("wh_nobg_short") };
                 case "edit": return new WheelItem { Action = a, Glyph = Ico.Edit, Label = () => L.T("wh_edit") };
                 case "text": return new WheelItem { Action = a, Glyph = Ico.Text, Label = () => L.T("wh_text") };
                 default: return new WheelItem { Action = "info", Glyph = Ico.Info, Label = () => L.T("wh_info") };
@@ -191,7 +238,7 @@ namespace FileConverter
         public static event Action<string[], WheelItem> Dropped;
 
         static Timer poll;
-        static bool wasDown, armed, shown;
+        static bool wasDown, armed, shown, hinting, hintTried;
         static Point downAt;
         static WheelWindow win;
         static readonly int ownPid = Process.GetCurrentProcess().Id;
@@ -210,6 +257,8 @@ namespace FileConverter
         }
 
         static bool Down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+        /// Shift is held right now.
+        public static bool ShiftDown { get { try { return Down(0x10); } catch { return false; } } }
 
         static void Tick()
         {
@@ -221,18 +270,35 @@ namespace FileConverter
                 downAt = p; shown = false;
                 armed = StartsOverFileManager(p);
             }
-            if (down && armed && !shown && Down(0x10))
+            // Shift pressed again while still dragging (after letting go of it closed the wheel): it comes back
+            if (down && armed && shown && Down(0x10) && (win == null || win.IsDisposed || win.GoingAway)) OpenWheel(p);
+            if (down && armed && !shown)
             {
                 // a real drag: past the distance Windows itself waits for before a drag starts
                 int tx = Math.Max(4, GetSystemMetrics(68)), ty = Math.Max(4, GetSystemMetrics(69));
-                if (Math.Abs(p.X - downAt.X) > tx || Math.Abs(p.Y - downAt.Y) > ty)
+                bool dragging = Math.Abs(p.X - downAt.X) > tx || Math.Abs(p.Y - downAt.Y) > ty;
+                if (dragging && Down(0x10))
                 {
                     shown = true;
+                    if (hinting) { DragHint.HideNow(); hinting = false; }
+                    DragHint.Learned();
                     OpenWheel(p);
+                }
+                else if (dragging)
+                {
+                    // the first few drags: a note about Shift rides along with the mouse
+                    if (hinting) DragHint.Follow2(p);
+                    else if (!hintTried && Math.Abs(p.X - downAt.X) + Math.Abs(p.Y - downAt.Y) > 40)
+                    {
+                        hintTried = true;
+                        if (DragHint.Wanted) { hinting = true; DragHint.ShowAt(p); }
+                    }
                 }
             }
             if (!down && wasDown)
             {
+                if (hinting) { DragHint.HideNow(); hinting = false; }
+                hintTried = false;
                 armed = false;
                 if (win != null && !win.IsDisposed) win.ButtonReleased();
             }
@@ -288,11 +354,27 @@ namespace FileConverter
             if (kind == null) return;
             foreach (string t in WheelConfig.FormatsFor(kind))
                 if (!Same(ext, t) && Possible(kind, ext, t)) formats.Add(WheelConfig.Format(t));
+            bool many = files.Length > 1;
             foreach (string a in WheelConfig.ActionsFor(kind))
             {
                 // Office files compress only as Word, Excel and PowerPoint documents
                 if (a == "compress" && kind == "doc" && ext != "docx" && ext != "pptx" && ext != "xlsx") continue;
+                if (many && WheelConfig.SingleOnly(a)) continue;   // one-file windows (Crop, Trim…) when several are dragged
                 actions.Add(WheelConfig.ActionItem(a));
+            }
+            if (many)
+            {
+                // several pictures (and PDFs): one PDF of them all, in the order they were picked
+                bool allPics = true, allPdf = true, picsOrPdf = true;
+                foreach (string f in files)
+                {
+                    string e = Formats.Ext(f), k = WheelConfig.KindOf(e);
+                    if (k != "image") allPics = false;
+                    if (e != "pdf") allPdf = false;
+                    if (k != "image" && e != "pdf") picsOrPdf = false;
+                }
+                if (allPdf) actions.Insert(0, WheelConfig.ActionItem("merge"));
+                else if (allPics || picsOrPdf) actions.Insert(0, WheelConfig.ActionItem("combine"));
             }
         }
 
@@ -586,7 +668,9 @@ namespace FileConverter
         Bitmap canvas;
         readonly Timer anim = new Timer { Interval = 15 };
         readonly Stopwatch clock = Stopwatch.StartNew();
-        double openedAt, closingAt = -1, enteredBy = -1, releasedAt = -1;
+        double openedAt, closingAt = -1, enteredBy = -1, releasedAt = -1, shiftUpAt = -1;
+        /// It's going away (Shift let go, dropped, or the drag ended).
+        public bool GoingAway { get { return closingAt >= 0; } }
         string[] files;
         bool entered, dropped;
 
@@ -648,17 +732,29 @@ namespace FileConverter
         public void ButtonReleased() { if (releasedAt < 0) releasedAt = Now; }
 
         void BeginClose() { if (closingAt < 0) closingAt = Now; }
+        /// After a drop the chosen slice glows for a moment, then the wheel shrinks and fades away.
+        const double HoldMs = 110, DropCloseMs = 380, QuickCloseMs = 140;
+        bool quick;   // let go of Shift: away at once
+        double CloseMs { get { return quick ? QuickCloseMs : DropCloseMs; } }
 
         void Frame()
         {
             if (IsDisposed) return;
             double now = Now;
-            // never entered (a Shift-drag that isn't moving files, like a selection box): go away quietly
-            if (!entered && closingAt < 0 && now - openedAt > 1400) BeginClose();
+            // it stays open for as long as the drag goes on with Shift held. Never entered and Shift let go
+            // (a Shift-drag that isn't moving files, like a selection box): it goes away quietly
+            // the wheel is there while Shift is held: let go of Shift (without dropping) and it goes away
+            // (a short grace, so a quick bounce of the key doesn't close it)
+            if (closingAt < 0 && !dropped && releasedAt < 0)
+            {
+                if (DragWheel.ShiftDown) shiftUpAt = -1;
+                else if (shiftUpAt < 0) shiftUpAt = now;
+                else if (now - shiftUpAt > 40) { quick = true; BeginClose(); }
+            }
             if (releasedAt >= 0 && !dropped && closingAt < 0 && now - releasedAt > 350) BeginClose();
             art.Step();
             Render();
-            if (closingAt >= 0 && now - closingAt > (Fx.Motion ? 200 : 0)) { anim.Stop(); Close(); }
+            if (closingAt >= 0 && now - closingAt > (Fx.Motion ? CloseMs : 0)) { anim.Stop(); Close(); }
         }
 
         // ------------------------------------------------------------------ drag and drop
@@ -720,9 +816,12 @@ namespace FileConverter
             bool motion = Fx.Motion;
             float tOpen = motion ? (float)Math.Min(1, (now - openedAt) / 220.0) : 1;
             float tFull = entered ? (motion ? (float)Math.Min(1, (now - enteredBy) / 200.0) : 1) : 0;   // grows from the small hint to the whole wheel
-            float tClose = closingAt >= 0 ? (motion ? (float)Math.Min(1, (now - closingAt) / 200.0) : 1) : 0;
-            float scale = (0.55f + 0.45f * WheelArt.EaseOutBack(tOpen)) * (1 - 0.18f * tClose);
-            byte alpha = (byte)Math.Max(0, Math.Min(255, 255 * Math.Min(1, tOpen * 1.6f) * (1 - tClose)));
+            double hold = dropped && art.Picked != null ? HoldMs : 0;
+            float tClose = closingAt >= 0 ? (motion ? (float)Math.Max(0, Math.Min(1, (now - closingAt - hold) / (CloseMs - hold))) : 1) : 0;
+            float ease = tClose * tClose * (3 - 2 * tClose);   // smooth start and end
+            float pulse = closingAt >= 0 && hold > 0 && now - closingAt < hold ? (float)Math.Sin(Math.PI * (now - closingAt) / hold) * 0.03f : 0;
+            float scale = (0.55f + 0.45f * WheelArt.EaseOutBack(tOpen)) * (1 - 0.22f * ease + pulse);
+            byte alpha = (byte)Math.Max(0, Math.Min(255, 255 * Math.Min(1, tOpen * 1.6f) * (1 - ease)));
             using (Graphics g = Graphics.FromImage(canvas)) art.Draw(g, scale, tFull, files != null, true);
             PT dst = new PT(Left, Top), src = new PT(0, 0);
             SZ sz = new SZ(D, D);

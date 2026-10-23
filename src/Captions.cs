@@ -200,7 +200,7 @@ namespace FileConverter
             Rectangle ic = Theme.Mirror(new Rectangle(pad, Theme.S(22), Theme.S(42), Theme.S(42)), W);
             Theme.FillRound(g, ic, Theme.S(11), Theme.AccentSoft);
             Theme.Glyph(g, "", 13f, Theme.AccentColor, ic);
-            Theme.Text(g, L.T("cap_title"), Theme.Serif(15f), Theme.Ink, Theme.Mirror(new Rectangle(pad + Theme.S(56), Theme.S(18), W - pad * 2 - Theme.S(56), Theme.S(28)), W), Align.Start);
+            Theme.Text(g, L.T("cap_title"), Theme.Display(15f), Theme.Ink, Theme.Mirror(new Rectangle(pad + Theme.S(56), Theme.S(18), W - pad * 2 - Theme.S(56), Theme.S(28)), W), Align.Start);
             Theme.Text(g, L.T("cap_sub"), Theme.F(9f), Theme.InkSoft, Theme.Mirror(new Rectangle(pad + Theme.S(56), Theme.S(46), W - pad * 2 - Theme.S(56), Theme.S(20)), W), Align.Start);
             Func<Rectangle, Rectangle> m = r => Theme.Mirror(r, W);
             Theme.Text(g, L.T("cap_lang").ToUpper(CultureInfo.CurrentCulture), Theme.F(7.75f, FontStyle.Bold), Theme.InkFaint, m(langLbl), Align.Start);

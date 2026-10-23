@@ -10,7 +10,7 @@ namespace FileConverter
 {
     public class ConvertPage : Page
     {
-        Rectangle left, right, filesTitleR, filesCountR, convToR, qualityR, saveToR, statusR;
+        Rectangle left, right, filesTitleR, filesCountR, convToR, qualityR, saveToR, statusR, summaryR;
         Btn btnAdd, btnClear, btnConvert, btnOpen, btnDocs, btnView;
         FileList list;
         DropZone drop;
@@ -44,7 +44,7 @@ namespace FileConverter
             list.Changed += () => UpdateState();
             list.Opened += OpenItem;
 
-            drop = new DropZone(() => L.T("drop_title"), () => L.T("drop_sub")) { Tips = new[] { "tip_menu", "tip_drag_out", "tip_palette" } };
+            drop = new DropZone(() => L.T("drop_title"), () => L.T("drop_sub")) { Tips = new[] { "tip_menu", "tip_drag_out", "tip_conv_folder" } };
             drop.Click += (s, e) => Browse();
 
             List<Func<string>> tabLabels = new List<Func<string>>();
@@ -79,7 +79,7 @@ namespace FileConverter
             folder.Picked += (s, e) => UpdateState();
 
             progress = new Progress();
-            btnConvert = new Btn(() => running ? L.T("cancel") : (list.Items.Count == 0 ? L.T("convert") : Sticker ? L.T("st_make") : L.T("convert_btn", (chips.Selected ?? "").ToUpperInvariant())), Ico.Sync, BtnKind.Primary);
+            btnConvert = new Btn(() => running ? L.T("cancel") : (list.Items.Count == 0 ? L.T("convert_need_files") : Sticker ? L.T("st_make") : L.T("convert_btn", (chips.Selected ?? "").ToUpperInvariant())), Ico.Sync, BtnKind.Primary);
             btnConvert.Click += (s, e) => { if (running) { cancel = true; SetStatus(L.T("cancelling"), Theme.InkSoft); } else Start(); };
             btnOpen = new Btn(() => doneCount == 1 ? L.T("show_file") : L.T("open_folder"), Ico.FolderOpen, BtnKind.Secondary);
             btnOpen.Visible = false;
@@ -132,9 +132,13 @@ namespace FileConverter
             y += Theme.S(28) + Theme.S(34) + Theme.S(compact ? 14 : 22);
             saveToR = new Rectangle(x, y, w, Theme.S(24)); y += Theme.S(28);
             Place(folder, new Rectangle(x, y, w, Theme.S(58)));
+            y += Theme.S(58) + Theme.S(compact ? 14 : 22);
 
             int bottom = right.Bottom - ip;
             int bh = Theme.S(compact ? 44 : 50);
+            // the "HEIC → JPG" summary fills the space above the progress bar (only when there is room for it)
+            int sumBottom = bottom - bh - Theme.S(54) - Theme.S(14);
+            summaryR = sumBottom - y >= Theme.S(84) ? new Rectangle(x, y, w, Theme.S(84)) : Rectangle.Empty;
             if (btnOpen.Visible)
             {
                 int ow = (w - Theme.S(10)) * 2 / 5;
@@ -159,6 +163,34 @@ namespace FileConverter
             if (!IsMediaTab && !btnDocs.Visible) Label(g, L.T("docs_ok"), Theme.F(9f), Theme.Success, new Rectangle(qualityR.X, qualityR.Y + Theme.S(28), qualityR.Width, Theme.S(34)), Align.Start, true, true);
             Label(g, L.T("save_to"), Theme.F(10f, FontStyle.Bold), Theme.Ink, saveToR);
             Label(g, statusText, Theme.F(9.25f), statusColor, statusR, Align.Start, false, true);
+            PaintSummary(g);
+        }
+
+        /// What will happen, at a glance: "3 files · 12.4 MB" over "HEIC → JPG".
+        void PaintSummary(Graphics g)
+        {
+            if (summaryR.IsEmpty || list.Items.Count == 0 || chips.Selected == null) return;
+            Rectangle r = summaryR;
+            Theme.FillRound(g, M(r), Theme.S(12), Theme.CardInner);
+            Theme.StrokeRound(g, M(r), Theme.S(12), Theme.Line);
+            int pad = Theme.S(16);
+            Label(g, CountText(), Theme.F(9f), Theme.InkSoft, new Rectangle(r.X + pad, r.Y + Theme.S(10), r.Width - pad * 2, Theme.S(22)));
+
+            List<string> exts = new List<string>();
+            foreach (FileItem it in list.Items) { string e = (it.Ext ?? "").ToUpperInvariant(); if (e.Length > 0 && !exts.Contains(e)) exts.Add(e); }
+            string from = exts.Count == 0 ? "" : exts.Count == 1 ? exts[0] : exts.Count == 2 ? exts[0] + ", " + exts[1] : L.T("n_types", exts.Count);
+            string to = Sticker ? L.T("st_chip") : chips.Selected.ToUpperInvariant();
+            string arrow = Theme.RTL ? "  ←  " : "  →  ";
+            Font big = Theme.Display(17f);
+            // laid out left to right, then mirrored like the rest of the page, so Arabic reads source ← target
+            int y = r.Y + Theme.S(34), h = Theme.S(38), x = r.X + pad, end = r.Right - pad;
+            int wf = Math.Min(Theme.Measure(from, big) + 2, end - x);
+            Theme.Text(g, from, big, Theme.Ink, M(new Rectangle(x, y, wf, h)), Align.Start, true, false, true);
+            x += wf;
+            int wa = Math.Min(Theme.Measure(arrow, big) + 2, Math.Max(0, end - x));
+            Theme.Text(g, arrow, big, Theme.InkFaint, M(new Rectangle(x, y, wa, h)), Align.Start, true, false, true);
+            x += wa;
+            if (end - x > Theme.S(12)) Theme.Text(g, to, big, Theme.AccentColor, M(new Rectangle(x, y, end - x, h)), Theme.RTL ? Align.End : Align.Start, true, false, true);
         }
 
         bool IsMediaTab { get { return tabs.SelectedIndex <= 2; } }
