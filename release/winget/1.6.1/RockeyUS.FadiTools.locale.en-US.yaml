@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: RockeyUS.FadiTools
+PackageVersion: 1.6.1
+PackageLocale: en-US
+Publisher: RockeyUS
+PublisherUrl: https://github.com/RockeyUS
+PublisherSupportUrl: https://github.com/RockeyUS/Fadi-Tools/issues
+Author: Fadi
+PackageName: Fadi Tools
+PackageUrl: https://github.com/RockeyUS/Fadi-Tools
+License: Freeware
+Copyright: Fadi
+ShortDescription: Convert, compress, edit and download files - free, offline, in English and Arabic.
+Description: |-
+  An all-in-one Windows app. Convert pictures, audio, video, documents and data files; compress videos and photos
+  (with one-click sizes for Discord and email); edit photos, videos and PDFs in the Studio; copy text from pictures
+  and make scanned PDFs searchable; rename many files at once; find duplicate files; download from YouTube and
+  1,000+ sites. Works offline, in English and Arabic.
+Moniker: fadi-tools
+Tags:
+- converter
+- compressor
+- video-editor
+- pdf
+- ocr
+- downloader
+- duplicate-finder
+- arabic
+ReleaseNotesUrl: https://github.com/RockeyUS/Fadi-Tools/releases/tag/1.6.1
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
