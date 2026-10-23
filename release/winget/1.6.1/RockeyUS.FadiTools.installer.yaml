@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: RockeyUS.FadiTools
+PackageVersion: 1.6.1
+MinimumOSVersion: 10.0.0.0
+InstallerType: portable
+Commands:
+- fadi-tools
+ReleaseDate: 2026-10-22
+Installers:
+- Architecture: neutral
+  InstallerUrl: https://github.com/RockeyUS/Fadi-Tools/releases/download/1.6.1/Fadi.Tools.exe
+  InstallerSha256: CB2E016370C24F3C7EE4E1D29C8F327C6BE142EC0DA01027616B529636E3AE7D
+ManifestType: installer
+ManifestVersion: 1.6.0
