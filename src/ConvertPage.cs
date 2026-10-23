@@ -180,7 +180,7 @@ namespace FileConverter
             foreach (FileItem it in list.Items) { string e = (it.Ext ?? "").ToUpperInvariant(); if (e.Length > 0 && !exts.Contains(e)) exts.Add(e); }
             string from = exts.Count == 0 ? "" : exts.Count == 1 ? exts[0] : exts.Count == 2 ? exts[0] + ", " + exts[1] : L.T("n_types", exts.Count);
             string to = Sticker ? L.T("st_chip") : chips.Selected.ToUpperInvariant();
-            string arrow = Theme.RTL ? "  ←  " : "  →  ";
+            string arrow = Theme.RTL ? " ← " : " → ";
             Font big = Theme.Display(17f);
             // laid out left to right, then mirrored like the rest of the page, so Arabic reads source ← target
             int y = r.Y + Theme.S(34), h = Theme.S(38), x = r.X + pad, end = r.Right - pad;

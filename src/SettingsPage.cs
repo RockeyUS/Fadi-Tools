@@ -386,8 +386,8 @@ namespace FileConverter
             foreach (int i in IntegOrder)
             {
                 if (i < 0) { integHeads[-i - 1] = new Rectangle(ex, iy + (i == -1 ? 0 : Theme.S(8)), ew, Theme.S(26)); iy += Theme.S(i == -1 ? 28 : 36); continue; }
-                bool sub = i == 9 || i == 10;
-                int ind = sub ? Theme.S(22) : 0;
+                bool indented = i == 9 || i == 10;
+                int ind = indented ? Theme.S(22) : 0;
                 integRows[i] = new Rectangle(ex + ind, iy, ew - ind, Theme.S(48));
                 Place(integ[i], new Rectangle(ex + ew - Theme.S(52), integRows[i].Y + Theme.S(7), Theme.S(52), Theme.S(34)));
                 iy += Theme.S(52);
