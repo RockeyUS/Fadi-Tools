@@ -489,6 +489,9 @@ namespace FileConverter
                     Done();
                 }
             }
+            // a plain click on a clip (no drag): the playhead jumps there too (and plays on from there while playing)
+            if (was == Drag.Move && !changed && dropMark < 0 && Math.Abs(e.X - downAt.X) < Theme.S(4) && Math.Abs(e.Y - downAt.Y) < Theme.S(4) && e.Button == MouseButtons.Left)
+                SeekTo(T(e.X), true);
             dropMark = -1;
             if (changed) { P.Tidy(); Done(); }
             changed = false; dragClip = null;

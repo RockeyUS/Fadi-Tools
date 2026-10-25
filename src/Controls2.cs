@@ -300,6 +300,8 @@ namespace FileConverter
         public event Action<string> Previewing;       // hovered item while the list is open; null = preview over
         PopupList open; DateTime closedAt;
         public DropDown() { Cursor = Cursors.Hand; }
+        /// Chooses an item as if it was picked from the list.
+        public void Pick(string v) { Selected = v; Invalidate(); if (SelectedChanged != null) SelectedChanged(this, EventArgs.Empty); }
 
         protected override void OnClick(EventArgs e)
         {

@@ -46,6 +46,42 @@ namespace FileConverter
             catch { }
         }
 
+        /// After the fonts were uninstalled: they stop being offered (the ones already drawn stay valid until the app closes).
+        public static void Forget()
+        {
+            bool gone = true;
+            try { if (Directory.Exists(Dir) && Directory.GetFiles(Dir, "*.ttf").Length > 0) gone = false; } catch { }
+            if (!gone) return;
+            Families.Clear(); byName.Clear(); loaded.Clear();
+        }
+
+        static bool getting;
+        /// Downloads the Arabic fonts in the background (the font menus' "Get free Arabic fonts").
+        /// say(message, ok) reports; done() runs on the screen's thread when it's over.
+        public static void Get(System.Windows.Forms.Control owner, Action<string, bool> say, Action done)
+        {
+            if (getting) return;
+            getting = true;
+            say(L.T("fonts_downloading"), true);
+            System.Threading.Thread t = new System.Threading.Thread(() =>
+            {
+                string err = null;
+                try { Download(null, () => owner.IsDisposed || Tools.ShuttingDown); } catch (Exception ex) { err = ex.Message; }
+                try
+                {
+                    owner.BeginInvoke((Action)(() =>
+                    {
+                        getting = false;
+                        if (Ready) say(L.T("fonts_ready", Families.Count), true);
+                        else say(L.T("fonts_failed") + (err != null ? " " + err : ""), false);
+                        if (done != null) done();
+                    }));
+                }
+                catch { getting = false; }
+            }) { IsBackground = true };
+            t.Start();
+        }
+
         public static FontFamily Find(string name)
         {
             FontFamily f;

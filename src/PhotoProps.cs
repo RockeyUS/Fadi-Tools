@@ -204,6 +204,8 @@ namespace FileConverter
             font.Items = EditorPanel.AllFonts(out favs); font.Favorites = favs;
             font.Selected = font.Items.Contains("Segoe UI") ? "Segoe UI" : font.Items[0];
             font.Extra = FontPack.Families; font.ExtraHeader = () => L.T("fonts_arabic");
+            font.ActionLabel = () => FontPack.Ready ? null : L.T("fonts_get_arabic");
+            font.Action = () => FontPack.Get(this, (m, ok) => ShowToast(m, ok, null, null), () => { font.Extra = FontPack.Families; if (FontPack.Ready) font.Pick(FontPack.Find("Cairo") != null ? "Cairo" : FontPack.Families[0]); font.Invalidate(); });
             textStyle.FontName = font.Selected;
             font.Previewing += v =>
             {

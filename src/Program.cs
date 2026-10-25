@@ -125,6 +125,7 @@ namespace FileConverter
             Application.SetCompatibleTextRenderingDefault(false);
             Theme.Init();
             Net.Init();
+            AddOns.FinishRemovals();
             FontPack.Load();
             if (test)
             {

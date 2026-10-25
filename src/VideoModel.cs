@@ -17,16 +17,32 @@ namespace FileConverter
     public class Cue
     {
         public double Start, End; public string Text = "";
-        public Cue Copy() { return new Cue { Start = Start, End = End, Text = Text }; }
-        /// Roughly when each word is said (spread over the cue by length), for "word highlight" captions.
+        /// When each word is said (from Whisper), when known.
+        public List<double> WordAt;
+        public Cue Copy() { return new Cue { Start = Start, End = End, Text = Text, WordAt = WordAt != null ? new List<double>(WordAt) : null }; }
+        public static string[] Split(string text) { return (text ?? "").Replace("\r", " ").Replace("\n", " ").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries); }
+        /// When each word is said: Whisper's own times, or (after the words were edited) spread over the cue by length.
         public List<KeyValuePair<string, double>> Words()
         {
             List<KeyValuePair<string, double>> r = new List<KeyValuePair<string, double>>();
-            string[] w = (Text ?? "").Replace("\r", " ").Replace("\n", " ").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            string[] w = Split(Text);
+            if (WordAt != null && WordAt.Count == w.Length)
+            {
+                for (int i = 0; i < w.Length; i++) r.Add(new KeyValuePair<string, double>(w[i], Math.Max(Start, Math.Min(End, WordAt[i]))));
+                return r;
+            }
             int total = 0; foreach (string x in w) total += x.Length + 1;
             double t = Start, span = Math.Max(0.1, End - Start);
             foreach (string x in w) { r.Add(new KeyValuePair<string, double>(x, t)); t += span * (x.Length + 1) / Math.Max(1, total); }
             return r;
+        }
+        /// Arabic, Hebrew, Persian, Urdu…: read from right to left.
+        public static bool IsRtl(string s)
+        {
+            if (s == null) return false;
+            foreach (char ch in s)
+                if ((ch >= 0x0590 && ch <= 0x08FF) || (ch >= 0xFB1D && ch <= 0xFDFF) || (ch >= 0xFE70 && ch <= 0xFEFF)) return true;
+            return false;
         }
     }
 
@@ -308,7 +324,13 @@ namespace FileConverter
                     {
                         b.Append(", \"capStyle\": ").Append(Js.Q(c.CapStyle)).Append(", \"capColor\": ").Append(c.CapColor.ToArgb()).Append(", \"capHigh\": ").Append(c.CapHigh.ToArgb())
                          .Append(", \"capSize\": ").Append(Js.N(c.CapSize)).Append(", \"capY\": ").Append(Js.N(c.CapY)).Append(", \"capFont\": ").Append(Js.Q(c.CapFont)).Append(", \"cues\": [");
-                        for (int i = 0; i < c.Cues.Count; i++) b.Append(i > 0 ? "," : "").Append('[').Append(Js.N(c.Cues[i].Start)).Append(',').Append(Js.N(c.Cues[i].End)).Append(',').Append(Js.Q(c.Cues[i].Text)).Append(']');
+                        for (int i = 0; i < c.Cues.Count; i++)
+                        {
+                            Cue q = c.Cues[i];
+                            b.Append(i > 0 ? "," : "").Append('[').Append(Js.N(q.Start)).Append(',').Append(Js.N(q.End)).Append(',').Append(Js.Q(q.Text));
+                            if (q.WordAt != null) { b.Append(",["); for (int k = 0; k < q.WordAt.Count; k++) b.Append(k > 0 ? "," : "").Append(Js.N(q.WordAt[k])); b.Append(']'); }
+                            b.Append(']');
+                        }
                         b.Append(']');
                     }
                     b.Append('}');
@@ -380,7 +402,15 @@ namespace FileConverter
                     if (Js.Get(co, "cues") != null)
                     {
                         c.Cues = new List<Cue>();
-                        foreach (object q in Js.A(co, "cues")) { List<object> pr = q as List<object>; if (pr != null && pr.Count >= 3) c.Cues.Add(new Cue { Start = Num(pr[0]), End = Num(pr[1]), Text = pr[2] as string ?? "" }); }
+                        foreach (object q in Js.A(co, "cues"))
+                        {
+                            List<object> pr = q as List<object>;
+                            if (pr == null || pr.Count < 3) continue;
+                            Cue cue = new Cue { Start = Num(pr[0]), End = Num(pr[1]), Text = pr[2] as string ?? "" };
+                            List<object> wa = pr.Count > 3 ? pr[3] as List<object> : null;
+                            if (wa != null) { cue.WordAt = new List<double>(); foreach (object o in wa) cue.WordAt.Add(Num(o)); }
+                            c.Cues.Add(cue);
+                        }
                         c.CapStyle = Js.S(co, "capStyle", "outline"); c.CapColor = Color.FromArgb(Js.I(co, "capColor", -1)); c.CapHigh = Color.FromArgb(Js.I(co, "capHigh", unchecked((int)0xFFFFD60A)));
                         c.CapSize = (float)Js.D(co, "capSize", 1); c.CapY = (float)Js.D(co, "capY", 0.82); c.CapFont = Js.S(co, "capFont");
                     }
@@ -466,6 +496,42 @@ namespace FileConverter
         {
             double a = cues[0].Start, b = cues[cues.Count - 1].End;
             return new VClip { Kind = VKind.Captions, Cues = cues, At = a, In = 0, Out = Math.Max(0.2, b - a) };
+        }
+
+        /// Whisper's words (one per cue, with their times) grouped into caption lines: a new line after a pause,
+        /// at the end of a sentence, or when the line gets long. Each word keeps when it's said.
+        public static List<Cue> FromWords(List<Cue> words)
+        {
+            List<Cue> r = new List<Cue>();
+            Cue cur = null; int chars = 0;
+            string ends = ".?!…؟。";
+            for (int i = 0; i < words.Count; i++)
+            {
+                Cue w = words[i];
+                string word = (w.Text ?? "").Replace("\n", " ").Trim();
+                if (word.Length == 0) continue;
+                if (cur != null)
+                {
+                    double gap = w.Start - cur.End;
+                    string last = cur.Text.Length > 0 ? cur.Text.Substring(cur.Text.Length - 1) : "";
+                    int n = cur.WordAt.Count;
+                    bool full = chars + 1 + word.Length > 42 || n >= 8;
+                    bool sentence = n >= 3 && ends.IndexOf(last, StringComparison.Ordinal) >= 0;
+                    if (gap > 0.7 || full || sentence) { r.Add(cur); cur = null; }
+                }
+                if (cur == null) { cur = new Cue { Start = w.Start, End = w.End, Text = word, WordAt = new List<double> { w.Start } }; chars = word.Length; continue; }
+                cur.Text += " " + word; cur.WordAt.Add(Math.Max(cur.WordAt[cur.WordAt.Count - 1], w.Start)); cur.End = Math.Max(cur.End, w.End);
+                chars += 1 + word.Length;
+            }
+            if (cur != null) r.Add(cur);
+            // stay on screen a moment after the last word, until the next line starts
+            for (int i = 0; i < r.Count; i++)
+            {
+                double next = i + 1 < r.Count ? r[i + 1].Start : r[i].End + 0.6;
+                r[i].End = Math.Max(r[i].End, Math.Min(next, r[i].End + 0.6));
+                if (r[i].End - r[i].Start < 0.3) r[i].End = Math.Min(r[i].Start + 0.3, i + 1 < r.Count ? Math.Max(r[i].End, r[i + 1].Start) : r[i].Start + 0.3);
+            }
+            return r;
         }
 
         public static List<Cue> ParseSrt(string text)

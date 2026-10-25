@@ -95,29 +95,39 @@ namespace FileConverter
         public static string Transcribe(string wav, int q, string lang, Action<double> progress, Func<bool> cancelled) { return Transcribe(wav, q, lang, false, progress, cancelled); }
 
         /// english: subtitles in English whatever language is spoken (Whisper's translation goes into English only).
+        /// The .srt it returns has one word per entry (with when it's said); Captions.FromWords groups them into lines.
         public static string Transcribe(string wav, int q, string lang, bool english, Action<double> progress, Func<bool> cancelled)
         {
             string exe = Exe;
             if (exe == null || !HasModel(q)) throw new UserError(L.T("cap_not_ready"));
-            string outBase = Path.Combine(Path.GetTempPath(), "fadi_cap_" + Guid.NewGuid().ToString("N"));
             int threads = Math.Max(1, Math.Min(8, Environment.ProcessorCount));
-            string args = "-m " + Tools.Quote(ModelPath(q)) + " -f " + Tools.Quote(wav) + " -l " + lang + " -t " + threads +
-                          " -osrt -of " + Tools.Quote(outBase) + " -ml 48 -sow -pp -np -bs 5 -bo 5 -et 2.6 -lpt -0.8" + (english && lang != "en" ? " -tr" : "");
-            StringBuilder err = new StringBuilder();
-            Regex pr = new Regex(@"progress\s*=\s*(\d+)\s*%");
-            Action<string> on = line =>
+            // -ml 1 -sow: one word at a time, so each word gets its own time (for word highlight).
+            // -mc 0: no carrying earlier text into the next 30 seconds — that's what made it stop after a few words.
+            // -nth: only skip a stretch as "no speech" when Whisper is quite sure (Arabic over music was being skipped).
+            string common = "-m " + Tools.Quote(ModelPath(q)) + " -f " + Tools.Quote(wav) + " -l " + lang + " -t " + threads + " -osrt -pp -np" + (english && lang != "en" ? " -tr" : "");
+            string[] tries = { " -ml 1 -sow -mc 0 -nth 0.8 -bs 5 -bo 5 -sns", " -ml 1 -sow -mc 0 -bs 5 -bo 5", " -ml 1 -sow" };
+            string lastErr = "";
+            foreach (string extra in tries)
             {
-                if (line == null) return;
-                Match m = pr.Match(line);
-                if (m.Success) { if (progress != null) progress(int.Parse(m.Groups[1].Value) / 100.0); }
-                else if (err.Length < 6000) err.AppendLine(line);
-            };
-            int code = Tools.Stream(exe, args, on, on, cancelled);
-            string srt = outBase + ".srt";
-            if (code == -2) throw new OperationCanceledException();
-            if (!File.Exists(srt) || new FileInfo(srt).Length == 0)
-                throw new UserError(L.T("cap_failed") + " " + Tools.LastLines(err.ToString(), 2));
-            return srt;
+                string outBase = Path.Combine(Path.GetTempPath(), "fadi_cap_" + Guid.NewGuid().ToString("N"));
+                StringBuilder err = new StringBuilder();
+                Regex pr = new Regex(@"progress\s*=\s*(\d+)\s*%");
+                Action<string> on = line =>
+                {
+                    if (line == null) return;
+                    Match m = pr.Match(line);
+                    if (m.Success) { if (progress != null) progress(int.Parse(m.Groups[1].Value) / 100.0); }
+                    else if (err.Length < 6000) err.AppendLine(line);
+                };
+                int code = Tools.Stream(exe, common + extra + " -of " + Tools.Quote(outBase), on, on, cancelled);
+                string srt = outBase + ".srt";
+                if (code == -2) throw new OperationCanceledException();
+                if (File.Exists(srt) && new FileInfo(srt).Length > 0) return srt;
+                lastErr = err.ToString();
+                // an older whisper-cli that doesn't know an option: try again with fewer
+                if (lastErr.IndexOf("unknown", StringComparison.OrdinalIgnoreCase) < 0 && lastErr.IndexOf("invalid", StringComparison.OrdinalIgnoreCase) < 0) break;
+            }
+            throw new UserError(L.T("cap_failed") + " " + Tools.LastLines(lastErr, 2));
         }
     }
 

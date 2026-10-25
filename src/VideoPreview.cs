@@ -11,7 +11,7 @@ using System.Windows.Forms;
 namespace FileConverter
 {
     /// Frames of the project's files, fetched in the background (one at a time, newest wish first) and kept for a while.
-    public class FrameCache
+    public class FrameCache : IFrames
     {
         /// Held while frames are drawn from (GDI+ pictures can't be used by two threads at once).
         public readonly object Gate = new object();
@@ -51,6 +51,13 @@ namespace FileConverter
                 }
                 return near;
             }
+        }
+
+        /// A clip's frame at a moment of its file (cut-outs are decoded with their see-through parts).
+        public Bitmap Video(VClip c, double srcT, out bool exact)
+        {
+            if (c.Alpha) lock (Alpha) Alpha.Add(c.File);
+            return Get(c.File, srcT, out exact);
         }
 
         /// A photo, decoded once (at most 1600 pixels).
@@ -127,7 +134,7 @@ namespace FileConverter
     /// Draws the project at one moment (for scrubbing and editing): the same layers the export makes, close enough to judge.
     public static class Composer
     {
-        public static Bitmap Compose(VProject p, double t, int w, int h, FrameCache fc, out bool waiting)
+        public static Bitmap Compose(VProject p, double t, int w, int h, IFrames fc, out bool waiting)
         {
             waiting = false;
             p.Layout();
@@ -185,14 +192,13 @@ namespace FileConverter
             return b;
         }
 
-        static Bitmap FrameOf(VClip c, double t, FrameCache fc, out bool waiting)
+        static Bitmap FrameOf(VClip c, double t, IFrames fc, out bool waiting)
         {
             waiting = false;
             if (c.Kind == VKind.Image) return fc.Still(c.File);
             double st = c.In + (t - c.At) * c.Speed;
-            if (c.Alpha) lock (fc.Alpha) fc.Alpha.Add(c.File);
             bool exact;
-            Bitmap b = fc.Get(c.File, Math.Max(0, Math.Min(c.Out - 0.04, st)), out exact);
+            Bitmap b = fc.Video(c, Math.Max(0, Math.Min(c.Out - 0.04, st)), out exact);
             waiting = !exact;
             return b;
         }
@@ -299,7 +305,17 @@ namespace FileConverter
             g.Restore(st);
         }
 
-        /// The caption showing now, in its style.
+        /// The captions' font: the one picked, else Cairo when the Arabic fonts are here (it has Latin letters too).
+        public static string CapFontName(VClip c) { return string.IsNullOrEmpty(c.CapFont) ? (FontPack.Ready && FontPack.Find("Cairo") != null ? "Cairo" : "Segoe UI") : c.CapFont; }
+
+        static FontFamily Family(string name)
+        {
+            FontFamily f = FontPack.Find(name);
+            if (f != null) return f;
+            try { return new FontFamily(name); } catch { return FontFamily.GenericSansSerif; }
+        }
+
+        /// The caption showing now, in its style. Arabic (and other right-to-left words) go from right to left.
         public static void DrawCaption(Graphics g, VClip c, double t, int w, int h)
         {
             Cue q = c.Cues.Find(x => t >= x.Start && t < x.End);
@@ -307,22 +323,23 @@ namespace FileConverter
             string text = c.CapStyle == "bold" ? q.Text.ToUpper(CultureInfo.CurrentCulture) : q.Text;
             float size = Math.Min(w, h) * 0.062f * c.CapSize * (c.CapStyle == "bold" ? 1.25f : 1);
             if (size < 3) return;
-            string fontName = string.IsNullOrEmpty(c.CapFont) ? "Segoe UI" : c.CapFont;
-            FontFamily ff;
-            try { ff = new FontFamily(fontName); } catch { ff = FontFamily.GenericSansSerif; }
-            bool bold = c.CapStyle != "outline" && c.CapStyle != "box" || c.CapStyle == "outline";
+            FontFamily ff = Family(CapFontName(c));
+            bool bold = c.CapStyle == "bold" || c.CapStyle == "highlight" || c.CapStyle == "outline";
             FontStyle fs = bold ? FontStyle.Bold : FontStyle.Regular;
-            if (!ff.IsStyleAvailable(fs)) fs = FontStyle.Regular;
-            // words laid out in lines across most of the width
-            List<KeyValuePair<string, double>> words = new Cue { Start = q.Start, End = q.End, Text = text }.Words();
+            if (!ff.IsStyleAvailable(fs)) fs = ff.IsStyleAvailable(FontStyle.Regular) ? FontStyle.Regular : FontStyle.Bold;
+            bool rtl = Cue.IsRtl(text);
+            // the words (with when each is said), laid out in lines across most of the width
+            Cue up = q.Copy(); up.Text = text;
+            List<KeyValuePair<string, double>> words = up.Words();
             int cur = -1;
             for (int i = 0; i < words.Count; i++) if (t >= words[i].Value) cur = i;
-            float emPx = size * 1.0f, space = size * 0.3f, maxW = w * 0.86f;
+            float emPx = size, space = size * 0.3f, maxW = w * 0.86f;
             List<List<int>> lines = new List<List<int>> { new List<int>() };
             List<float> lineW = new List<float> { 0 };
             float[] ww = new float[words.Count];
-            using (StringFormat sf = StringFormat.GenericTypographic)
+            using (StringFormat sf = (StringFormat)StringFormat.GenericTypographic.Clone())
             {
+                if (rtl) sf.FormatFlags |= StringFormatFlags.DirectionRightToLeft;
                 for (int i = 0; i < words.Count; i++)
                 {
                     using (GraphicsPath gp = new GraphicsPath()) { gp.AddString(words[i].Key, ff, (int)fs, emPx, PointF.Empty, sf); ww[i] = gp.GetBounds().Width + size * 0.05f; }
@@ -334,20 +351,25 @@ namespace FileConverter
                 float lh = size * 1.25f, y0 = c.CapY * h - lines.Count * lh / 2;
                 for (int li = 0; li < lines.Count; li++)
                 {
-                    float x = (w - lineW[li]) / 2, y = y0 + li * lh;
+                    float left = (w - lineW[li]) / 2, y = y0 + li * lh;
                     if (c.CapStyle == "box")
-                        Theme.FillRound(g, new RectangleF(x - size * 0.3f, y - size * 0.08f, lineW[li] + size * 0.6f, lh), size * 0.18f, Color.FromArgb(190, 0, 0, 0));
+                        Theme.FillRound(g, new RectangleF(left - size * 0.3f, y - size * 0.08f, lineW[li] + size * 0.6f, lh), size * 0.18f, Color.FromArgb(190, 0, 0, 0));
+                    // left to right, or (Arabic) from the right edge of the line to the left
+                    float x = rtl ? left + lineW[li] : left;
                     foreach (int i in lines[li])
                     {
+                        float wx = rtl ? x - ww[i] : x;
                         bool hi = (c.CapStyle == "highlight" || c.CapStyle == "bold") && i == cur;
                         using (GraphicsPath gp = new GraphicsPath())
                         {
-                            gp.AddString(words[i].Key, ff, (int)fs, emPx * (hi && c.CapStyle == "bold" ? 1.1f : 1), new PointF(x, y), sf);
+                            gp.AddString(words[i].Key, ff, (int)fs, emPx * (hi && c.CapStyle == "bold" ? 1.1f : 1), PointF.Empty, sf);
+                            RectangleF bb = gp.GetBounds();
+                            using (Matrix m = new Matrix()) { m.Translate(wx - bb.X, y); gp.Transform(m); }
                             if (c.CapStyle != "box")
                                 using (Pen o = new Pen(Color.Black, Math.Max(1.5f, size / (c.CapStyle == "bold" ? 3.5f : 6f))) { LineJoin = LineJoin.Round }) g.DrawPath(o, gp);
                             using (SolidBrush b = new SolidBrush(hi ? c.CapHigh : c.CapColor)) g.FillPath(b, gp);
                         }
-                        x += ww[i] + space;
+                        x = rtl ? x - ww[i] - space : x + ww[i] + space;
                     }
                 }
             }
@@ -442,7 +464,9 @@ namespace FileConverter
         {
             base.OnMouseDown(e);
             grab = 0; moved = false;
-            if (P == null || Playing || e.Button != MouseButtons.Left) return;
+            if (P == null || e.Button != MouseButtons.Left) return;
+            // while playing, a click on the picture pauses
+            if (Playing) { if (Clicked != null) Clicked(); return; }
             VClip c = Selected;
             if (Movable(c))
             {

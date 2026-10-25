@@ -114,7 +114,7 @@ namespace FileConverter
         /// Captions in their style, as an .ass subtitles file the size of the picture.
         public static string Ass(VClip cap, int W, int H)
         {
-            string font = string.IsNullOrEmpty(cap.CapFont) ? (FontPack.Ready ? "Cairo" : "Segoe UI") : cap.CapFont;
+            string font = Composer.CapFontName(cap);
             int size = (int)Math.Round(Math.Min(W, H) * 0.062 * cap.CapSize * (cap.CapStyle == "bold" ? 1.25 : 1));
             int outline = cap.CapStyle == "box" ? 0 : Math.Max(2, size / (cap.CapStyle == "bold" ? 7 : 12));
             int border = cap.CapStyle == "box" ? 3 : 1;
@@ -123,7 +123,9 @@ namespace FileConverter
             StringBuilder b = new StringBuilder();
             b.Append("[Script Info]\nScriptType: v4.00+\nPlayResX: ").Append(W).Append("\nPlayResY: ").Append(H).Append("\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n");
             b.Append("[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n");
-            b.AppendFormat("Style: Cap,{0},{1},{2},{3},{4},{5},{6},0,0,0,100,100,0,0,{7},{8},{9},5,{10},{10},0,1\n\n",
+            // Encoding -1: libass works out the direction from the words, so Arabic reads right to left
+            // (with 1 it laid the words out left to right as soon as a word was highlighted)
+            b.AppendFormat("Style: Cap,{0},{1},{2},{3},{4},{5},{6},0,0,0,100,100,0,0,{7},{8},{9},5,{10},{10},0,-1\n\n",
                 font.Replace(",", " "), size, AssColor(cap.CapColor), AssColor(cap.CapHigh), AssColor(cap.CapStyle == "box" ? Color.Black : Color.Black), back, bold ? -1 : 0, border, outline, cap.CapStyle == "box" ? 0 : 1, (int)(W * 0.06));
             b.Append("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
             string pos = "{\\an5\\pos(" + (W / 2) + "," + (int)(cap.CapY * H) + ")}";
@@ -133,7 +135,7 @@ namespace FileConverter
                 if (cap.CapStyle == "highlight" || cap.CapStyle == "bold")
                 {
                     // the word being said in the highlight color (each word gets its own moment)
-                    Cue up = new Cue { Start = q.Start, End = q.End, Text = text };
+                    Cue up = q.Copy(); up.Text = text;   // keeps when each word is said
                     List<KeyValuePair<string, double>> words = up.Words();
                     for (int i = 0; i < words.Count; i++)
                     {

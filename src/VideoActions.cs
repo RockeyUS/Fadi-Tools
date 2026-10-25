@@ -80,7 +80,6 @@ namespace FileConverter
                 if (c == null) return;
             }
             if (Playhead <= c.At + 0.05 || Playhead >= c.End - 0.05) return;
-            StopPlay();
             Change("vs_h_split");
             VTrack t = P.TrackOf(c);
             double cut = Playhead - c.At;
@@ -134,7 +133,6 @@ namespace FileConverter
         {
             VClip c = Sel;
             if (c == null) return;
-            StopPlay();
             Change("vs_h_delete");
             VTrack t = P.TrackOf(c);
             if (t != null) t.Clips.Remove(c);
@@ -292,7 +290,7 @@ namespace FileConverter
                     string wav16 = wav + ".wav";
                     string o; Tools.RunHidden(Tools.FFmpeg, "-hide_banner -y -i " + Tools.Quote(wav) + " -ar 16000 -ac 1 " + Tools.Quote(wav16), 600000, out o);
                     string srt = Whisper.Transcribe(wav16, q, lang, english, f => say(L.T("cap_listening", (int)(f * 100)), 0.05 + f * 0.95), () => capCancel);
-                    cues = Captions.ParseSrt(File.ReadAllText(srt, Encoding.UTF8));
+                    cues = Captions.FromWords(Captions.ParseSrt(File.ReadAllText(srt, Encoding.UTF8)));
                     try { File.Delete(srt); File.Delete(wav16); } catch { }
                     if (cues.Count == 0) err = L.T("cap_nothing");
                 }

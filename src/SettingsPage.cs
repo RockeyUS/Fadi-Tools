@@ -9,7 +9,7 @@ namespace FileConverter
 {
     public class SettingsPage : Page
     {
-        Rectangle appearance, saving, about, engines, integration, wheelCard;
+        Rectangle appearance, saving, about, engines, integration, wheelCard, addons;
         readonly WheelEntry wheelEntry = new WheelEntry();
         readonly WatchEntry watchEntry = new WatchEntry();
         WheelPage wheelPage;
@@ -146,6 +146,85 @@ namespace FileConverter
         }
 
         Btn btnUpdate, btnTips, btnZip, btnNew;
+
+        // ---- add-ons: what Fadi Tools downloaded, where it is, how big, and a button to remove it
+        List<AddOn> aoList = new List<AddOn>();
+        readonly List<string> aoPaths = new List<string>();
+        readonly List<Rectangle> aoRows = new List<Rectangle>();
+        readonly List<Btn> aoOpen = new List<Btn>(), aoDel = new List<Btn>();
+        readonly HashSet<string> aoBusy = new HashSet<string>();
+        bool aoLoading;
+
+        /// Looks again at what's installed (on a background thread: sizes take a moment).
+        void RefreshAddOns()
+        {
+            if (aoLoading) return;
+            aoLoading = true;
+            Thread t = new Thread(() =>
+            {
+                List<AddOn> found = new List<AddOn>();
+                List<string> paths = new List<string>();
+                foreach (AddOn a in AddOns.All())
+                {
+                    string d = a.Path2;
+                    if (d == null) continue;
+                    // sizes only for Fadi Tools' own folders (an FFmpeg found elsewhere may sit in a big shared folder)
+                    a.Size = !a.Machine && d.StartsWith(Paths.ToolsDir, StringComparison.OrdinalIgnoreCase) ? AddOns.SizeOf(d) : -1;
+                    found.Add(a); paths.Add(d);
+                }
+                Ui(() =>
+                {
+                    aoLoading = false;
+                    aoList = found; aoPaths.Clear(); aoPaths.AddRange(paths);
+                    foreach (Btn b in aoOpen) { body.Controls.Remove(b); b.Dispose(); }
+                    foreach (Btn b in aoDel) { body.Controls.Remove(b); b.Dispose(); }
+                    aoOpen.Clear(); aoDel.Clear();
+                    for (int i = 0; i < aoList.Count; i++)
+                    {
+                        AddOn a = aoList[i]; string dir = aoPaths[i];
+                        Btn o = new Btn(() => "", Ico.Folder, BtnKind.Ghost) { GlyphSize = 10f };
+                        o.Click += (s, e) => AddOns.OpenFolder(dir);
+                        o.AccessibleName = L.T("ao_open");
+                        o.MouseEnter += (s, e) => aoTip.SetToolTip(o, L.T("ao_open"));
+                        Btn d = new Btn(() => aoBusy.Contains(a.Key) ? L.T("ao_removing") : L.T("uninstall"), Ico.Delete, BtnKind.Secondary) { FontSize = 8.75f, GlyphSize = 9f, Visible = !a.Required };
+                        d.Click += (s, e) => RemoveAddOn(a);
+                        aoOpen.Add(o); aoDel.Add(d);
+                        body.Controls.Add(o); body.Controls.Add(d);
+                    }
+                    DoLayout();
+                });
+            }) { IsBackground = true };
+            t.Start();
+        }
+        readonly ToolTip aoTip = new ToolTip();
+
+        void RemoveAddOn(AddOn a)
+        {
+            if (aoBusy.Contains(a.Key)) return;
+            string where = a.Path2;
+            if (where == null) { RefreshAddOns(); return; }
+            string name = L.T(a.NameKey);
+            if (!Ask.Confirm(FindForm(), L.T("ao_q", name), L.T(a.Machine ? "ao_q_machine" : "ao_q_d", name, where), L.T("uninstall"), L.T("cancel"), AskKind.Warning)) return;
+            aoBusy.Add(a.Key);
+            body.Invalidate(true);
+            Thread t = new Thread(() =>
+            {
+                string msg;
+                try { msg = AddOns.Remove(a); } catch (Exception ex) { msg = ex.Message; }
+                Ui(() =>
+                {
+                    aoBusy.Remove(a.Key);
+                    if (a.Key == "fonts") FontPack.Forget();
+                    Tools.Reset();
+                    Refresh2();
+                    RefreshAddOns();
+                    if (msg != null) ShowToast(msg, true, null, null);
+                });
+            }) { IsBackground = true };
+            t.Start();
+        }
+
+        int AddOnsHeight { get { return Theme.S(54) + Math.Max(1, aoList.Count) * Theme.S(64) + Theme.S(8); } }
         Rectangle zipRow; bool zipping; string zipStatus;
 
         void MakeZip()
@@ -228,7 +307,7 @@ namespace FileConverter
             integ[8].SetSilently(Shell.StartsWithWindows);
         }
 
-        public override void OnShown() { Tools.Reset(); LoadValues(); Refresh2(); if (!openingWheel) CloseWheel(false); }
+        public override void OnShown() { Tools.Reset(); LoadValues(); Refresh2(); RefreshAddOns(); if (!openingWheel) CloseWheel(false); }
         bool openingWheel;
 
         // ------------------------------------------------------------------ pages of their own on top: Donut Wheel, Watch folders
@@ -323,7 +402,8 @@ namespace FileConverter
             if (one)
             {
                 engines = new Rectangle(lx, saving.Bottom + gap, colW, Theme.S(296));
-                integration = new Rectangle(lx, engines.Bottom + gap, colW, Theme.S(790));
+                addons = new Rectangle(lx, engines.Bottom + gap, colW, AddOnsHeight);
+                integration = new Rectangle(lx, addons.Bottom + gap, colW, Theme.S(790));
                 wheelCard = new Rectangle(lx, integration.Bottom + gap, colW, Theme.S(92));
                 watchCard = new Rectangle(lx, wheelCard.Bottom + gap, colW, Theme.S(92));
                 about = new Rectangle(lx, watchCard.Bottom + gap, colW, aboutTall ? Theme.S(152) : Theme.S(112));
@@ -334,9 +414,10 @@ namespace FileConverter
                 watchCard = new Rectangle(lx, wheelCard.Bottom + gap, colW, Theme.S(92));
                 about = new Rectangle(lx, watchCard.Bottom + gap, colW, aboutTall ? Theme.S(152) : Math.Max(Theme.S(96), Math.Min(Theme.S(120), H - watchCard.Bottom - gap - p)));
                 engines = new Rectangle(rx, y, colW, Theme.S(296));
-                integration = new Rectangle(rx, engines.Bottom + gap, colW, Theme.S(790));
+                addons = new Rectangle(rx, engines.Bottom + gap, colW, AddOnsHeight);
+                integration = new Rectangle(rx, addons.Bottom + gap, colW, Theme.S(790));
             }
-            cards.AddRange(new[] { appearance, saving, about, engines, integration });
+            cards.AddRange(new[] { appearance, saving, about, engines, addons, integration });
             Place(wheelEntry, wheelCard);   // a card that is a button: it paints itself
             Place(watchEntry, watchCard);
 
@@ -380,6 +461,16 @@ namespace FileConverter
             int uw2 = Math.Max(Theme.S(120), btnYtUpdate.PreferredWidth);
             Place(btnYtUpdate, new Rectangle(ex + ew - uw2, engineRows[3].Y + Theme.S(10), uw2, Theme.S(34)));
             Place(ytProgress, new Rectangle(ex + ew - bw, engineRows[3].Y + Theme.S(24), bw, Theme.S(5)));
+
+            aoRows.Clear();
+            for (int i = 0; i < aoList.Count; i++)
+            {
+                Rectangle r = new Rectangle(ex, addons.Y + Theme.S(50) + i * Theme.S(64), ew, Theme.S(60));
+                aoRows.Add(r);
+                int dw = Math.Max(Theme.S(112), aoDel[i].PreferredWidth + Theme.S(6)), bh = Theme.S(32), by = r.Y + (r.Height - bh) / 2;
+                Place(aoDel[i], new Rectangle(r.Right - dw, by, dw, bh));
+                Place(aoOpen[i], new Rectangle(r.Right - (aoDel[i].Visible ? dw + Theme.S(6) : 0) - bh, by, bh, bh));
+            }
 
             // the two notification choices sit right under "Windows notification…", a little indented
             int iy = integration.Y + Theme.S(50);
@@ -452,6 +543,24 @@ namespace FileConverter
                 if (!hasBtn)
                     Label(g, ok[i] ? L.T("installed") : L.T("not_installed"), Theme.F(8.75f, FontStyle.Bold), ok[i] ? Theme.Success : Theme.InkFaint, new Rectangle(r.Right - Theme.S(110), r.Y, Theme.S(110), r.Height), Align.End);
                 if (i < 3) using (System.Drawing.Pen lp = new System.Drawing.Pen(Theme.Line)) { Rectangle l = M(new Rectangle(r.X, r.Bottom + Theme.S(2), r.Width, 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
+            }
+
+            Head(g, addons, Ico.Download, "ao_title");
+            if (aoList.Count == 0)
+                Label(g, aoLoading ? L.T("ao_checking") : L.T("ao_none"), Theme.F(8.75f), Theme.InkSoft, new Rectangle(addons.X + Theme.S(20), addons.Y + Theme.S(50), addons.Width - Theme.S(40), Theme.S(56)), Align.Start, false, true);
+            for (int i = 0; i < aoList.Count && i < aoRows.Count; i++)
+            {
+                AddOn a = aoList[i];
+                Rectangle r = aoRows[i];
+                Rectangle dot = new Rectangle(r.X, r.Y + (r.Height - Theme.S(30)) / 2, Theme.S(30), Theme.S(30));
+                Theme.FillRound(g, M(dot), Theme.S(9), Theme.CardInner);
+                Theme.Glyph(g, a.Glyph, 9.5f, Theme.InkSoft, M(dot));
+                int right = aoOpen[i].Left;
+                int tw = Math.Max(Theme.S(40), (Theme.RTL ? r.Right - right : right - r.X) - Theme.S(52));
+                string title = L.T(a.NameKey) + (a.Size > 0 ? "  ·  " + Theme.HumanSize(a.Size) : "") + (a.Required ? "  ·  " + L.T("ao_required") : "");
+                Label(g, title, Theme.F(9.5f, FontStyle.Bold), Theme.Ink, new Rectangle(r.X + Theme.S(42), r.Y + Theme.S(9), tw, Theme.S(22)));
+                Label(g, L.T("re_node_where", Theme.RTL ? "\u202A" + aoPaths[i] + "\u202C" : aoPaths[i]), Theme.F(8.25f), Theme.InkSoft, new Rectangle(r.X + Theme.S(42), r.Y + Theme.S(31), tw, Theme.S(20)), Align.Start, true, false);
+                if (i < aoList.Count - 1) using (Pen lp = new Pen(Theme.Line)) { Rectangle l = M(new Rectangle(r.X, r.Bottom + Theme.S(2), r.Width, 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
             }
 
             Head(g, integration, Ico.Settings, "integration");

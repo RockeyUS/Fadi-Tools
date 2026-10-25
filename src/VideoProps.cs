@@ -204,6 +204,10 @@ namespace FileConverter
             font.SelectedChanged += (s, e) => Edit("vs_h_font", null, c => { if (c.Text != null) { c.Text.FontName = font.Selected; c.Text.Touch(); } }, false);
             capFont.Items = font.Items; capFont.Favorites = favs; capFont.Extra = FontPack.Families; capFont.ExtraHeader = () => L.T("fonts_arabic");
             capFont.SelectedChanged += (s, e) => Edit("vs_h_caps", null, c => c.CapFont = capFont.Selected, false);
+            // the free Arabic fonts, right from the font menus
+            font.ActionLabel = capFont.ActionLabel = () => FontPack.Ready ? null : L.T("fonts_get_arabic");
+            font.Action = () => GetArabicFonts(false);
+            capFont.Action = () => GetArabicFonts(true);
             textSize.Format = v => ((int)Math.Round(v)) + " px";
             textSize.ValueChanged += (s, e) => Edit("vs_h_text", textSize, c => { if (c.Text != null) { c.Text.SizePx = textSize.Value; c.Text.Touch(); } }, false);
             textSize.Committed += (s, e) => EndChange();
@@ -250,6 +254,22 @@ namespace FileConverter
                 capStyle, capFont, capSize, capY, capColor, capHigh, capWords, bCapSrt, aspect, fps, fill, fillColor });
             foreach (Control c in propCtl) { if (c is UiControl) ((UiControl)c).Surface = Surface.Card; c.Visible = false; }
             props.Controls.AddRange(propCtl.ToArray());
+        }
+
+        void GetArabicFonts(bool forCaptions)
+        {
+            FontPack.Get(this, (m, ok) => ShowToast(m, ok, null, null), () =>
+            {
+                font.Extra = capFont.Extra = FontPack.Families;
+                if (FontPack.Ready && Sel != null)
+                {
+                    string pick = FontPack.Find("Cairo") != null ? "Cairo" : FontPack.Families[0];
+                    if (forCaptions && Sel.Cues != null) capFont.Pick(pick);
+                    else if (!forCaptions && Sel.Text != null) font.Pick(pick);
+                }
+                font.Invalidate(); capFont.Invalidate();
+                Recompose();
+            });
         }
 
         /// A motion setting: its slider, its keyframe switch, how it maps to the clip.

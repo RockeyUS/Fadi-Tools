@@ -122,3 +122,83 @@ namespace FileConverter
         }
     }
 }
+
+namespace FileConverter
+{
+    /// The preview's own volume (it doesn't change the video): the speaker mutes, the bar sets how loud.
+    public class VolumeBar : UiControl
+    {
+        public float Value = 1;
+        public bool Muted;
+        public event Action Changed;
+        bool drag;
+
+        public VolumeBar() { Surface = Surface.Card; Cursor = System.Windows.Forms.Cursors.Hand; TabStop = true; }
+
+        Rectangle IconR { get { return Theme.Mirror(new Rectangle(0, 0, Height, Height), Width); } }
+        Rectangle Bar { get { int x0 = Height + Theme.S(2), x1 = Width - Theme.S(8); return Theme.Mirror(new Rectangle(x0, Height / 2 - Theme.S(2), Math.Max(10, x1 - x0), Theme.S(4)), Width); } }
+
+        void Set(float v, bool unmute)
+        {
+            v = Math.Max(0, Math.Min(1, v));
+            bool ch = Math.Abs(v - Value) > 0.0001f || (unmute && Muted);
+            Value = v; if (unmute) Muted = false;
+            Invalidate();
+            if (ch && Changed != null) Changed();
+        }
+
+        float At(int x) { Rectangle b = Bar; float f = (x - b.X) / (float)Math.Max(1, b.Width); return Theme.RTL ? 1 - f : f; }
+
+        protected override void OnPaint(System.Windows.Forms.PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            PaintBg(g);
+            Theme.Smooth(g);
+            Rectangle ir = IconR;
+            if (hovering) Theme.FillRound(g, RectangleF.Inflate(ir, -Theme.S(2), -Theme.S(2)), Theme.S(8), Theme.Hover);
+            bool off = Muted || Value < 0.005f;
+            Theme.Glyph(g, off ? "" : Ico.Volume, 10.5f, off ? Theme.AccentColor : Theme.InkSoft, ir);
+            Rectangle b = Bar;
+            Theme.FillRound(g, b, b.Height / 2f, Theme.Track);
+            float f = Muted ? 0 : Value;
+            int fw = (int)Math.Round(b.Width * f);
+            Rectangle fill = Theme.RTL ? new Rectangle(b.Right - fw, b.Y, fw, b.Height) : new Rectangle(b.X, b.Y, fw, b.Height);
+            if (fw > 0) Theme.FillRound(g, fill, b.Height / 2f, Muted ? Theme.InkFaint : Theme.AccentColor);
+            float kx = Theme.RTL ? b.Right - fw : b.X + fw, r = Theme.S(6);
+            using (SolidBrush br = new SolidBrush(Color.White)) g.FillEllipse(br, kx - r, b.Y + b.Height / 2f - r, r * 2, r * 2);
+            using (Pen p = new Pen(Muted ? Theme.InkFaint : Theme.AccentColor, Theme.S(1.5f))) g.DrawEllipse(p, kx - r, b.Y + b.Height / 2f - r, r * 2, r * 2);
+        }
+
+        protected override void OnMouseDown(System.Windows.Forms.MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button != System.Windows.Forms.MouseButtons.Left) return;
+            if (IconR.Contains(e.Location))
+            {
+                if (Value < 0.005f) { Value = 0.6f; Muted = false; } else Muted = !Muted;
+                Invalidate();
+                if (Changed != null) Changed();
+                return;
+            }
+            drag = true; Set(At(e.X), true);
+        }
+        protected override void OnMouseMove(System.Windows.Forms.MouseEventArgs e) { base.OnMouseMove(e); if (drag) Set(At(e.X), true); }
+        protected override void OnMouseUp(System.Windows.Forms.MouseEventArgs e) { base.OnMouseUp(e); drag = false; }
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); Invalidate(); }
+        protected override void OnMouseWheel(System.Windows.Forms.MouseEventArgs e) { base.OnMouseWheel(e); Set(Value + e.Delta / 120f * 0.05f, true); }
+        protected override bool IsInputKey(System.Windows.Forms.Keys k) { return k == System.Windows.Forms.Keys.Left || k == System.Windows.Forms.Keys.Right || base.IsInputKey(k); }
+        protected override void OnKeyDown(System.Windows.Forms.KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            bool up = e.KeyCode == System.Windows.Forms.Keys.Up || e.KeyCode == (Theme.RTL ? System.Windows.Forms.Keys.Left : System.Windows.Forms.Keys.Right);
+            bool down = e.KeyCode == System.Windows.Forms.Keys.Down || e.KeyCode == (Theme.RTL ? System.Windows.Forms.Keys.Right : System.Windows.Forms.Keys.Left);
+            if (up) { Set(Value + 0.05f, true); e.Handled = true; }
+            else if (down) { Set(Value - 0.05f, true); e.Handled = true; }
+            else if (e.KeyCode == System.Windows.Forms.Keys.M) { Muted = !Muted; Invalidate(); if (Changed != null) Changed(); e.Handled = true; }
+        }
+        protected override string AccName { get { return L.T("vs_preview_vol"); } }
+        protected override System.Windows.Forms.AccessibleRole AccRole { get { return System.Windows.Forms.AccessibleRole.Slider; } }
+        protected override string AccValue { get { return Muted ? L.T("vs_muted") : ((int)Math.Round(Value * 100)) + "%"; } }
+    }
+}

@@ -20,7 +20,8 @@ namespace FileConverter
         readonly FrameCache frames = new FrameCache();
         readonly PanelBody props = new PanelBody();
         readonly AddRail addRail = new AddRail();
-        readonly PreviewPlayer player = new PreviewPlayer();
+        readonly LivePlayer live;
+        readonly VolumeBar volBar = new VolumeBar();
         readonly DropZone drop;
         readonly CanvasShapes shapes = new CanvasShapes();
         readonly RecentStrip recents = new RecentStrip();
@@ -46,8 +47,12 @@ namespace FileConverter
             Glyph = Ico.Video;
             timeline.P = P; preview.P = P;
             timeline.BeforeChange = n => { Change(n); return true; };
-            timeline.Changed += () => AfterChange(false);
-            timeline.Seek += (t, final) => { StopPlay(); Playhead = t; Recompose(); if (final) { } };
+            // while a clip is dragged or trimmed the timeline follows the mouse at once; the rest (picture, settings)
+            // catches up at most once per screen refresh, so the drag stays smooth
+            afterTimer = new System.Windows.Forms.Timer { Interval = 15 };
+            afterTimer.Tick += (s, e) => { afterTimer.Stop(); AfterChange(false); };
+            timeline.Changed += () => { if (!afterTimer.Enabled) afterTimer.Start(); };
+            timeline.Seek += (t, final) => SeekTo(t);
             timeline.Picked += c => { Select(c); };
             timeline.TransitionPicked += i => { tab = 2; LayoutProps(); };
             timeline.Menu += ClipMenu;
@@ -59,6 +64,25 @@ namespace FileConverter
             preview.Picked += c => { timeline.Selected = c; Select(c); };
             preview.Clicked += TogglePlay;
             frames.Arrived += () => Ui(() => { if (!playing) Recompose(); });
+            live = new LivePlayer(frames);
+            live.Frame += (b, t) => Ui(() =>
+            {
+                live.Delivered();
+                if (!playing) { b.Dispose(); return; }
+                preview.SetFrame(b); Playhead = t; timeline.Follow();
+                if (++uiTick % 8 == 0) UpdateButtons();
+            });
+            live.Ended += () => Ui(() => { if (playing) { StopPlay(); Playhead = P.Duration; } });
+            float mv; float.TryParse(Settings.Get("VsVolume", "100"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out mv);
+            volBar.Value = Math.Max(0, Math.Min(1, mv / 100f)); volBar.Muted = Settings.Get("VsMuted", "0") == "1";
+            volBar.Changed += () =>
+            {
+                live.Master = volBar.Muted ? 0 : volBar.Value;
+                Settings.Set("VsVolume", ((int)Math.Round(volBar.Value * 100)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Settings.Set("VsMuted", volBar.Muted ? "1" : "0");
+            };
+            live.Master = volBar.Muted ? 0 : volBar.Value;
+            volBar.MouseEnter += (s, e) => tips.SetToolTip(volBar, L.T("vs_preview_vol"));
             props.Scrolled += LayoutProps;
             props.ExtraPaint = PaintPropsExtra;
             addRail.Picked += AddPicked;
@@ -75,11 +99,11 @@ namespace FileConverter
             bOpen = new Btn(() => L.T("vs_open_project"), "", BtnKind.Secondary) { FontSize = 9.5f };
             bOpen.Click += (s, e) => { string f = PickProject(FindForm()); if (f != null) OpenProject(f, false); };
             // ---- under the picture: playing
-            bBack = Icon("", "vs_back5", () => { StopPlay(); Playhead = Math.Max(0, Playhead - 5); Recompose(); });
+            bBack = Icon("", "vs_back5", () => SeekTo(Playhead - 5));
             bPlay = new Btn(() => "", Ico.Play, BtnKind.Ghost) { GlyphSize = 12f };
             bPlay.Click += (s, e) => TogglePlay();
             bPlay.MouseEnter += (s, e) => tips.SetToolTip(bPlay, L.T("vs_play_tip"));
-            bFwd = Icon("", "vs_fwd5", () => { StopPlay(); Playhead = Math.Min(P.Duration, Playhead + 5); Recompose(); });
+            bFwd = Icon("", "vs_fwd5", () => SeekTo(Playhead + 5));
             // ---- the timeline's tools
             bSplit = Icon(Ico.Cut, "vs_split", Split);
             bDel = Icon(Ico.Delete, "vs_delete", DeleteSelected);
@@ -99,7 +123,7 @@ namespace FileConverter
             recents.Open += f => OpenProject(f, false);
             recents.Browse += () => { string f = PickProject(FindForm()); if (f != null) OpenProject(f, false); };
             InitProps();
-            Controls.AddRange(new Control[] { timeline, preview, props, addRail, bUndo, bRedo, bAspect, bMore, bExport, bOpen, bPlay, bBack, bFwd, bSplit, bDel, bDup, bDetach, bKey, bSnap, bZoomIn, bZoomOut, bFitTl, drop, shapes, recents });
+            Controls.AddRange(new Control[] { timeline, preview, props, addRail, bUndo, bRedo, bAspect, bMore, bExport, bOpen, bPlay, bBack, bFwd, volBar, bSplit, bDel, bDup, bDetach, bKey, bSnap, bZoomIn, bZoomOut, bFitTl, drop, shapes, recents });
             EnableDrop(drop, preview, shapes);
             autoTimer = new System.Windows.Forms.Timer { Interval = 60000 };
             autoTimer.Tick += (s, e) => AutoSave();
@@ -109,7 +133,7 @@ namespace FileConverter
             UpdateButtons();
         }
 
-        System.Windows.Forms.Timer autoTimer;
+        System.Windows.Forms.Timer autoTimer, afterTimer;
         Action saveNow;
 
         Btn Icon(string glyph, string tipKey, Action a)
@@ -132,12 +156,16 @@ namespace FileConverter
         }
         void InvalidateTime() { if (!timeR.IsEmpty) Invalidate(M(timeR)); }
 
-        int composeToken;
-        /// Draws the picture at the playhead (off the screen's thread; the newest wish wins).
+        bool composing, composeAgain;
+        int uiTick;
+        /// Draws the picture at the playhead (off the screen's thread). One at a time: changes that come in meanwhile
+        /// are drawn together right after, so dragging stays smooth. While playing, the player just gets the change.
         void Recompose()
         {
-            if (playing || P.Empty) { preview.Invalidate(); return; }
-            int my = ++composeToken;
+            if (P.Empty) { preview.Invalidate(); return; }
+            if (playing) { live.Update(P.Copy()); return; }
+            if (composing) { composeAgain = true; return; }
+            composing = true; composeAgain = false;
             VProject snap = P.Copy();
             double t = playhead;
             RectangleF s = preview.Screen;
@@ -145,79 +173,57 @@ namespace FileConverter
             frames.Height = Math.Max(240, Math.Min(720, h));
             ThreadPool.QueueUserWorkItem(_ =>
             {
-                if (my != composeToken) return;
                 bool waiting;
                 Bitmap b = null;
                 lock (frames.Gate)
                 {
-                    if (my != composeToken) return;
                     try { b = Composer.Compose(snap, t, w, h, frames, out waiting); } catch { }
                 }
-                Ui(() => { if (my != composeToken || playing) { if (b != null) b.Dispose(); return; } preview.SetFrame(b); });
+                Ui(() =>
+                {
+                    composing = false;
+                    if (playing) { if (b != null) b.Dispose(); return; }
+                    preview.SetFrame(b);
+                    if (composeAgain) Recompose();
+                });
             });
-            preview.Invalidate();
         }
 
-        // ------------------------------------------------------------------ playing (a quick render of the whole project, then played)
+        // ------------------------------------------------------------------ playing (live: nothing to prepare first)
         bool playing;
-        string proxyFile, proxyKey;
-        bool proxyRendering; volatile bool proxyCancel;
-        int proxyW, proxyH;
 
-        void TogglePlay() { if (playing || proxyRendering) StopPlay(); else Play(); }
+        void TogglePlay() { if (playing) StopPlay(); else Play(); }
 
         void Play()
         {
-            if (P.Empty || exporting) return;
+            if (P.Empty || exporting || playing) return;
             if (Playhead >= P.Duration - 0.05) Playhead = 0;
-            string key = P.ToJson(null).GetHashCode() + "/" + P.Duration;
-            if (proxyFile != null && proxyKey == key && File.Exists(proxyFile)) { StartPlayer(); return; }
-            // build the preview: small and fast, with everything in it
-            proxyRendering = true; proxyCancel = false;
-            preview.Note = L.T("vs_preparing", 0);
-            bPlay.Glyph = Ico.Stop; bPlay.Invalidate(); preview.Invalidate();
-            int w = Math.Min(854, P.W), h = (int)Math.Round(w * P.H / (double)P.W);
-            if (h > 854) { h = 854; w = (int)Math.Round(h * P.W / (double)P.H); }
-            w -= w % 2; h -= h % 2;
-            string outp = Path.Combine(Path.GetTempPath(), "fadi_vs_preview_" + Guid.NewGuid().ToString("N").Substring(0, 10) + ".mp4");
-            Job job;
-            try { job = VideoRender.Build(P.Copy(), outp, new RenderOptions { W = w, H = h, Fps = 25, Preview = true }); }
-            catch (Exception ex) { proxyRendering = false; preview.Note = null; bPlay.Glyph = Ico.Play; ShowToast(ex.Message, false, null, null); return; }
-            Thread t = new Thread(() =>
-            {
-                string err = Engine.Run(job, f => Ui(() => { if (proxyRendering) { preview.Note = L.T("vs_preparing", (int)(f * 100)); preview.Invalidate(); } }), () => proxyCancel || Tools.ShuttingDown);
-                Ui(() =>
-                {
-                    proxyRendering = false; preview.Note = null;
-                    if (proxyCancel || err != null || !File.Exists(outp)) { bPlay.Glyph = Ico.Play; bPlay.Invalidate(); preview.Invalidate(); if (err != null && !proxyCancel) ShowToast(err, false, null, null); return; }
-                    if (proxyFile != null) try { File.Delete(proxyFile); } catch { }
-                    proxyFile = outp; proxyKey = key; proxyW = w; proxyH = h;
-                    StartPlayer();
-                });
-            });
-            t.IsBackground = true; t.Start();
-        }
-
-        void StartPlayer()
-        {
+            RectangleF s = preview.Screen;
+            int w = Math.Max(64, Math.Min(960, (int)s.Width)), h = Math.Max(64, (int)Math.Round(w * P.H / (double)P.W));
+            if (h > 960) { h = 960; w = Math.Max(64, (int)Math.Round(h * P.W / (double)P.H)); }
             playing = true; preview.Playing = true;
-            bPlay.Glyph = Ico.Pause; bPlay.Invalidate();
-            double from = Playhead;
-            player.Fps = 25;
-            player.Start(proxyFile, from, P.Duration, proxyW > 0 ? proxyW : 640, proxyH > 0 ? proxyH : 360, true, 1,
-                (b, t) => Ui(() => { if (!playing) { b.Dispose(); return; } preview.SetFrame(b); Playhead = t; timeline.Follow(); }),
-                t => Ui(() => { if (playing) { Playhead = t; timeline.Follow(); } }),
-                () => Ui(() => { StopPlay(); }));
+            bPlay.Glyph = Ico.Pause; bPlay.Invalidate(); preview.Invalidate();
+            live.Master = volBar.Muted ? 0 : volBar.Value;
+            live.Start(P.Copy(), Playhead, w, h, P.Fps);
         }
 
         void StopPlay()
         {
-            if (proxyRendering) { proxyCancel = true; proxyRendering = false; preview.Note = null; }
-            if (!playing && bPlay.Glyph == Ico.Play) return;
+            if (!playing) return;
             playing = false; preview.Playing = false;
-            player.Stop();
+            live.Stop();
             bPlay.Glyph = Ico.Play; bPlay.Invalidate();
+            UpdateButtons();
+            SyncPlacement();
             Recompose();
+        }
+
+        /// Moves the playhead; while playing, it plays on from there.
+        void SeekTo(double t)
+        {
+            Playhead = t;
+            if (playing) live.Seek(Playhead);
+            else { Recompose(); UpdateButtons(); SyncPlacement(); }
         }
 
         // ------------------------------------------------------------------ history
@@ -257,8 +263,8 @@ namespace FileConverter
             changes++;
             AfterChange(true);
         }
-        public void Undo() { if (undo.Count == 0 || exporting) return; StopPlay(); EndChange(); redo.Add(P.Copy()); VProject s = undo[undo.Count - 1]; undo.RemoveAt(undo.Count - 1); undoNames.RemoveAt(undoNames.Count - 1); Restore(s); }
-        public void Redo() { if (redo.Count == 0 || exporting) return; StopPlay(); EndChange(); undo.Add(P.Copy()); undoNames.Add("redo"); VProject s = redo[redo.Count - 1]; redo.RemoveAt(redo.Count - 1); Restore(s); }
+        public void Undo() { if (undo.Count == 0 || exporting) return; EndChange(); redo.Add(P.Copy()); VProject s = undo[undo.Count - 1]; undo.RemoveAt(undo.Count - 1); undoNames.RemoveAt(undoNames.Count - 1); Restore(s); }
+        public void Redo() { if (redo.Count == 0 || exporting) return; EndChange(); undo.Add(P.Copy()); undoNames.Add("redo"); VProject s = redo[redo.Count - 1]; redo.RemoveAt(redo.Count - 1); Restore(s); }
 
         void UpdateButtons()
         {
@@ -310,7 +316,7 @@ namespace FileConverter
             nameR = new Rectangle(bar.X + Theme.S(18), bar.Y + Theme.S(9), Math.Max(10, x - bar.X - Theme.S(26)), Theme.S(22));
             infoR = new Rectangle(nameR.X, bar.Y + Theme.S(31), nameR.Width, Theme.S(18));
             int top = bar.Bottom + Theme.S(12), bottom = H - Theme.S(16);
-            foreach (Control c in new Control[] { timeline, preview, props, addRail, bPlay, bBack, bFwd, bSplit, bDel, bDup, bDetach, bKey, bSnap, bZoomIn, bZoomOut, bFitTl }) c.Visible = open;
+            foreach (Control c in new Control[] { timeline, preview, props, addRail, bPlay, bBack, bFwd, volBar, bSplit, bDel, bDup, bDetach, bKey, bSnap, bZoomIn, bZoomOut, bFitTl }) c.Visible = open;
             drop.Visible = shapes.Visible = !open;
             if (open)
             {
@@ -336,6 +342,9 @@ namespace FileConverter
                 Place(bPlay, new Rectangle(mid - bs / 2, cy, bs, bs));
                 Place(bFwd, new Rectangle(mid + bs / 2 + Theme.S(6), cy, bs, bs));
                 timeR = new Rectangle(transportR.X + Theme.S(16), transportR.Y, mid - bs * 2 - transportR.X - Theme.S(24), transportR.Height);
+                // the preview's own volume, on the far right of the play controls
+                int vw = Math.Max(Theme.S(70), Math.Min(Theme.S(150), transportR.Right - Theme.S(14) - (mid + bs / 2 + bs + Theme.S(24))));
+                Place(volBar, new Rectangle(transportR.Right - Theme.S(14) - vw, cy, vw, bs));
                 // the timeline: its tools on top
                 int ty = tlR.Y + Theme.S(8), tb = Theme.S(32), tx = tlR.X + Theme.S(12);
                 foreach (Btn b in new[] { bSplit, bDel, bDup, bDetach, bKey }) { Place(b, new Rectangle(tx, ty, tb, tb)); tx += tb + Theme.S(4); }
@@ -429,6 +438,8 @@ namespace FileConverter
             }
             lock (sources) sources[file] = s;
             LoadPictures(s);
+            // its sound, decoded ahead so playing starts with sound right away
+            if (s.Info != null && s.Info.HasAudio) PcmCache.Get(file);
             return s;
         }
 
@@ -601,11 +612,10 @@ namespace FileConverter
         {
             if (disposing)
             {
-                player.Stop();
+                live.Stop();
                 if (saveNow != null) Recovery.SaveNowRequested -= saveNow;
                 if (autoTimer != null) { autoTimer.Stop(); autoTimer.Dispose(); }
                 frames.Clear();
-                if (proxyFile != null) try { File.Delete(proxyFile); } catch { }
             }
             base.Dispose(disposing);
         }
@@ -633,18 +643,18 @@ namespace FileConverter
                 case Keys.Space: if (typing) return false; TogglePlay(); return true;
                 case Keys.K: if (typing) return false; StopPlay(); return true;
                 case Keys.L: if (typing) return false; if (!playing) Play(); return true;
-                case Keys.J: if (typing) return false; StopPlay(); Playhead = Math.Max(0, Playhead - 2); Recompose(); return true;
-                case Keys.Left: if (typing) return false; StopPlay(); Playhead -= frame; Recompose(); return true;
-                case Keys.Right: if (typing) return false; StopPlay(); Playhead += frame; Recompose(); return true;
-                case Keys.Shift | Keys.Left: if (typing) return false; StopPlay(); Playhead -= 1; Recompose(); return true;
-                case Keys.Shift | Keys.Right: if (typing) return false; StopPlay(); Playhead += 1; Recompose(); return true;
-                case Keys.Home: if (typing) return false; StopPlay(); Playhead = 0; Recompose(); return true;
-                case Keys.End: if (typing) return false; StopPlay(); Playhead = P.Duration; Recompose(); return true;
+                case Keys.J: if (typing) return false; SeekTo(Playhead - 2); return true;
+                case Keys.Left: if (typing) return false; StopPlay(); SeekTo(Playhead - frame); return true;
+                case Keys.Right: if (typing) return false; StopPlay(); SeekTo(Playhead + frame); return true;
+                case Keys.Shift | Keys.Left: if (typing) return false; SeekTo(Playhead - 1); return true;
+                case Keys.Shift | Keys.Right: if (typing) return false; SeekTo(Playhead + 1); return true;
+                case Keys.Home: if (typing) return false; SeekTo(0); return true;
+                case Keys.End: if (typing) return false; StopPlay(); SeekTo(P.Duration); return true;
                 case Keys.S: case Keys.Control | Keys.B: if (typing) return false; Split(); return true;
                 case Keys.I: if (typing) return false; TrimToPlayhead(true); return true;
                 case Keys.O: if (typing) return false; TrimToPlayhead(false); return true;
                 case Keys.Delete: case Keys.Back: if (typing) return false; DeleteSelected(); return true;
-                case Keys.Escape: if (playing || proxyRendering) { StopPlay(); return true; } if (timeline.Selected != null) { Select(null); return true; } return false;
+                case Keys.Escape: if (playing) { StopPlay(); return true; } if (timeline.Selected != null) { Select(null); return true; } return false;
                 case Keys.Control | Keys.Z: if (typing) return false; Undo(); return true;
                 case Keys.Control | Keys.Y: case Keys.Control | Keys.Shift | Keys.Z: if (typing) return false; Redo(); return true;
                 case Keys.Control | Keys.D: if (typing) return false; DuplicateSelected(); return true;

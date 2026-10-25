@@ -14,6 +14,11 @@ namespace FileConverter
         /// glyph, title key, text key
         public static readonly string[][] Items =
         {
+            // 1.7.1
+            new[] { Ico.Play, "wn_play171_t", "wn_play171_d" },
+            new[] { "\uE8BE", "wn_caps171_t", "wn_caps171_d" },
+            new[] { Ico.Text, "wn_addons171_t", "wn_addons171_d" },
+            new[] { "\uF440", "wn_smooth171_t", "wn_smooth171_d" },
             // 1.7.0
             new[] { "\uE7C4", "wn_ps170_t", "wn_ps170_d" },
             new[] { "\uF427", "wn_remove170_t", "wn_remove170_d" },
