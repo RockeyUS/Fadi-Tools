@@ -203,6 +203,11 @@ namespace FileConverter
                 case "nobg": return new WheelItem { Action = a, Glyph = Ico.Cut, Label = () => L.T("wh_nobg_short") };
                 case "edit": return new WheelItem { Action = a, Glyph = Ico.Edit, Label = () => L.T("wh_edit") };
                 case "text": return new WheelItem { Action = a, Glyph = Ico.Text, Label = () => L.T("wh_text") };
+                // a folder: what can be done with everything in it (these open Fadi Tools on the right page)
+                case "f_convert": return new WheelItem { Action = a, Glyph = Ico.Convert, Label = () => L.T("wh_f_convert") };
+                case "f_compress": return new WheelItem { Action = a, Glyph = "\uE73F", Label = () => L.T("wh_compress") };
+                case "f_rename": return new WheelItem { Action = a, Glyph = "\uE8AC", Label = () => L.T("wh_f_rename") };
+                case "f_dupes": return new WheelItem { Action = a, Glyph = Ico.Copy, Label = () => L.T("wh_f_dupes") };
                 default: return new WheelItem { Action = "info", Glyph = Ico.Info, Label = () => L.T("wh_info") };
             }
         }
@@ -239,6 +244,9 @@ namespace FileConverter
 
         static Timer poll;
         static bool wasDown, armed, shown, hinting, hintTried;
+        /// The wheel had nothing for what's being dragged: it stays closed until this drag ends (no open-close loop).
+        static bool refused;
+        public static void NothingToOffer() { refused = true; }
         static Point downAt;
         static WheelWindow win;
         static readonly int ownPid = Process.GetCurrentProcess().Id;
@@ -267,11 +275,11 @@ namespace FileConverter
             Point p = Cursor.Position;
             if (down && !wasDown)
             {
-                downAt = p; shown = false;
+                downAt = p; shown = false; refused = false;
                 armed = StartsOverFileManager(p);
             }
             // Shift pressed again while still dragging (after letting go of it closed the wheel): it comes back
-            if (down && armed && shown && Down(0x10) && (win == null || win.IsDisposed || win.GoingAway)) OpenWheel(p);
+            if (down && armed && shown && !refused && Down(0x10) && (win == null || win.IsDisposed || win.GoingAway)) OpenWheel(p);
             if (down && armed && !shown)
             {
                 // a real drag: past the distance Windows itself waits for before a drag starts
@@ -299,7 +307,7 @@ namespace FileConverter
             {
                 if (hinting) { DragHint.HideNow(); hinting = false; }
                 hintTried = false;
-                armed = false;
+                armed = false; refused = false;
                 if (win != null && !win.IsDisposed) win.ButtonReleased();
             }
             wasDown = down;
@@ -349,6 +357,13 @@ namespace FileConverter
         {
             formats = new List<WheelItem>(); actions = new List<WheelItem>();
             if (files == null || files.Length == 0) return;
+            bool folder = false;
+            foreach (string f in files) if (Directory.Exists(f)) folder = true;
+            if (folder)
+            {
+                foreach (string a in new[] { "f_convert", "f_compress", "f_rename", "f_dupes" }) actions.Add(WheelConfig.ActionItem(a));
+                return;
+            }
             string ext = Formats.Ext(files[0]);
             string kind = WheelConfig.KindOf(ext);
             if (kind == null) return;
@@ -767,16 +782,17 @@ namespace FileConverter
                 entered = true; enteredBy = Now;
                 string[] f = null;
                 try { if (e.Data.GetDataPresent(DataFormats.FileDrop)) f = e.Data.GetData(DataFormats.FileDrop) as string[]; } catch { }
-                if (f != null) { List<string> ok = new List<string>(); foreach (string p in f) if (File.Exists(p)) ok.Add(p); f = ok.ToArray(); }
+                if (f != null) { List<string> ok = new List<string>(); foreach (string p in f) if (File.Exists(p) || Directory.Exists(p)) ok.Add(p); f = ok.ToArray(); }
                 files = f != null && f.Length > 0 ? f : null;
                 if (files != null)
                 {
                     List<WheelItem> o, i;
                     DragWheel.ItemsFor(files, out o, out i);
                     art.SetItems(o, i);
-                    art.Subject = files.Length == 1 ? Path.GetFileName(files[0]) : L.T("n_files", files.Length);
+                    art.Subject = files.Length == 1 ? Path.GetFileName(files[0].TrimEnd('\\', '/')) : L.T("n_files", files.Length);
+                    if (o.Count == 0 && i.Count == 0) { DragWheel.NothingToOffer(); BeginClose(); }
                 }
-                else BeginClose();   // not files (text, a picture from a browser…): nothing to offer
+                else { DragWheel.NothingToOffer(); BeginClose(); }   // not files (text, a picture from a browser…): nothing to offer
             }
             Over(e);
         }

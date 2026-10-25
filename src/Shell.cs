@@ -13,7 +13,7 @@ namespace FileConverter
     /// Windows integration: install location, shortcuts, right-click menu, file associations, uninstall.
     public static class Shell
     {
-        public const string Version = "1.6.4";
+        public const string Version = "1.7.0";
 
         [DllImport("shell32.dll")]
         static extern void SHChangeNotify(int eventId, int flags, IntPtr item1, IntPtr item2);
@@ -203,7 +203,7 @@ namespace FileConverter
             Registry.CurrentUser.DeleteSubKeyTree(TextKey, false);
 
             // video projects open in the Studio when double-clicked
-            SetValue(@"Software\Classes\." + TrimPage.ProjectExt, null, "FadiTools.Project");
+            SetValue(@"Software\Classes\." + VideoStudio.ProjectExt, null, "FadiTools.Project");
             SetValue(@"Software\Classes\FadiTools.Project", null, L.T("proj_files"));
             SetValue(@"Software\Classes\FadiTools.Project\DefaultIcon", null, exe + ",0");
             SetValue(@"Software\Classes\FadiTools.Project\shell\open\command", null, q + " /do project \"%1\"");
@@ -286,7 +286,7 @@ namespace FileConverter
 
             RegistryKey cu = Registry.CurrentUser;
             try { using (RegistryKey rk = cu.OpenSubKey(RunKey, true)) if (rk != null) rk.DeleteValue(RunName, false); } catch { }
-            foreach (string k in new[] { @"Software\Classes\*\shell\FileConverter.Convert", MenuKey, TextKey, @"Software\Classes\FadiTools.Project", @"Software\Classes\." + TrimPage.ProjectExt, @"Software\Classes\FileConverter.Image",
+            foreach (string k in new[] { @"Software\Classes\*\shell\FileConverter.Convert", MenuKey, TextKey, @"Software\Classes\FadiTools.Project", @"Software\Classes\." + VideoStudio.ProjectExt, @"Software\Classes\FileConverter.Image",
                                          AppKey, OldAppKey, @"Software\Microsoft\Windows\CurrentVersion\Uninstall\FileConverter" })
                 try { cu.DeleteSubKeyTree(k, false); } catch { }
             foreach (string e in Formats.ViewerExt)

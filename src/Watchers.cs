@@ -217,6 +217,10 @@ namespace FileConverter
             }
             catch (Exception ex) { err = ex.Message; }
             if (outp != null) lock (lk) produced.Add(outp);
+            // a converted file takes the original's place: the original goes to the Recycle Bin (compressing keeps it)
+            if (err == null && outp != null && !r.Action.StartsWith("compress:") && File.Exists(outp) && new FileInfo(outp).Length > 0 &&
+                !string.Equals(Path.GetFullPath(outp), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase))
+                Tools.Recycle(path);
             Activity.End(act, err, false, err == null ? L.T("wf_done", Path.GetFileName(outp)) : null, err == null ? outp : null);
             if (err == null)
             {

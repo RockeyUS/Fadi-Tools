@@ -124,7 +124,9 @@ namespace FileConverter
         {
             url = url.Trim();
             YtInfo own = null;
-            try { own = Resolver.TryResolve(url, cancelled); } catch { }
+            try { own = Resolver.TryResolve(url, cancelled); }
+            catch (UserError) { throw; }
+            catch { }
             if (own != null) return own;
             if (!Ready) throw new UserError(L.T("not_installed"));
             try { return FetchYtDlp(url, cancelled); }
@@ -467,14 +469,7 @@ namespace FileConverter
                     StringBuilder err = new StringBuilder();
                     int code = Tools.YtDlp == null ? 1 : Tools.Stream(Tools.YtDlp, Impersonate + "--no-playlist --no-part --no-warnings -o " + Q(dest) + " " + Q(url), null, l => err.AppendLine(l), cancelled, Env());
                     if (code == -2) throw new OperationCanceledException();
-                    if (code != 0 || !File.Exists(dest))
-                    {
-                        // last: a real Edge window (off the screen) fetches it, like a browser would
-                        p.Stage = "download"; progress(p);
-                        bool ok = false;
-                        using (BrowserSession b = BrowserSession.Start(url)) if (b != null) ok = b.SaveFile(url, dest, 45000);
-                        if (!ok) throw new UserError(err.Length > 0 ? CleanError(err.ToString()) : ex.Message);
-                    }
+                    if (code != 0 || !File.Exists(dest)) throw new UserError(err.Length > 0 ? CleanError(err.ToString()) : ex.Message);
                 }
             };
             bool wantVideo = opt.Mode == SaveAs.Video, wantGif = opt.Mode == SaveAs.Gif;

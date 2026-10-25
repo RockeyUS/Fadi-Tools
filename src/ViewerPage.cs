@@ -696,7 +696,7 @@ namespace FileConverter
         }
     }
 
-    public class ViewerPage : Page
+    public class ViewerPage : Page, IStudioTab
     {
         Rectangle bar, nameR, infoR;
         Btn bPrev, bNext, bRotL, bRotR, bOpen, bSave, bConvert, bFolder, bEdit, bUndoH, bRedoH;
@@ -1017,7 +1017,7 @@ namespace FileConverter
                 canvas.Visible = !empty;
                 if (empty)
                 {
-                    bool rec = TrimPage.RecentProjects.Count > 0;
+                    bool rec = VideoStudio.RecentProjects.Count > 0;
                     Rectangle ec = new Rectangle(p, bar.Bottom + Theme.S(16), W - p * 2, H - bar.Bottom - Theme.S(16) - p - (rec ? Theme.S(96) : 0));
                     cards.Add(ec);
                     Place(emptyDrop, new Rectangle(ec.X + Theme.S(20), ec.Y + Theme.S(20), ec.Width - Theme.S(40), ec.Height - Theme.S(40)));
@@ -1029,7 +1029,7 @@ namespace FileConverter
             // the empty Studio: recent video projects along the bottom
             if (InStudio)
             {
-                List<string> rp = files.Count == 0 && !editing ? TrimPage.RecentProjects : new List<string>();
+                List<string> rp = files.Count == 0 && !editing ? VideoStudio.RecentProjects : new List<string>();
                 recents.Paths = rp;
                 recents.Visible = rp.Count > 0;
                 if (recents.Visible) { Place(recents, new Rectangle(p, H - Theme.S(96), W - p * 2, Theme.S(82))); recents.Invalidate(); }

@@ -93,25 +93,6 @@ namespace FileConverter
                 return sr.ReadToEnd();
         }
 
-        /// A page as Microsoft Edge sees it (run hidden, without a window): for sites that only answer real browsers.
-        public static string BrowserGet(string url)
-        {
-            string edge = Tools.Edge;
-            if (edge == null) return null;
-            string profile = Path.Combine(Path.GetTempPath(), "fadi_edge_" + Guid.NewGuid().ToString("N").Substring(0, 8));
-            try
-            {
-                string args = "--headless=new --disable-gpu --no-first-run --no-default-browser-check --disable-extensions --mute-audio " +
-                              "--user-data-dir=" + Tools.Quote(profile) + " --user-agent=" + Tools.Quote(UA) + " --virtual-time-budget=9000 --dump-dom " + Tools.Quote(url);
-                byte[] b = Media.Capture(edge, args, 45000);
-                if (b == null || b.Length == 0) return null;
-                string html = Encoding.UTF8.GetString(b);
-                return html.IndexOf("Just a moment", StringComparison.OrdinalIgnoreCase) >= 0 && html.IndexOf("og:image", StringComparison.OrdinalIgnoreCase) < 0 ? null : html;
-            }
-            catch { return null; }
-            finally { try { Directory.Delete(profile, true); } catch { } }
-        }
-
         static string FinalUrl(string url)
         {
             try
@@ -230,18 +211,12 @@ namespace FileConverter
         /// A KLIPY GIF page (klipy.com/gifs/name): the GIF itself, with its MP4 as the video choice.
         static YtInfo Klipy(string url)
         {
-            // KLIPY's pages sit behind Cloudflare, which turns away plain requests: then the page is read by
-            // Microsoft Edge itself, hidden (it passes the check like any browser would)
+            // KLIPY's pages sit behind Cloudflare's "verify you are human" check, which only a person in a web
+            // browser can pass. When the page is turned away, say how to get the GIF's own file link instead
+            // (static.klipy.com/....gif downloads like any other file).
             string html = null;
             try { html = Get(url); } catch { }
-            if (!HasOg(html)) html = BrowserGet(url) ?? html;
-            if (!HasOg(html))
-            {
-                // still turned away: a real Edge window (off the screen) opens the page, passes the check, and reads it
-                using (BrowserSession b = BrowserSession.Start(url))
-                    if (b != null) html = b.HtmlWhen("meta[property='og:image']", 30000) ?? html;
-            }
-            if (!HasOg(html)) return null;
+            if (!HasOg(html)) throw new UserError(L.T("dl_klipy_blocked"));
             string title = Meta(html, "og:title") ?? "KLIPY GIF";
             if (title.StartsWith("KLIPY: ")) title = title.Substring(7);
             string gif = Meta(html, "og:image") ?? Meta(html, "twitter:image");

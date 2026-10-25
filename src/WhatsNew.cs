@@ -14,6 +14,13 @@ namespace FileConverter
         /// glyph, title key, text key
         public static readonly string[][] Items =
         {
+            // 1.7.0
+            new[] { "\uE7C4", "wn_ps170_t", "wn_ps170_d" },
+            new[] { "\uF427", "wn_remove170_t", "wn_remove170_d" },
+            new[] { Ico.Video, "wn_vs170_t", "wn_vs170_d" },
+            new[] { "\uF440", "wn_keys170_t", "wn_keys170_d" },
+            new[] { "\uE8BE", "wn_caps170_t", "wn_caps170_d" },
+            new[] { "\uF40F", "wn_fixes170_t", "wn_fixes170_d" },
             // 1.6.4
             new[] { Ico.Contrast, "wn_look164_t", "wn_look164_d" },
             new[] { Ico.Search, "wn_empty164_t", "wn_empty164_d" },

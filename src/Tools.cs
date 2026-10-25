@@ -184,6 +184,28 @@ namespace FileConverter
 
     public static class Tools
     {
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        struct SHFILEOP { public IntPtr hwnd; public uint wFunc; public string pFrom; public string pTo; public ushort fFlags; public bool fAnyOperationsAborted; public IntPtr hNameMappings; public string lpszProgressTitle; }
+        [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] static extern int SHFileOperation(ref SHFILEOP op);
+
+        /// Moves files to the Recycle Bin (quietly; Windows can bring them back). True when they're gone.
+        public static bool Recycle(params string[] paths)
+        {
+            if (paths == null || paths.Length == 0) return true;
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+            {
+                try
+                {
+                    SHFILEOP op = new SHFILEOP { hwnd = IntPtr.Zero, wFunc = 3, pFrom = string.Join("\0", paths) + "\0\0", fFlags = 0x40 | 0x10 | 0x4 | 0x400 };
+                    SHFileOperation(ref op);
+                }
+                catch { }
+            }
+            else foreach (string p in paths) try { System.IO.File.Delete(p); } catch { }   // (tests on Linux: no bin)
+            foreach (string p in paths) if (System.IO.File.Exists(p)) return false;
+            return true;
+        }
+
         static string ffmpeg, magick, soffice;
 
         public static void Reset() { ffmpeg = magick = soffice = null; }

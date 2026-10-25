@@ -10,11 +10,11 @@ namespace FileConverter
     /// the "Videos" side is the video editor. Each photo or PDF opens in its own tab, so several can be worked on.
     public class StudioPage : Page
     {
-        /// The photo / PDF tab that's showing (each tab is its own viewer).
-        public ViewerPage Photos { get { return activePhoto; } }
-        readonly List<ViewerPage> photoTabs = new List<ViewerPage>();
-        ViewerPage activePhoto;
-        public readonly TrimPage Videos;
+        /// The photo (or document) tab that's showing. Each tab is its own editor: the photo studio, or a document's pages.
+        public Page Photos { get { return activePhoto; } }
+        readonly List<Page> photoTabs = new List<Page>();
+        Page activePhoto;
+        public readonly VideoStudio Videos;
         public readonly PdfPage Pdf;
         readonly Segments tabs;
         readonly FileTabs fileTabs;
@@ -25,9 +25,12 @@ namespace FileConverter
         readonly Timer poll = new Timer { Interval = 400 };
         public event Action<string> SendToConverter;
 
+        static IStudioTab T(Page p) { return (IStudioTab)p; }
+        IStudioTab Act { get { return T(activePhoto); } }
+
         public StudioPage() : base("studio_title", "studio_sub")
         {
-            Videos = new TrimPage();
+            Videos = new VideoStudio();
             Videos.OpenImage += f => OpenPhotos(new[] { f }, true);
             Pdf = new PdfPage { TitleKey = "studio_title", SubKey = "studio_pdf_sub" };
             Pdf.EditContent += (f, page) => OpenPdf(f, page);
@@ -35,9 +38,9 @@ namespace FileConverter
             Controls.Add(Videos); Controls.Add(Pdf);
             // the files open on the photo side, one tab each
             fileTabs = new FileTabs { Visible = false };
-            fileTabs.Picked += t => Show((ViewerPage)t.Tag);
-            fileTabs.CloseClicked += t => CloseTab((ViewerPage)t.Tag);
-            fileTabs.AddClicked += () => { ViewerPage v = NewTab(); Show(v); };
+            fileTabs.Picked += t => Show((Page)t.Tag);
+            fileTabs.CloseClicked += t => CloseTab((Page)t.Tag);
+            fileTabs.AddClicked += () => { Show(NewTab()); };
             Controls.Add(fileTabs);
             activePhoto = NewTab();
             // the three sides of the Studio: photos, PDFs, videos
@@ -61,15 +64,28 @@ namespace FileConverter
             poll.Start();
         }
 
-        /// A new, empty photo / PDF tab (not shown yet).
-        ViewerPage NewTab()
+        /// A new, empty photo tab (not shown yet).
+        PhotoStudio NewTab()
+        {
+            PhotoStudio v = new PhotoStudio();
+            v.OpenProjectFile += f => { Show(Videos); Videos.OpenProject(f, false); };
+            v.BrowseProjects += () => { string f = VideoStudio.PickProject(FindForm()); if (f != null) { Show(Videos); Videos.OpenProject(f, false); } };
+            v.SendToConverter += f => { if (SendToConverter != null) SendToConverter(f); };
+            v.NewCanvasElsewhere += (w, h, bg, title) => { PhotoStudio n = NewTab(); Show(n); n.NewCanvas(w, h, bg, title); };
+            v.DropTo = paths => Dropped(v, paths);
+            AddTab(v);
+            return v;
+        }
+
+        /// A tab for a document's pages (PDF / Word / PowerPoint: read, add text and pictures, save).
+        ViewerPage NewDocTab()
         {
             ViewerPage v = new ViewerPage(true);
             v.OpenMedia += f => { Show(Videos); Videos.AcceptFiles(new[] { f }); };
             v.OpenProjectFile += f => { Show(Videos); Videos.OpenProject(f, false); };
-            v.BrowseProjects += () => { string f = TrimPage.PickProject(FindForm()); if (f != null) { Show(Videos); Videos.OpenProject(f, false); } };
+            v.BrowseProjects += () => { string f = VideoStudio.PickProject(FindForm()); if (f != null) { Show(Videos); Videos.OpenProject(f, false); } };
             v.SendToConverter += f => { if (SendToConverter != null) SendToConverter(f); };
-            // from the viewer to the PDF page tools (with the open PDF, if there is one) and back
+            // from the pages to the PDF page tools (with the open PDF) and back
             v.OrganizePages += f =>
             {
                 if (f != null) { if (!v.CloseAll()) return; Pdf.StartMode(1, false); Show(Pdf); Pdf.OpenPdf(f); if (photoTabs.Count > 1) DropTab(v); }
@@ -77,27 +93,50 @@ namespace FileConverter
             };
             v.DropTo = AcceptFiles;
             v.PdfPicked += f => { if (!v.HasFile && photoTabs.Count > 1) DropTab(v); OpenInPdfTools(f); };
+            AddTab(v);
+            return v;
+        }
+
+        void AddTab(Page v)
+        {
+            IStudioTab t = T(v);
             v.Visible = false;
             v.Toast = Toast; v.Owner = Owner; v.Glyph = Glyph;
             Controls.Add(v);
             photoTabs.Add(v);
-            fileTabs.Add(new FileTabs.Tab { Title = () => v.TabTitle, Glyph = () => v.TabGlyph, Changed = () => v.HasUnsavedEdits, Tag = v }, false);
+            fileTabs.Add(new FileTabs.Tab { Title = () => t.TabTitle, Glyph = () => t.TabGlyph, Changed = () => t.HasUnsavedEdits, Tag = v }, false);
             if (Width > 0) DoLayout();
-            return v;
         }
 
-        FileTabs.Tab TabOf(ViewerPage v) { foreach (FileTabs.Tab t in fileTabs.Tabs) if (t.Tag == v && !t.Closing) return t; return null; }
+        /// Files dropped on a photo tab: pictures go onto the photo being edited (as layers); anything else opens.
+        void Dropped(PhotoStudio v, string[] paths)
+        {
+            if (v.Editing)
+            {
+                bool pics = paths.Length > 0;
+                foreach (string p in paths) if (Formats.CategoryOf(Formats.Ext(p)) != Category.Image) pics = false;
+                if (pics) { v.AddPictures(paths); return; }
+            }
+            AcceptFiles(paths);
+        }
 
-        /// Closes a photo / PDF tab (asking first about unsaved changes). The last tab just empties.
-        void CloseTab(ViewerPage v)
+        FileTabs.Tab TabOf(Page v) { foreach (FileTabs.Tab t in fileTabs.Tabs) if (t.Tag == v && !t.Closing) return t; return null; }
+
+        /// Closes a tab (asking first about unsaved changes). The last tab just empties.
+        void CloseTab(Page v)
         {
             if (v == null) return;
-            if (!v.CloseAll()) return;
-            if (photoTabs.Count > 1) DropTab(v);
+            if (!T(v).CloseAll()) return;
+            if (photoTabs.Count > 1 || v is ViewerPage)
+            {
+                // the last tab, a document: an empty photo tab takes its place
+                if (photoTabs.Count == 1) { PhotoStudio n = NewTab(); Show(n); }
+                DropTab(v);
+            }
             UpdateClose(); DoLayout();
         }
 
-        void DropTab(ViewerPage v)
+        void DropTab(Page v)
         {
             int i = photoTabs.IndexOf(v);
             if (i < 0 || photoTabs.Count < 2) return;
@@ -106,7 +145,7 @@ namespace FileConverter
             if (t != null) fileTabs.Remove(t);
             if (activePhoto == v)
             {
-                ViewerPage next = photoTabs[Math.Min(i, photoTabs.Count - 1)];
+                Page next = photoTabs[Math.Min(i, photoTabs.Count - 1)];
                 activePhoto = next;
                 if (photoSide == v) photoSide = next;
                 if (active == v) Show(next);
@@ -115,12 +154,21 @@ namespace FileConverter
             BeginInvoke((Action)(() => { try { v.Dispose(); } catch { } }));
         }
 
-        /// Where new photos / PDFs go: the tab that's showing when it's empty, otherwise a new tab.
-        ViewerPage TabForNew()
+        /// Where a new photo goes: the photo tab that's showing when it's empty, otherwise a new tab.
+        PhotoStudio TabForNew()
         {
-            ViewerPage v = activePhoto;
-            if (v.HasFile || v.Busy) v = NewTab();
+            PhotoStudio v = activePhoto as PhotoStudio;
+            if (v == null || v.HasFile || v.Busy) v = NewTab();
             return v;
+        }
+
+        /// Where a document goes: a tab of its own (taking the place of the empty tab that's showing).
+        ViewerPage DocTabForNew()
+        {
+            Page was = activePhoto;
+            ViewerPage d = NewDocTab();
+            if (was is PhotoStudio && !T(was).HasFile && !was.Busy) { activePhoto = d; DropTab(was); }
+            return d;
         }
 
         /// A PDF opens with the PDF tools: its pages, and everything that can be done to them.
@@ -133,25 +181,32 @@ namespace FileConverter
             UpdateClose();
         }
 
-        /// Opens photos (or a document) on the photo side; newTab = in a tab of their own when this one is in use.
+        /// Opens photos (each in a tab), a photo project, or a document's pages.
         void OpenPhotos(string[] paths, bool newTab)
         {
             if (paths.Length == 1 && Formats.Ext(paths[0]) == "pdf") { OpenInPdfTools(paths[0]); return; }
-            ViewerPage v = newTab ? TabForNew() : activePhoto;
-            Show(v);
-            if (paths.Length == 1 && DocPages.IsDoc(paths[0])) v.OpenDocument(paths[0]);
-            else v.LoadFiles(paths);
+            if (paths.Length == 1 && DocPages.IsDoc(paths[0])) { ViewerPage d = DocTabForNew(); Show(d); d.OpenDocument(paths[0]); return; }
+            int n = 0;
+            foreach (string p in paths)
+            {
+                string e = Formats.Ext(p);
+                if (e != PhotoDoc.ProjectExt && Formats.CategoryOf(e) != Category.Image) continue;
+                if (n == 8) { ShowToast(L.T("ps_many", paths.Length), true, null, null); break; }
+                PhotoStudio v = n == 0 ? TabForNew() : NewTab();
+                if (n == 0) Show(v);
+                v.OpenFiles(new[] { p });
+                n++;
+            }
         }
 
         public void Show(Page p)
         {
-            ViewerPage vp = p as ViewerPage;
-            if (vp != null) { activePhoto = vp; FileTabs.Tab t = TabOf(vp); if (t != null) fileTabs.Select(t); }
+            if (photoTabs.Contains(p)) { activePhoto = p; FileTabs.Tab t = TabOf(p); if (t != null) fileTabs.Select(t); }
             if (active == p) return;
             if (Visible && active != null) Fx.Crossfade(this, 180);
             active = p;
             if (p != Videos) photoSide = p;
-            foreach (ViewerPage v in photoTabs) v.Visible = v == p;
+            foreach (Page v in photoTabs) v.Visible = v == p;
             Videos.Visible = p == Videos; Pdf.Visible = p == Pdf;
             tabs.SetQuietly(p == Videos ? 2 : p == Pdf ? 1 : 0);
             DoLayout();
@@ -162,15 +217,15 @@ namespace FileConverter
         /// Shows the part of the Studio a control belongs to (a job in Activity was clicked).
         public bool ShowPart(Control c)
         {
-            foreach (ViewerPage v in photoTabs) if (c == v) { Show(v); return true; }
+            foreach (Page v in photoTabs) if (c == v) { Show(v); return true; }
             if (c == Videos || c == Pdf) { Show((Page)c); return true; }
             return false;
         }
 
-        /// Opens a PDF (page = the page to show first) in the viewer, where it can be read and edited page by page.
+        /// Opens a PDF (page = the page to show first) as pages, where it can be read and edited page by page.
         public void OpenPdf(string path, int page)
         {
-            ViewerPage v = TabForNew();
+            ViewerPage v = DocTabForNew();
             Show(v);
             v.OpenDocument(path, page);
         }
@@ -178,22 +233,34 @@ namespace FileConverter
         /// "Open" (or the quick search): pick a photo or document; it opens in a tab of its own when this one is in use.
         public void PickPhoto()
         {
-            ViewerPage v = TabForNew();
+            PhotoStudio v = TabForNew();
             Show(v);
             v.PickFile();
-            if (!v.HasFile && v != photoTabs[0] && photoTabs.Count > 1 && !v.Busy) BeginInvoke((Action)(() => { if (!v.HasFile) DropTab(v); }));
+            if (!v.HasFile && v != photoTabs[0] && photoTabs.Count > 1 && !v.Busy) BeginInvoke((Action)(() => { if (!v.HasFile && photoTabs.Contains(v)) DropTab(v); }));
+        }
+
+        /// Copy text from a picture: the photo that's open (or one to pick), or the document page.
+        public void CopyText()
+        {
+            Show(activePhoto);
+            if (activePhoto is ViewerPage) ((ViewerPage)activePhoto).CopyText();
+            else ((PhotoStudio)activePhoto).CopyText();
         }
 
         /// Brings back a photo edit kept after a crash (in a tab of its own when one is in use).
-        public void RestorePhotoEdit(string file) { ViewerPage v = TabForNew(); Show(v); v.RestoreEdit(file); }
+        public void RestorePhotoEdit(string file)
+        {
+            if (Formats.Ext(file) == PhotoDoc.ProjectExt) { PhotoStudio p = TabForNew(); Show(p); p.OpenProject(file, true); return; }
+            ViewerPage v = DocTabForNew(); Show(v); v.RestoreEdit(file);
+        }
 
-        public override bool Busy { get { if (Videos.Busy || Pdf.Busy) return true; foreach (ViewerPage v in photoTabs) if (v.Busy) return true; return false; } }
+        public override bool Busy { get { if (Videos.Busy || Pdf.Busy) return true; foreach (Page v in photoTabs) if (v.Busy) return true; return false; } }
 
-        bool TabsShown { get { return active is ViewerPage && (photoTabs.Count > 1 || activePhoto.HasFile); } }
+        bool TabsShown { get { return photoTabs.Contains(active) && (photoTabs.Count > 1 || Act.HasFile); } }
 
         void UpdateClose()
         {
-            bool v = active == Pdf ? Pdf.PdfPath != null : active == Videos ? Videos.HasFile : (activePhoto.HasFile || photoTabs.Count > 1);
+            bool v = active == Pdf ? Pdf.PdfPath != null : active == Videos ? Videos.HasFile : (Act.HasFile || photoTabs.Count > 1);
             bClose.Glyph = Ico.Close;
             bool layout = false;
             if (bClose.Wanted != v) { bClose.Visible = v; if (v) bClose.BringToFront(); layout = true; }
@@ -213,7 +280,7 @@ namespace FileConverter
             {
                 p.Toast = Toast; p.Owner = Owner; p.Glyph = Glyph;
                 p.HeaderReserve = tw + (bClose.Wanted ? w + Theme.S(10) : 0) + Theme.S(24);
-                p.TopExtra = p is ViewerPage && showTabs ? Theme.S(44) : 0;
+                p.TopExtra = photoTabs.Contains(p) && showTabs ? Theme.S(44) : 0;
                 p.Bounds = ClientRectangle;
             }
             active.DoLayout();
@@ -230,7 +297,7 @@ namespace FileConverter
 
         public override void Restyle() { foreach (Page p in AllParts()) { p.Restyle(); p.DoLayout(); } fileTabs.Invalidate(); }
         public override void OnShown() { active.OnShown(); }
-        IEnumerable<Page> AllParts() { foreach (ViewerPage v in photoTabs) yield return v; yield return Videos; yield return Pdf; }
+        IEnumerable<Page> AllParts() { foreach (Page v in photoTabs) yield return v; yield return Videos; yield return Pdf; }
 
         public override void AcceptFiles(string[] paths)
         {
@@ -242,23 +309,27 @@ namespace FileConverter
                 foreach (string p in paths) { string e = Formats.Ext(p); if (e != "pdf" && Formats.CategoryOf(e) != Category.Image) fits = false; }
                 if (fits) { Pdf.AcceptFiles(paths); return; }
             }
-            // several PDFs: combined in the PDF tools; one opens in the viewer (below)
+            // several PDFs: combined in the PDF tools; one opens in them (pages, Edit text, Add text & pictures, sign…)
             bool allPdf = paths.Length > 1;
             foreach (string p in paths) if (Formats.Ext(p) != "pdf") allPdf = false;
             if (allPdf) { Pdf.StartMode(0, false); Show(Pdf); Pdf.AcceptFiles(paths); return; }
-            // one PDF: straight into the PDF tools (pages, Edit text, Add text & pictures, sign…), all in one place
             if (paths.Length == 1 && Formats.Ext(paths[0]) == "pdf") { OpenInPdfTools(paths[0]); return; }
-            if (Formats.Ext(paths[0]) == TrimPage.ProjectExt) { Show(Videos); Videos.OpenProject(paths[0], false); return; }
+            if (Formats.Ext(paths[0]) == VideoStudio.ProjectExt) { Show(Videos); Videos.OpenProject(paths[0], false); return; }
             Category c = Formats.CategoryOf(Formats.Ext(paths[0]));
             // pictures dropped on a video being edited go on top of it
             if (active == Videos && c == Category.Image && Videos.AddPictures(paths)) return;
             if (c == Category.Video || c == Category.Audio) { Show(Videos); Videos.AcceptFiles(paths); return; }
             // pictures dropped on a photo or page being edited go on top of it
-            if (active == activePhoto && activePhoto.Editing && c == Category.Image)
+            if (active == activePhoto && Act.Editing && c == Category.Image)
             {
                 bool pics = true;
                 foreach (string p in paths) if (Formats.CategoryOf(Formats.Ext(p)) != Category.Image) pics = false;
-                if (pics) { activePhoto.LoadFiles(paths); return; }
+                if (pics)
+                {
+                    if (activePhoto is PhotoStudio) ((PhotoStudio)activePhoto).AddPictures(paths);
+                    else ((ViewerPage)activePhoto).LoadFiles(paths);
+                    return;
+                }
             }
             // anything else opens in a tab of its own (the open one stays as it is)
             OpenPhotos(paths, true);
@@ -266,8 +337,8 @@ namespace FileConverter
 
         public bool ConfirmClose()
         {
-            foreach (ViewerPage v in photoTabs)
-                if (v.HasUnsavedEdits) { Show(v); if (!v.ConfirmDiscard()) return false; }
+            foreach (Page v in photoTabs)
+                if (T(v).HasUnsavedEdits) { Show(v); if (!T(v).ConfirmDiscard()) return false; }
             if (Videos.HasUnsavedText && !Ask.Confirm(FindForm(), L.T("ed_discard_title"), L.T("ed_discard"), L.T("ed_discard_yes"), L.T("ed_keep_editing"), AskKind.Warning)) return false;
             return true;
         }
@@ -275,12 +346,14 @@ namespace FileConverter
         public bool HandleKey(Keys k, bool textBoxFocused)
         {
             if (active == Pdf) return false;
-            if (active is ViewerPage)
+            if (photoTabs.Contains(active))
             {
+                IStudioTab t = Act;
                 // Ctrl+W closes the tab, Ctrl+T opens a new one
-                if (!activePhoto.Editing && k == (Keys.Control | Keys.W) && (photoTabs.Count > 1 || activePhoto.HasFile)) { CloseTab(activePhoto); return true; }
-                if (!activePhoto.Editing && k == (Keys.Control | Keys.T)) { Show(NewTab()); return true; }
-                return (activePhoto.Editing || !textBoxFocused) && activePhoto.HandleKey(k);
+                if (k == (Keys.Control | Keys.W) && (photoTabs.Count > 1 || t.HasFile)) { CloseTab(activePhoto); return true; }
+                if (k == (Keys.Control | Keys.T)) { Show(NewTab()); return true; }
+                if (activePhoto is PhotoStudio) return t.HandleKey(k);
+                return (t.Editing || !textBoxFocused) && t.HandleKey(k);
             }
             return Videos.HandleKey(k);
         }

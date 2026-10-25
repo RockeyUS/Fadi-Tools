@@ -225,12 +225,12 @@ namespace FileConverter
         void OfferRestore()
         {
             if (Environment.GetEnvironmentVariable("FADI_NO_RESTORE") != null) return;
-            foreach (string f in new[] { Recovery.VideoFile, Recovery.PhotoFile })
+            foreach (string f in new[] { Recovery.VideoFile, Recovery.PhotoProject, Recovery.PhotoFile })
             {
                 if (!Recovery.Has(f)) continue;
                 bool video = f == Recovery.VideoFile;
                 DateTime t = DateTime.Now; try { t = System.IO.File.GetLastWriteTime(f); } catch { }
-                if (Ask.Confirm(this, L.T("rec_title"), L.T(video ? "rec_video" : "rec_photo", TrimPage.Ago(t)), L.T("rec_restore"), L.T("rec_discard"), AskKind.Info))
+                if (Ask.Confirm(this, L.T("rec_title"), L.T(video ? "rec_video" : "rec_photo", VideoStudio.Ago(t)), L.T("rec_restore"), L.T("rec_discard"), AskKind.Info))
                 {
                     Go(pages.IndexOf(studio));
                     if (video) { studio.Show(studio.Videos); studio.Videos.OpenProject(f, true); }
@@ -314,6 +314,11 @@ namespace FileConverter
                 case "edit": ComeBack(); Route(files, "studio"); return;
                 case "text": ComeBack(); Route(new[] { files[0] }, "text"); return;
                 case "info": ComeBack(); Route(new[] { files[0] }, "inspect"); return;
+                // a folder dragged onto the wheel
+                case "f_convert": ComeBack(); Route(files, "convert"); return;
+                case "f_compress": ComeBack(); Route(files, "compress"); return;
+                case "f_rename": ComeBack(); Go(pages.IndexOf(rename)); rename.AcceptFiles(files); return;
+                case "f_dupes": ComeBack(); Go(pages.IndexOf(dupes)); dupes.AcceptFiles(files); dupes.Scan(); return;
                 case "nobg":
                     if (!BgRemover.Ready) { ComeBack(); Route(new[] { files[0] }, "studio"); toast.Show(L.T("wh_nobg_get"), true, null, null); return; }
                     break;
@@ -586,8 +591,8 @@ namespace FileConverter
             add("pal_email", "\uE73F", "email mail gmail outlook 25 mb attach بريد ايميل", () => { Go(pages.IndexOf(compress)); compress.UsePreset("email"); compress.Browse2(); });
             add("pal_avatar", "\uE73F", "avatar profile picture photo pfp github 1 mb صورة شخصية بروفايل", () => { Go(pages.IndexOf(compress)); compress.UsePreset("avatar"); compress.Browse2(); });
             add("pal_studio_open", Ico.Photo, "edit photo video open studio تعديل صورة فيديو", () => { Go(pages.IndexOf(studio)); studio.PickPhoto(); });
-            add("pal_proj_open", "\uE7C4", "open video project capcut timeline فتح مشروع فيديو", () => { string f = TrimPage.PickProject(this); if (f != null) { Go(pages.IndexOf(studio)); studio.Show(studio.Videos); studio.Videos.OpenProject(f, false); } });
-            foreach (string rp in TrimPage.RecentProjects)
+            add("pal_proj_open", "\uE7C4", "open video project capcut timeline فتح مشروع فيديو", () => { string f = VideoStudio.PickProject(this); if (f != null) { Go(pages.IndexOf(studio)); studio.Show(studio.Videos); studio.Videos.OpenProject(f, false); } });
+            foreach (string rp in VideoStudio.RecentProjects)
             {
                 string p0 = rp;
                 l.Add(new PaletteItem { Group = L.T("pal_g_recent"), Title = System.IO.Path.GetFileNameWithoutExtension(rp), Sub = L.T("pal_project"), Glyph = "\uE7C4", Words = "project recent مشروع " + rp, Run = () => { Go(pages.IndexOf(studio)); studio.Show(studio.Videos); studio.Videos.OpenProject(p0, false); } });
@@ -602,7 +607,7 @@ namespace FileConverter
             add("pal_pdf_pages", "\uEA90", "pdf pages rotate delete reorder organize صفحات تدوير حذف ترتيب", () => { GoPdf(); pdf.StartMode(1, true); });
             add("pal_pdf_split", "\uE8C9", "split pdf extract pages separate تقسيم استخراج صفحات", () => { GoPdf(); pdf.StartMode(1, true); });
             add("pal_pdf_images", Ico.Photo, "pdf to jpg png images pictures export صور", () => { GoPdf(); pdf.StartMode(1, true); });
-            add("pal_ocr", "\uE8EF", "ocr copy text from picture image screenshot read scan نسخ نص من صورة لقطة شاشة", () => { Go(pages.IndexOf(studio)); studio.Show(studio.Photos); studio.Photos.CopyText(); });
+            add("pal_ocr", "\uE8EF", "ocr copy text from picture image screenshot read scan نسخ نص من صورة لقطة شاشة", () => { Go(pages.IndexOf(studio)); studio.CopyText(); });
             add("pal_rename", "\uE8AC", "rename batch many files names numbers numbered replace إعادة تسمية ملفات أسماء ترقيم", () => { Go(pages.IndexOf(rename)); rename.Browse(); });
             add("pal_vbg", "\uE77B", "remove video background green screen cut out person transparent إزالة خلفية الفيديو شاشة خضراء", () => { Go(pages.IndexOf(studio)); studio.Show(studio.Videos); if (studio.Videos.HasFile) studio.Videos.RemoveVideoBg(); else studio.Videos.Browse(false); });
             add("pal_sticker", "\uE899", "sticker whatsapp telegram discord emoji ملصق واتساب تيليجرام ديسكورد", () => { Go(pages.IndexOf(convert)); convert.Browse(); });
@@ -788,7 +793,7 @@ namespace FileConverter
                 if (!studio.ConfirmClose()) { e.Cancel = true; return; }
                 if (busy && !Ask.Confirm(this, L.T("close_busy_title"), L.T("close_busy"), L.T("close_anyway"), L.T("cancel"), AskKind.Warning)) { e.Cancel = true; return; }
                 // closed on purpose: nothing to bring back next time
-                Recovery.Clear(Recovery.VideoFile); Recovery.Clear(Recovery.PhotoFile);
+                Recovery.Clear(Recovery.VideoFile); Recovery.Clear(Recovery.PhotoFile); Recovery.Clear(Recovery.PhotoProject);
             }
             try { RemoveClipboardFormatListener(Handle); } catch { }
             Notifier.ExitRequested -= ExitFromTray;

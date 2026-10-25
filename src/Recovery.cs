@@ -100,6 +100,8 @@ namespace FileConverter
         public static string Dir { get { return Path.Combine(Paths.AppDir, "autosave"); } }
         public static string VideoFile { get { return Path.Combine(Dir, "video.fadiproj"); } }
         public static string PhotoFile { get { return Path.Combine(Dir, "photo.json"); } }
+        /// The photo studio's backup (a photo project).
+        public static string PhotoProject { get { return Path.Combine(Dir, "photo." + PhotoDoc.ProjectExt); } }
         /// Pages hook in here so a crash can save one last time.
         public static event Action SaveNowRequested;
 

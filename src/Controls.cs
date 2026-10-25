@@ -421,6 +421,8 @@ namespace FileConverter
             get { return selected; }
             set { if (items.Contains(value) && value != selected) { selected = value; Invalidate(); if (SelectedChanged != null) SelectedChanged(this, EventArgs.Empty); } }
         }
+        /// None chosen (quietly): for chips that are shortcuts rather than a setting.
+        public void ClearSelection() { selected = null; morph = 1; Invalidate(); }
         public int RowHeight { get { return Theme.S(RowH); } }
         public int Gap { get { return Theme.S(8); } }
         public int NeededHeight(int count) { int rows = (count + Columns - 1) / Columns; return rows * RowHeight + Math.Max(0, rows - 1) * Gap; }
@@ -936,7 +938,7 @@ namespace FileConverter
                 int total = 0;
                 foreach (DropExtra d in shown)
                 {
-                    int w = Math.Min(maxW, Theme.Measure(d.Text, cf) + Theme.S(46));
+                    int w = Math.Min(maxW, Theme.Measure(d.Text, cf) * 11 / 10 + Theme.S(60));   // icon, text and a little spare (Windows draws text a bit wider than it measures it)
                     if (total + w + (widths.Count > 0 ? gap : 0) > inner) break;
                     total += w + (widths.Count > 0 ? gap : 0); widths.Add(w);
                 }
@@ -950,7 +952,7 @@ namespace FileConverter
                     Theme.StrokeRound(g, cr, ch / 2f, hv ? Theme.Mix(Theme.ChipBorder, Theme.AccentColor, 0.6f) : Theme.ChipBorder);
                     Rectangle gr = Theme.RTL ? new Rectangle(cr.Right - Theme.S(34), cr.Y, Theme.S(22), ch) : new Rectangle(cr.X + Theme.S(12), cr.Y, Theme.S(22), ch);
                     Theme.Glyph(g, shown[i].Glyph, 9f, hv ? Theme.AccentColor : Theme.InkSoft, gr);
-                    Rectangle tr = Theme.RTL ? new Rectangle(cr.X + Theme.S(12), cr.Y, cr.Width - Theme.S(46), ch) : new Rectangle(cr.X + Theme.S(36), cr.Y, cr.Width - Theme.S(48), ch);
+                    Rectangle tr = Theme.RTL ? new Rectangle(cr.X + Theme.S(10), cr.Y, cr.Width - Theme.S(44), ch) : new Rectangle(cr.X + Theme.S(34), cr.Y, cr.Width - Theme.S(44), ch);
                     Theme.Text(g, shown[i].Text, cf, Theme.Ink, tr, Align.Start, true, false, true);
                     x += widths[i] + gap;
                 }
