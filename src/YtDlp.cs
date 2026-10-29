@@ -124,10 +124,13 @@ namespace FileConverter
         {
             url = url.Trim();
             YtInfo own = null;
+            bool data = Resolver.IsDataImage(url);
             try { own = Resolver.TryResolve(url, cancelled); }
             catch (UserError) { throw; }
             catch { }
             if (own != null) return own;
+            if (data) throw new UserError(L.T("dl_bad_picture"));
+            url = Resolver.Unwrap(url);   // an image result's link: yt-dlp gets the picture's own address
             if (!Ready) throw new UserError(L.T("not_installed"));
             try { return FetchYtDlp(url, cancelled); }
             catch (OperationCanceledException) { throw; }
@@ -448,6 +451,12 @@ namespace FileConverter
                     // streamed clip: let FFmpeg join the pieces into one MP4
                     p.Stage = "download";
                     Ffmpeg("-hide_banner -y -i " + Q(url) + " -c copy -bsf:a aac_adtstoasc -movflags +faststart -f mp4 " + Q(dest), progress, p, cancelled);
+                    return;
+                }
+                if (url.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+                {
+                    // a picture that came inside the link itself (data:image/…), already saved
+                    File.Copy(new Uri(url).LocalPath, dest, true);
                     return;
                 }
                 try

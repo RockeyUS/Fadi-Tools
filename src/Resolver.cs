@@ -46,8 +46,171 @@ namespace FileConverter
             return e == "gif" || Array.IndexOf(VideoExt, e) >= 0 || Array.IndexOf(ImgExt, e) >= 0;
         }
 
+        // ------------------------------------------------------------------ image search results and links that wrap a picture
+        static string Param(string url, params string[] names)
+        {
+            int q = url.IndexOf('?');
+            if (q < 0) return null;
+            string query = url.Substring(q + 1);
+            int h = query.IndexOf('#'); if (h >= 0) query = query.Substring(0, h);
+            foreach (string name in names)
+                foreach (string part in query.Split('&'))
+                {
+                    int eq = part.IndexOf('=');
+                    if (eq <= 0 || !part.Substring(0, eq).Equals(name, StringComparison.OrdinalIgnoreCase)) continue;
+                    string v = part.Substring(eq + 1).Replace('+', ' ');
+                    try { v = Uri.UnescapeDataString(v); } catch { }
+                    if (v.StartsWith("//")) v = "https:" + v;
+                    if (v.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return v.Trim();
+                }
+            return null;
+        }
+
+        static bool IsGoogle(string host) { return Regex.IsMatch(host, @"(^|\.)google\.[a-z.]+$"); }
+
+        /// The real address inside a link that only points at it: a Google / Bing / Yandex / DuckDuckGo image result
+        /// ("Copy link address" on a picture in the results), or a search engine's redirect. Anything else comes back as it is.
+        public static string Unwrap(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return url;
+            url = url.Trim();
+            for (int round = 0; round < 3; round++)
+            {
+                string host;
+                try { host = new Uri(url).Host.ToLowerInvariant(); } catch { return url; }
+                string path; try { path = new Uri(url).AbsolutePath.ToLowerInvariant(); } catch { path = ""; }
+                string inner = null;
+                if (IsGoogle(host) && path.StartsWith("/imgres")) inner = Param(url, "imgurl", "imgrefurl");
+                else if (IsGoogle(host) && path.StartsWith("/url")) inner = Param(url, "url", "q");
+                else if (host.EndsWith("bing.com") && path.StartsWith("/images")) inner = Param(url, "mediaurl");
+                else if (host.Contains("yandex.") && path.Contains("/images")) inner = Param(url, "img_url");
+                else if (host.EndsWith("duckduckgo.com")) inner = Param(url, "u", "uddg");
+                else if (host.EndsWith("search.yahoo.com") || host.EndsWith("images.search.yahoo.com")) inner = Param(url, "imgurl");
+                if (inner == null || inner == url) return url;
+                url = inner;
+            }
+            return url;
+        }
+
+        /// A link copied from a picture in image search results (it carries the picture's address).
+        public static bool IsImageResult(string url)
+        {
+            try
+            {
+                Uri u = new Uri(url);
+                string host = u.Host.ToLowerInvariant(), path = u.AbsolutePath.ToLowerInvariant();
+                return (IsGoogle(host) && path.StartsWith("/imgres")) || (host.EndsWith("bing.com") && path.StartsWith("/images") && Param(url, "mediaurl") != null)
+                    || (host.Contains("yandex.") && Param(url, "img_url") != null) || host.StartsWith("external-content.duckduckgo");
+            }
+            catch { return false; }
+        }
+
+        /// A Google results page (not a picture): the link copied from the grid of results in some browsers.
+        public static bool IsSearchPage(string url)
+        {
+            try
+            {
+                Uri u = new Uri(url);
+                string host = u.Host.ToLowerInvariant(), path = u.AbsolutePath.ToLowerInvariant();
+                return (IsGoogle(host) && path.StartsWith("/search")) || (host.EndsWith("bing.com") && path.StartsWith("/images") && Param(url, "mediaurl") == null);
+            }
+            catch { return false; }
+        }
+
+        /// A picture written right into the link (data:image/png;base64,…): saved to a temporary file.
+        public static bool IsDataImage(string s) { return s != null && s.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) && s.Contains(";base64,"); }
+
+        static YtInfo FromData(string data)
+        {
+            int comma = data.IndexOf(',');
+            string mime = data.Substring(5, data.IndexOf(';') - 5).ToLowerInvariant();
+            string ext = mime.EndsWith("jpeg") || mime.EndsWith("jpg") ? "jpg" : mime.EndsWith("png") ? "png" : mime.EndsWith("gif") ? "gif" : mime.EndsWith("webp") ? "webp" : mime.EndsWith("avif") ? "avif" : mime.EndsWith("svg+xml") ? "svg" : "png";
+            byte[] b = Convert.FromBase64String(data.Substring(comma + 1).Trim());
+            string tmp = Path.Combine(Path.GetTempPath(), "fadi_pasted_" + Guid.NewGuid().ToString("N").Substring(0, 8) + "." + ext);
+            File.WriteAllBytes(tmp, b);
+            YtInfo info = new YtInfo();
+            info.Url = new Uri(tmp).AbsoluteUri; info.DirectUrl = info.Url; info.DirectExt = ext;
+            info.Kind = ext == "gif" ? MediaKind.Gif : MediaKind.Image;
+            info.Title = L.T("dl_pasted_picture");
+            info.Thumbnail = info.Url; info.DirectSize = b.Length;
+            info.Site = L.T("dl_picture");
+            return info;
+        }
+
+        /// A link with no file name at the end (image CDNs, "images?q=tbn:…"): what the server says it is.
+        static YtInfo ByType(string url)
+        {
+            string type = null; long size = -1;
+            try
+            {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                req.UserAgent = UA; req.Method = "GET"; req.Timeout = 15000; req.AllowAutoRedirect = true;
+                req.Accept = "image/avif,image/webp,image/*,video/*,*/*;q=0.8";
+                req.AddRange(0L, 0L);
+                using (HttpWebResponse r = (HttpWebResponse)req.GetResponse())
+                {
+                    type = (r.ContentType ?? "").ToLowerInvariant();
+                    string cr = r.Headers["Content-Range"]; int slash = cr == null ? -1 : cr.LastIndexOf('/');
+                    if (slash >= 0) long.TryParse(cr.Substring(slash + 1), out size);
+                }
+            }
+            catch { return null; }
+            string ext = null;
+            if (type.StartsWith("image/jpeg") || type.StartsWith("image/jpg")) ext = "jpg";
+            else if (type.StartsWith("image/png")) ext = "png";
+            else if (type.StartsWith("image/gif")) ext = "gif";
+            else if (type.StartsWith("image/webp")) ext = "webp";
+            else if (type.StartsWith("image/avif")) ext = "avif";
+            else if (type.StartsWith("image/bmp")) ext = "bmp";
+            else if (type.StartsWith("video/mp4")) ext = "mp4";
+            else if (type.StartsWith("video/webm")) ext = "webm";
+            else if (type.StartsWith("video/quicktime")) ext = "mov";
+            if (ext == null) return null;
+            YtInfo info = new YtInfo();
+            info.Url = url; info.DirectUrl = url; info.DirectExt = ext;
+            info.Kind = ext == "gif" ? MediaKind.Gif : Array.IndexOf(ImgExt, ext) >= 0 ? MediaKind.Image : MediaKind.Video;
+            string name = ""; try { name = Uri.UnescapeDataString(Path.GetFileNameWithoutExtension(new Uri(url).AbsolutePath)); } catch { }
+            info.Title = name.Length > 2 && name.Length < 80 && !name.Equals("images", StringComparison.OrdinalIgnoreCase) ? name : L.T("dl_picture");
+            info.Thumbnail = info.Kind != MediaKind.Video ? url : "";
+            info.DirectSize = size;
+            info.Site = Site(url);
+            return info;
+        }
+
+        static readonly Regex VideoSites = new Regex(@"(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|twitter\.com|x\.com|reddit\.com|redd\.it|vimeo\.com|facebook\.com|fb\.watch|twitch\.tv|dailymotion\.com|soundcloud\.com|streamable\.com|bilibili\.com)", RegexOptions.IgnoreCase);
+
         /// Returns info for links we handle ourselves, or null to let yt-dlp try.
         public static YtInfo TryResolve(string url, Func<bool> cancelled)
+        {
+            if (IsDataImage(url)) return FromData(url);
+            string orig = url;
+            url = Unwrap(url);
+            if (IsSearchPage(url)) throw new UserError(L.T("dl_search_page"));
+            YtInfo own = null;
+            try { own = TryKnown(url, cancelled); } catch (UserError) { throw; } catch { }
+            if (own != null) return own;
+            // a plain picture or video link without a file name (most image hosts): ask the server what it is
+            if (!VideoSites.IsMatch(url)) own = ByType(url);
+            // the picture itself turned us away: the page it's on (an image result's "imgrefurl") shows it too
+            if (own == null && url != orig)
+            {
+                string page = Param(orig, "imgrefurl");
+                if (page != null) try { own = FromPage(page); } catch { }
+            }
+            return own;
+        }
+
+        /// Whether a link needs yt-dlp (the video sites); pictures and GIF sites are fetched without it.
+        public static bool NeedsEngine(string url)
+        {
+            if (IsDataImage(url)) return false;
+            url = Unwrap(url);
+            string st = Site(url);
+            if (st == "GIPHY" || st == "Tenor" || st == "KLIPY" || st == "Discord" || st == "Pinterest" || IsDirectMedia(url)) return false;
+            return VideoSites.IsMatch(url);
+        }
+
+        static YtInfo TryKnown(string url, Func<bool> cancelled)
         {
             string site = Site(url);
             if (site == "Discord") url = Discord(url);
@@ -125,6 +288,12 @@ namespace FileConverter
         static YtInfo Direct(string mediaUrl, string title, string thumb)
         {
             string e = ExtOf(mediaUrl);
+            if (Array.IndexOf(VideoExt, e) < 0 && Array.IndexOf(ImgExt, e) < 0 && e != "gif" && !mediaUrl.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            {
+                // no file name at the end (or an odd one): what the server says it is
+                YtInfo t = ByType(mediaUrl);
+                if (t != null) { if (!string.IsNullOrEmpty(title)) t.Title = title; if (thumb != null) t.Thumbnail = thumb; return t; }
+            }
             YtInfo info = new YtInfo();
             info.Url = mediaUrl;
             info.DirectUrl = mediaUrl;

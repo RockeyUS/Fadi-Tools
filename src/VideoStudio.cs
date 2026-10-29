@@ -69,7 +69,7 @@ namespace FileConverter
             {
                 live.Delivered();
                 if (!playing) { b.Dispose(); return; }
-                preview.SetFrame(b); Playhead = t; timeline.Follow();
+                preview.SetFrame(b); lastLiveT = t; Playhead = t; timeline.Follow();
                 if (++uiTick % 8 == 0) UpdateButtons();
             });
             live.Ended += () => Ui(() => { if (playing) { StopPlay(); Playhead = P.Duration; } });
@@ -158,6 +158,7 @@ namespace FileConverter
 
         bool composing, composeAgain;
         int uiTick;
+        double lastLiveT = -1;
         /// Draws the picture at the playhead (off the screen's thread). One at a time: changes that come in meanwhile
         /// are drawn together right after, so dragging stays smooth. While playing, the player just gets the change.
         void Recompose()
@@ -201,7 +202,7 @@ namespace FileConverter
             RectangleF s = preview.Screen;
             int w = Math.Max(64, Math.Min(960, (int)s.Width)), h = Math.Max(64, (int)Math.Round(w * P.H / (double)P.W));
             if (h > 960) { h = 960; w = Math.Max(64, (int)Math.Round(h * P.W / (double)P.H)); }
-            playing = true; preview.Playing = true;
+            playing = true; preview.Playing = true; lastLiveT = -1;
             bPlay.Glyph = Ico.Pause; bPlay.Invalidate(); preview.Invalidate();
             live.Master = volBar.Muted ? 0 : volBar.Value;
             live.Start(P.Copy(), Playhead, w, h, P.Fps);
@@ -213,9 +214,12 @@ namespace FileConverter
             playing = false; preview.Playing = false;
             live.Stop();
             bPlay.Glyph = Ico.Play; bPlay.Invalidate();
+            // the picture on screen is the frame it stopped at: keep it (drawing it again from scratch showed a
+            // slightly different frame first, which looked like a jump when pausing and playing quickly)
+            if (lastLiveT >= 0) { Playhead = lastLiveT; preview.Invalidate(); }
+            else Recompose();
             UpdateButtons();
             SyncPlacement();
-            Recompose();
         }
 
         /// Moves the playhead; while playing, it plays on from there.
@@ -596,6 +600,7 @@ namespace FileConverter
         public void Unload()
         {
             StopPlay();
+            live.Shutdown();
             P = new VProject(); timeline.P = P; preview.P = P;
             timeline.Selected = null; preview.Selected = null;
             preview.SetFrame(null);
@@ -612,7 +617,7 @@ namespace FileConverter
         {
             if (disposing)
             {
-                live.Stop();
+                live.Shutdown();
                 if (saveNow != null) Recovery.SaveNowRequested -= saveNow;
                 if (autoTimer != null) { autoTimer.Stop(); autoTimer.Dispose(); }
                 frames.Clear();

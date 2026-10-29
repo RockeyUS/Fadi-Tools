@@ -310,6 +310,7 @@ namespace FileConverter
                 case "upscale": UpscaleWindow.Open(files[0], Cursor.Position, studio); return;
                 case "trim": TrimWindow.Open(files[0], Cursor.Position, studio); return;
                 case "combine": case "merge": QuickPdf.CombineInBackground(files, studio); return;
+                case "joinv": case "joina": MergeWindow.Open(files, Cursor.Position, studio); return;
                 case "compress": CompressWindow.Open(files, Cursor.Position, compress); return;
                 case "edit": ComeBack(); Route(files, "studio"); return;
                 case "text": ComeBack(); Route(new[] { files[0] }, "text"); return;
@@ -526,7 +527,8 @@ namespace FileConverter
             try { if (Clipboard.ContainsText()) t = Clipboard.GetText(); } catch { return; }
             if (t == null) return;
             t = t.Trim();
-            if (t.Length > 400 || t.IndexOfAny(new[] { ' ', '\n', '\r', '\t' }) >= 0 || !DownloadPage.IsVideoLink(t)) return;
+            // links can be long (an image result's link carries the picture's address); a picture inside the link longer still
+            if (t.Length > (Resolver.IsDataImage(t) ? 8 << 20 : 4000) || t.IndexOfAny(new[] { ' ', '\n', '\r', '\t' }) >= 0 || !DownloadPage.IsVideoLink(t)) return;
             if (t == lastLink || (current == pages.IndexOf(youtube) && Form.ActiveForm == this)) { lastLink = t; return; }   // already there
             lastLink = t;
             if (Form.ActiveForm == this) OfferLink(t);
@@ -535,7 +537,8 @@ namespace FileConverter
 
         void OfferLink(string url)
         {
-            string host = url; try { host = new Uri(url).Host.Replace("www.", ""); } catch { }
+            string host = Resolver.IsDataImage(url) ? L.T("dl_picture") : url;
+            if (!Resolver.IsDataImage(url)) try { host = new Uri(Resolver.Unwrap(url)).Host.Replace("www.", ""); } catch { }
             toast.Show(L.T("link_copied") + "  (" + host + ")", true, () => L.T("link_get"), () =>
             {
                 Go(pages.IndexOf(youtube));

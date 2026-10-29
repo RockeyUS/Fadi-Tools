@@ -364,6 +364,7 @@ namespace FileConverter
             public Bitmap Cur; public double CurT = -1;
             public double Newest = -1;
             public long Touched;
+            public readonly DateTime Began = DateTime.UtcNow;
 
             public void Begin()
             {
@@ -457,9 +458,13 @@ namespace FileConverter
             decs.TryGetValue(c.Id, out d);
             double rate = RateFor(c.Speed);
             int w, h; Size(c, out w, out h);
+            // a decoder that's still starting (FFmpeg can take a moment, more so while the file is still being read
+            // for its thumbnails and sound) is given time; one that's a little behind catches up by skipping frames.
+            // Starting it again in those cases is what froze the picture for the first seconds.
+            bool warming = d != null && d.Newest < 0 && (DateTime.UtcNow - d.Began).TotalSeconds < 5;
             bool stale = d == null || d.File != c.File || Math.Abs(d.Rate - rate) > 0.01 || d.W != w || d.H != h || d.Alpha != c.Alpha
                          || srcT < d.Start - 0.05 || (d.CurT >= 0 && srcT < d.CurT - 0.25)
-                         || srcT > Math.Max(d.Newest, d.Start) + (d.Newest < 0 ? 2.0 : 0.8);
+                         || (!warming && srcT > Math.Max(d.Newest, d.Start) + 3.0);
             if (stale)
             {
                 if (d != null) d.Stop();
@@ -500,6 +505,7 @@ namespace FileConverter
         }
 
         public void Clear() { foreach (Dec d in decs.Values) d.Stop(); decs.Clear(); }
+        public bool Fits(int w, int h, double fps) { return BoxW == w && BoxH == h && Math.Abs(Fps - fps) < 0.01; }
     }
 
     // ====================================================================== the player
@@ -512,15 +518,17 @@ namespace FileConverter
         readonly FrameCache stills;
         LiveFrames live;
         WaveOut wave;
-        Thread mixer, render;
-        volatile bool stop;
         readonly object mixLock = new object();
         double baseT, mixT;
         readonly Stopwatch sw = new Stopwatch();
         readonly Dictionary<string, Voice> voices = new Dictionary<string, Voice>();
         long mixCount;
+        // every Start and Stop begins a new "generation": threads of an older one finish on their own (nothing waits for them)
+        volatile int gen;
+        volatile bool running;
+        Timer idle;
         public volatile float Master = 1f;
-        public bool Running { get { return render != null && !stop; } }
+        public bool Running { get { return running; } }
         /// A composed picture and its time (on a background thread; the receiver owns the picture).
         public event Action<Bitmap, double> Frame;
         public event Action Ended;
@@ -543,19 +551,31 @@ namespace FileConverter
             }
         }
 
+        /// Plays from a moment. The sound device and the decoders of the last play are reused when they still fit,
+        /// so pausing and playing again (even quickly, many times) starts at once.
         public void Start(VProject p, double from, int w, int h, double fps)
         {
-            Stop();
-            project = p;
-            stop = false;
-            live = new LiveFrames(stills) { BoxW = Math.Max(64, w), BoxH = Math.Max(64, h), Fps = Math.Max(15, Math.Min(30, fps)) };
-            wave = WaveOut.Open(Block, Buffers);
-            lock (mixLock) { baseT = mixT = from; sw.Restart(); }
+            w = Math.Max(64, w); h = Math.Max(64, h); fps = Math.Max(15, Math.Min(30, fps));
+            int my;
+            LiveFrames old = null;
+            lock (mixLock)
+            {
+                my = ++gen;
+                running = true;
+                project = p;
+                if (live == null || !live.Fits(w, h, fps)) { old = live; live = new LiveFrames(stills) { BoxW = w, BoxH = h, Fps = fps }; }
+                if (wave == null) wave = WaveOut.Open(Block, Buffers); else wave.Reset();
+                baseT = mixT = from; sw.Restart();
+                foreach (Voice v in voices.Values) v.Dispose();
+                voices.Clear();
+                Interlocked.Exchange(ref posting, 0);
+            }
+            if (old != null) ThreadPool.QueueUserWorkItem(_ => { lock (stills.Gate) old.Clear(); });
             // make sure every sound is being decoded
             foreach (VTrack t in p.Tracks) foreach (VClip c in t.Clips) if (c.HasSound && c.File != null) PcmCache.Get(c.File);
-            if (wave != null) { mixer = new Thread(MixLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal }; mixer.Start(); }
-            render = new Thread(() => RenderLoop(w, h)) { IsBackground = true };
-            render.Start();
+            LiveFrames lf = live;
+            if (wave != null) new Thread(() => MixLoop(my)) { IsBackground = true, Priority = ThreadPriority.AboveNormal }.Start();
+            new Thread(() => RenderLoop(my, w, h, lf)) { IsBackground = true }.Start();
         }
 
         /// Jumps while playing (sound and picture carry on from there).
@@ -571,32 +591,53 @@ namespace FileConverter
             }
         }
 
+        /// Pauses at once (no waiting for anything). The decoders and the sound device stay ready for a few
+        /// seconds in case it plays again; then they're let go.
         public void Stop()
         {
-            stop = true;
-            Thread m = mixer, r = render;
-            mixer = render = null;
-            if (m != null) try { m.Join(500); } catch { }
-            if (r != null) try { r.Join(1500); } catch { }
             lock (mixLock)
             {
-                if (wave != null) { wave.Dispose(); wave = null; }
+                gen++;
+                running = false;
+                if (wave != null) wave.Reset();
                 foreach (Voice v in voices.Values) v.Dispose();
                 voices.Clear();
             }
-            if (live != null) { lock (stills.Gate) live.Clear(); live = null; }
+            int g = gen;
+            Timer old = idle;
+            idle = new Timer(_ => Release(g), null, 20000, Timeout.Infinite);
+            if (old != null) old.Dispose();
+        }
+
+        void Release(int g)
+        {
+            LiveFrames l;
+            lock (mixLock)
+            {
+                if (gen != g || running) return;
+                if (wave != null) { wave.Dispose(); wave = null; }
+                l = live; live = null;
+            }
+            if (l != null) lock (stills.Gate) l.Clear();
+        }
+
+        /// Everything let go now (closing the video or the app).
+        public void Shutdown()
+        {
+            Stop();
+            Release(gen);
         }
 
         /// The picture's receiver says it's ready for the next one.
         public void Delivered() { Interlocked.Exchange(ref posting, 0); }
 
-        void RenderLoop(int w, int h)
+        void RenderLoop(int my, int w, int h, LiveFrames lf)
         {
             Stopwatch pace = Stopwatch.StartNew();
-            double step = 1 / Math.Max(15.0, Math.Min(30.0, live.Fps));
+            double step = 1 / lf.Fps;
             try
             {
-                while (!stop)
+                while (gen == my)
                 {
                     double next = pace.Elapsed.TotalSeconds + step;
                     VProject p = project;
@@ -604,24 +645,25 @@ namespace FileConverter
                     double dur = p.Duration;
                     if (t >= dur - 0.001)
                     {
-                        if (!stop && Ended != null) Ended();
+                        if (gen == my && Ended != null) Ended();
                         break;
                     }
                     Bitmap b = null;
                     bool waiting;
                     lock (stills.Gate)
                     {
-                        try { b = Composer.Compose(p, t, w, h, live, out waiting); } catch { }
+                        if (gen != my) break;
+                        try { b = Composer.Compose(p, t, w, h, lf, out waiting); } catch { }
                         // clips about to start: their decoders begin now, so they're ready on time
                         foreach (VTrack tr in p.Tracks)
                             if (!tr.Hidden && tr.Visual)
                                 foreach (VClip c in tr.Clips)
-                                    if (c.Kind == VKind.Video && c.At > t && c.At < t + 1.0) live.Prepare(c, c.In);
-                        live.Sweep();
+                                    if (c.Kind == VKind.Video && c.At > t && c.At < t + 1.0) lf.Prepare(c, c.In);
+                        lf.Sweep();
                     }
                     if (b != null)
                     {
-                        if (Frame != null && Interlocked.CompareExchange(ref posting, 1, 0) == 0) Frame(b, t);
+                        if (gen == my && Frame != null && Interlocked.CompareExchange(ref posting, 1, 0) == 0) Frame(b, t);
                         else b.Dispose();
                     }
                     double wait = next - pace.Elapsed.TotalSeconds;
@@ -631,17 +673,18 @@ namespace FileConverter
             catch { }
         }
 
-        void MixLoop()
+        void MixLoop(int my)
         {
             short[] outb = new short[Block * 2];
             float[] acc = new float[Block * 2], tmp = new float[Block * 2];
             try
             {
-                while (!stop)
+                while (gen == my)
                 {
                     bool wrote = false;
                     lock (mixLock)
                     {
+                        if (gen != my) break;
                         if (wave != null && wave.Free(wave.Next))
                         {
                             Mix(mixT, acc, tmp, outb);

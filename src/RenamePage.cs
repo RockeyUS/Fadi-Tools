@@ -166,7 +166,7 @@ namespace FileConverter
         }
 
         /// "photo 2" before "photo 10", like Windows Explorer.
-        static int NaturalCompare(string a, string b)
+        public static int NaturalCompare(string a, string b)
         {
             int i = 0, j = 0;
             while (i < a.Length && j < b.Length)

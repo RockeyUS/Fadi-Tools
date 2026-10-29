@@ -23,7 +23,17 @@ namespace FileConverter
             try { fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite); length = fs.Length; } catch { fs = null; length = 0; }
             ScrollTo(0); cacheStart = -1; Invalidate();
         }
-        public void Close() { if (fs != null) fs.Dispose(); fs = null; length = 0; cacheStart = -1; }
+        public void Close() { if (fs != null) fs.Dispose(); fs = null; length = 0; cacheStart = -1; HiStart = -1; }
+        public long Length { get { return length; } }
+        /// Bytes to mark (a search hit or the offset you went to).
+        public long HiStart = -1; public int HiLen;
+        public void GoTo(long offset, int len)
+        {
+            HiStart = offset; HiLen = len;
+            long row = offset / 16;
+            ScrollTo((int)Math.Max(0, Math.Min(int.MaxValue / 2, row * RH - Height / 3)));
+            Invalidate();
+        }
 
         byte[] Row(long offset, out int n)
         {
@@ -56,6 +66,15 @@ namespace FileConverter
             TextFormatFlags fl = TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
             TextRenderer.DrawText(g, off.ToString("X8"), f, new Rectangle(x, r.Y, cw * 9, r.Height), Theme.InkFaint, fl);
             x += cw * 10;
+            if (HiStart >= 0 && HiStart < off + 16 && HiStart + Math.Max(1, HiLen) > off)
+                using (SolidBrush hb = new SolidBrush(Theme.Mix(Theme.Card, Theme.AccentColor, 0.35f)))
+                    for (int k = 0; k < 16; k++)
+                    {
+                        long at = off + k;
+                        if (at < HiStart || at >= HiStart + Math.Max(1, HiLen)) continue;
+                        g.FillRectangle(hb, x + k * 3 * cw + (k > 7 ? cw : 0) - cw / 4, r.Y + Theme.S(2), cw * 2 + cw / 2, r.Height - Theme.S(4));
+                        g.FillRectangle(hb, x + cw * 51 + cw / 2 + k * cw, r.Y + Theme.S(2), cw, r.Height - Theme.S(4));
+                    }
             StringBuilder hex = new StringBuilder(), asc = new StringBuilder();
             for (int k = 0; k < 16; k++)
             {
@@ -96,6 +115,8 @@ namespace FileConverter
         int hoverCopy = -1;
         public event Action<string> Copied;
         public DetailsView() { RowHeight = 40; }
+        public Func<string> EmptyText;
+        protected override void PaintEmpty(Graphics g) { if (EmptyText != null) Theme.Text(g, EmptyText(), Theme.F(9.5f), Theme.InkFaint, ClientRectangle, Align.Center); }
         protected override string RowText(int i) { string[] r = Rows[i]; return r.Length > 1 ? r[0] + ": " + r[1] : r[0]; }
         public override int Count { get { return Rows.Count; } }
         Rectangle CopyRect(Rectangle r)
@@ -135,7 +156,7 @@ namespace FileConverter
         }
     }
 
-    public class InspectPage : Page
+    public partial class InspectPage : Page
     {
         Rectangle head, body, emptyCard, nameR, typeR;
         DropZone drop;
@@ -169,8 +190,8 @@ namespace FileConverter
             btnConvert = new Btn(() => L.T("send_convert"), Ico.Sync, BtnKind.Primary);
             btnConvert.FontSize = 9.5f;
             btnConvert.Click += (s, e) => { if (file != null && SendToConverter != null) SendToConverter(file); };
-            btnWindows = new Btn(() => L.T("open_windows"), Ico.Open, BtnKind.Secondary);
-            btnWindows.Click += (s, e) => { if (file != null) try { Process.Start(new ProcessStartInfo(file) { UseShellExecute = true }); } catch { try { Process.Start("rundll32.exe", "shell32.dll,OpenAs_RunDLL " + file); } catch { } } };
+            btnWindows = new Btn(() => file == null && folder != null ? L.T("fd_open") : L.T("open_windows"), Ico.Open, BtnKind.Secondary);
+            btnWindows.Click += (s, e) => { if (folder != null && file == null) { try { Process.Start("explorer.exe", "\"" + folder + "\""); } catch { } return; } if (file != null) try { Process.Start(new ProcessStartInfo(file) { UseShellExecute = true }); } catch { try { Process.Start("rundll32.exe", "shell32.dll,OpenAs_RunDLL " + file); } catch { } } };
             btnRe = new Btn(() => L.T("re_open_in"), Ico.Code, BtnKind.Secondary);
             btnRe.Click += (s, e) => { if (file != null && SendToRe != null) SendToRe(file); };
             btnOther = new Btn(() => L.T("open_other"), Ico.FolderOpen, BtnKind.Ghost);
@@ -182,7 +203,7 @@ namespace FileConverter
             btnPlay = new Btn(() => L.T("play"), Ico.Play, BtnKind.Secondary);
             btnPlay.Click += (s, e) => { if (file != null && media != null) Media.Play(file, 0, 0, media.HasVideo); };
             mismatch = new Notice(() => sniff == null ? "" : L.T("ext_mismatch", Formats.Ext(file).ToUpperInvariant(), sniff.Name)) { Kind = 1, Glyph = Ico.Warning };
-            tabs = new Segments(() => L.T("tab_info"), () => L.T("tab_preview"), () => L.T("tab_hex"), () => L.T("tab_text"), () => L.T("tab_strings"));
+            tabs = new Segments();
             tabs.FadeTarget = this;
             tabs.FadeArea = () => new Rectangle(0, tabs.Bottom + Theme.S(4), Width, Math.Max(0, Height - tabs.Bottom - Theme.S(4)));
             tabs.SelectedChanged += (s, e) => ShowTab();
@@ -200,6 +221,8 @@ namespace FileConverter
             noPreview = new Label { TextAlign = ContentAlignment.MiddleCenter, Font = Theme.F(10f) };
             Controls.AddRange(new Control[] { drop, btnClear, btnConvert, btnWindows, btnOther, btnRe, btnSaveAs, btnPlay, mismatch, tabs, details, hex, text, strings, preview, noPreview, textMode, encSeg });
             EnableDrop(drop, details, hex, strings, preview);
+            BuildExtras();
+            SetTabs();
             Restyle();
             ShowState();
         }
@@ -225,17 +248,19 @@ namespace FileConverter
 
         void ShowState()
         {
-            bool has = file != null;
+            bool has = file != null || folder != null;
             drop.Visible = !has;
-            foreach (Control c in new Control[] { btnConvert, btnWindows, btnOther, btnClear, tabs }) c.Visible = has;
-            btnRe.Visible = has && ReFits;
-            bool mis = has && sniff != null && sniff.Ext.Length > 0 && !SameExt(Formats.Ext(file), sniff.Ext);
+            foreach (Control c in new Control[] { btnWindows, btnOther, btnClear, tabs }) c.Visible = has;
+            btnConvert.Visible = file != null;
+            btnRe.Visible = file != null && ReFits;
+            ShowExtrasState();
+            bool mis = file != null && sniff != null && sniff.Ext.Length > 0 && !SameExt(Formats.Ext(file), sniff.Ext);
             mismatch.Visible = mis; btnSaveAs.Visible = mis;
             ShowTab();
             DoLayout();
         }
 
-        static bool SameExt(string a, string b)
+        public static bool SameExt(string a, string b)
         {
             if (a == b) return true;
             string[][] eq = { new[] { "jpg", "jpeg", "jfif", "jpe" }, new[] { "tif", "tiff" }, new[] { "htm", "html", "xhtml" }, new[] { "md", "markdown", "mdown" },
@@ -251,7 +276,7 @@ namespace FileConverter
         {
             int W = Width, H = Height, p = Pad, ip = Theme.S(20);
             cards.Clear();
-            if (file == null)
+            if (file == null && folder == null)
             {
                 emptyCard = new Rectangle(p, Top0, W - p * 2, H - Top0 - p);
                 cards.Add(emptyCard);
@@ -266,20 +291,29 @@ namespace FileConverter
             nameR = new Rectangle(x + Theme.S(66), head.Y + Theme.S(18), w - Theme.S(66) - Theme.S(44), Theme.S(26));
             typeR = new Rectangle(x + Theme.S(66), head.Y + Theme.S(44), w - Theme.S(66) - Theme.S(44), Theme.S(20));
             Place(btnClear, new Rectangle(head.Right - Theme.S(12) - Theme.S(34), head.Y + Theme.S(12), Theme.S(34), Theme.S(34)));
+            int pw = pill.PreferredW;
+            Place(pill, new Rectangle(head.Right - Theme.S(12) - Theme.S(34) - Theme.S(10) - pw, head.Y + Theme.S(14), pw, Theme.S(30)));
+            nameR.Width -= pw + Theme.S(10); typeR.Width -= pw + Theme.S(10);
             int by = head.Y + Theme.S(74);
             int cw = Math.Max(Theme.S(160), btnConvert.PreferredWidth), ww = Math.Max(Theme.S(160), btnWindows.PreferredWidth), ow = Math.Max(Theme.S(140), btnOther.PreferredWidth);
             Place(btnConvert, new Rectangle(x, by, cw, Theme.S(36)));
             Place(btnWindows, new Rectangle(x + cw + Theme.S(10), by, ww, Theme.S(36)));
             int rw2 = Math.Max(Theme.S(170), btnRe.PreferredWidth);
-            Place(btnRe, new Rectangle(x + cw + ww + Theme.S(20), by, rw2, Theme.S(36)));
+            int bx = file != null ? x + cw + Theme.S(10) : x;
+            Place(btnWindows, new Rectangle(bx, by, ww, Theme.S(36)));
+            Place(btnRe, new Rectangle(bx + ww + Theme.S(10), by, rw2, Theme.S(36)));
             Place(btnOther, new Rectangle(x + w - ow, by, ow, Theme.S(36)));
+            Place(btnMore, new Rectangle(x + w - ow - Theme.S(10) - Theme.S(40), by, Theme.S(40), Theme.S(36)));
+            int bkw = Math.Max(Theme.S(150), btnBack.PreferredWidth);
+            int bkx = (btnRe.Visible ? bx + ww + rw2 + Theme.S(20) : bx + ww + Theme.S(10));
+            Place(btnBack, new Rectangle(bkx, by, Math.Min(bkw, Math.Max(Theme.S(80), x + w - ow - Theme.S(60) - bkx)), Theme.S(36)));
             if (mismatch.Visible)
             {
                 int sw = Math.Max(Theme.S(170), btnSaveAs.PreferredWidth);
                 Place(mismatch, new Rectangle(x, by + Theme.S(48), w - sw - Theme.S(10), Theme.S(42)));
                 Place(btnSaveAs, new Rectangle(x + w - sw, by + Theme.S(51), sw, Theme.S(36)));
             }
-            Place(tabs, new Rectangle(body.X + ip, body.Y + Theme.S(14), Math.Min(Theme.S(560), body.Width - ip * 2), Theme.S(38)));
+            Place(tabs, new Rectangle(body.X + ip, body.Y + Theme.S(14), Math.Min(TabsWidth(), body.Width - ip * 2), Theme.S(38)));
             Rectangle content = new Rectangle(body.X + Theme.S(6), body.Y + Theme.S(62), body.Width - Theme.S(12), body.Height - Theme.S(70));
             foreach (Control c in new Control[] { details, hex, strings }) Place(c, content);
             Place(textMode, new Rectangle(content.X + Theme.S(14), content.Y, Theme.S(220), Theme.S(32)));
@@ -290,41 +324,45 @@ namespace FileConverter
             Place(btnPlay, new Rectangle(pv.X, pv.Bottom + Theme.S(12), Math.Max(Theme.S(120), btnPlay.PreferredWidth), Theme.S(36)));
             Place(noPreview, content);
             if (web != null) Place(web, new Rectangle(content.X + Theme.S(8), content.Y, content.Width - Theme.S(16), content.Height - Theme.S(8)));
+            LayoutExtras(content);
             Invalidate();
         }
 
         protected override void PaintContent(Graphics g)
         {
+            if (folder != null) { PaintFolderHead(g); PaintExtras(g); return; }
             if (file == null || sniff == null) return;
             Rectangle badge = new Rectangle(head.X + Theme.S(20), head.Y + Theme.S(18), Theme.S(50), Theme.S(50));
             Theme.FillRoundGradient(g, M(badge), Theme.S(12), Theme.PrimaryTop, Theme.PrimaryBottom);
             Theme.Glyph(g, Formats.GlyphFor(sniff.Category), 16f, Theme.PrimaryInk, M(badge));
-            Label(g, Path.GetFileName(file), Theme.F(12f, FontStyle.Bold), Theme.Ink, nameR);
+            Label(g, nestedLabel ?? Path.GetFileName(file), Theme.F(12f, FontStyle.Bold), Theme.Ink, nameR);
             string t = sniff.Name + "  ·  " + Theme.HumanSize(sniff.Size) + (sniff.Encoding.Length > 0 ? "  ·  " + sniff.Encoding : "");
             Label(g, t, Theme.F(9.25f), Theme.InkSoft, typeR);
+            PaintExtras(g);
         }
 
         void ShowTab()
         {
             bool has = file != null;
-            int i = tabs.SelectedIndex;
-            details.Visible = has && i == 0;
-            hex.Visible = has && i == 2;
-            text.Visible = has && i == 3;
-            textMode.Visible = has && i == 3;
-            encSeg.Visible = has && i == 3 && (sniff != null && sniff.IsText || textMode.SelectedIndex == 1 || encSeg.SelectedIndex > 0);
-            strings.Visible = has && i == 4;
-            bool pv = has && i == 1;
+            string k = Key;
+            details.Visible = (has && k == "info") || (folder != null && k == "f_info");
+            hex.Visible = has && k == "hex";
+            text.Visible = has && k == "text";
+            textMode.Visible = has && k == "text";
+            encSeg.Visible = has && k == "text" && (sniff != null && sniff.IsText || textMode.SelectedIndex == 1 || encSeg.SelectedIndex > 0);
+            strings.Visible = has && k == "strings";
+            ShowExtrasTab(k);
+            bool pv = has && k == "preview";
             bool webPv = pv && sniff != null && (Formats.IsMarkdown(Formats.Ext(file)) || sniff.Ext == "html" || sniff.Ext == "md" || sniff.Ext == "svg");
-            bool imgPv = pv && sniff != null && !webPv && (sniff.Category == Category.Image || (media != null && (media.HasVideo || media.HasAudio)));
+            bool imgPv = pv && sniff != null && !webPv && (sniff.Category == Category.Image || fontSample || (media != null && (media.HasVideo || media.HasAudio)));
             if (webPv) EnsureWeb();
             if (web != null) web.Visible = webPv;
             preview.Visible = imgPv;
             btnPlay.Visible = imgPv && media != null && (media.HasVideo || media.HasAudio);
             noPreview.Visible = pv && !imgPv && !(webPv && web != null);
             noPreview.Text = L.T("no_preview");
-            if (i == 3 && has && text.Tag as string != file) LoadText();
-            if (i == 4 && has && strings.Tag as string != file) LoadStrings();
+            if (k == "text" && has && text.Tag as string != file) LoadText();
+            if (k == "strings" && has && strings.Tag as string != file) LoadStrings();
             if (webPv && web != null && web.Tag as string != file) LoadWeb();
             DoLayoutLight();
         }
@@ -342,16 +380,20 @@ namespace FileConverter
 
         public override void AcceptFiles(string[] paths)
         {
-            if (paths == null || paths.Length == 0 || !File.Exists(paths[0])) return;
+            if (paths == null || paths.Length == 0) return;
+            if (Directory.Exists(paths[0])) { DropBack(); InspectFolder(paths[0]); return; }
+            if (!File.Exists(paths[0])) return;
             RecentFiles.Add("inspect", paths[0]);
+            DropBack();
             Inspect(paths[0]);
             if (FileShown != null) FileShown(paths[0]);
         }
         /// Back to the empty page (the × at the top of the file card, or Esc). Reverse engineer is emptied too.
         public void ClearFile()
         {
-            if (file == null) return;
+            if (file == null && folder == null) return;
             token++;
+            ResetExtras(); DropBack(); folder = null; folderRep = null;
             file = null; sniff = null; media = null; hashes = null;
             text.Tag = null; text.Text = ""; strings.Tag = null; if (web != null) { web.Tag = null; web.Visible = false; }
             if (preview.Frame != null) { preview.Frame.Dispose(); preview.Frame = null; }
@@ -363,7 +405,7 @@ namespace FileConverter
         public event Action Cleared;
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            if (keyData == Keys.Escape && file != null && Visible) { ClearFile(); return true; }
+            if (keyData == Keys.Escape && (file != null || folder != null) && Visible) { if (back.Count > 0) GoBack(); else ClearFile(); return true; }
             return base.ProcessCmdKey(ref msg, keyData);
         }
         /// The file being looked at now (the Reverse engineer tab gets the same one).
@@ -383,7 +425,8 @@ namespace FileConverter
                 Ui(() =>
                 {
                     if (tk != token) return;
-                    file = path; sniff = s; media = mi; hashes = null;
+                    file = path; sniff = s; media = mi; hashes = null; folder = null; folderRep = null;
+                    ResetExtras();
                     text.Tag = null; strings.Tag = null; if (web != null) web.Tag = null;
                     textMode.SetSilently(0); encSeg.SetSilently(0);
                     if (preview.Frame != null) { preview.Frame.Dispose(); preview.Frame = null; }
@@ -394,6 +437,7 @@ namespace FileConverter
                     ShowState();
                     LoadPreview(tk);
                     ComputeHashes(tk);
+                    Analyze(tk);
                 });
             });
             t.IsBackground = true; t.Start();
@@ -404,19 +448,25 @@ namespace FileConverter
             FileInfo fi = new FileInfo(file);
             details.Rows.Clear();
             details.Rows.Add(new[] { L.T("detected"), sniff.Name + (sniff.Ext.Length > 0 ? "  (." + sniff.Ext + ")" : "") });
-            details.Rows.Add(new[] { L.T("location"), fi.DirectoryName });
+            details.Rows.Add(new[] { L.T("location"), back.Count > 0 ? L.T("in_inside_of", back.Peek()[1]) : fi.DirectoryName });
             details.Rows.Add(new[] { L.T("size"), Theme.HumanSize(fi.Length) + "  (" + fi.Length.ToString("N0") + " " + L.T("bytes") + ")" });
             details.Rows.Add(new[] { L.T("modified"), fi.LastWriteTime.ToString("yyyy-MM-dd  HH:mm") });
             details.Rows.Add(new[] { L.T("created"), fi.CreationTime.ToString("yyyy-MM-dd  HH:mm") });
             if (sniff.Encoding.Length > 0) details.Rows.Add(new[] { L.T("encoding"), sniff.Encoding });
             string ent = sniff.Entropy.ToString("0.00") + " / 8  —  " + (sniff.Entropy > 7.5 ? L.T("ent_high") : sniff.Entropy > 5 ? L.T("ent_mid") : L.T("ent_low"));
             details.Rows.Add(new[] { L.T("entropy"), ent });
-            if (media != null)
+            if (media != null && mediaRows != null && mediaRows.Count > 0)
+            {
+                details.Rows.Add(new[] { L.T("length"), Theme.Time(media.Duration) });
+                details.Rows.AddRange(mediaRows);
+            }
+            else if (media != null)
             {
                 details.Rows.Add(new[] { L.T("length"), Theme.Time(media.Duration) });
                 if (media.HasVideo) details.Rows.Add(new[] { L.T("video"), media.Width + "×" + media.Height + "  ·  " + media.VCodec.ToUpperInvariant() + (media.Fps > 0 ? "  ·  " + media.Fps.ToString("0.##") + " fps" : "") });
                 if (media.HasAudio) details.Rows.Add(new[] { L.T("audio"), media.ACodec.ToUpperInvariant() + (media.SampleRate > 0 ? "  ·  " + media.SampleRate + " Hz" : "") + (media.Channels > 0 ? "  ·  " + media.Channels + " ch" : "") });
             }
+            if (extraRows != null) details.Rows.AddRange(extraRows);
             string wait = L.T("computing");
             details.Rows.Add(new[] { "MD5", hashes != null ? hashes[0] : wait, "1" });
             details.Rows.Add(new[] { "SHA-1", hashes != null ? hashes[1] : wait, "1" });

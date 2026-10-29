@@ -531,7 +531,11 @@ namespace FileConverter
         /// A link from a site videos are downloaded from (for the "you copied a link" offer).
         public static bool IsVideoLink(string u)
         {
+            if (Resolver.IsDataImage(u)) return true;
             if (!u.StartsWith("http", StringComparison.OrdinalIgnoreCase) || !YtDlp.LooksLikeUrl(u)) return false;
+            // an image result's link (Google, Bing…): what it points at counts
+            string inner = Resolver.Unwrap(u);
+            if (inner != u && (Resolver.IsDirectMedia(inner) || Resolver.IsImageResult(u))) return true;
             return System.Text.RegularExpressions.Regex.IsMatch(u, @"^https?://([\w-]+\.)*(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|twitter\.com|x\.com|reddit\.com|redd\.it|pinterest\.[a-z.]+|pin\.it|vimeo\.com|giphy\.com|tenor\.com|klipy\.com|imgur\.com|facebook\.com|fb\.watch|twitch\.tv|dailymotion\.com|soundcloud\.com|streamable\.com|bilibili\.com)/", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 || Resolver.IsDirectMedia(u);
         }
@@ -560,11 +564,11 @@ namespace FileConverter
         {
             string u = url.Box.Text.Trim();
             if (fetching) return;
-            if (!YtDlp.LooksLikeUrl(u)) { SetStatus(L.T("yt_invalid"), Theme.Error); info = null; UpdateView(); return; }
-            if (!u.StartsWith("http")) u = "https://" + u;
+            bool data = Resolver.IsDataImage(u);
+            if (!data && !YtDlp.LooksLikeUrl(u)) { SetStatus(L.T("yt_invalid"), Theme.Error); info = null; UpdateView(); return; }
+            if (!data && !u.StartsWith("http")) u = "https://" + u;
             lastFetched = url.Box.Text.Trim();
-            string st = Resolver.Site(u);
-            bool needsEngine = !YtDlp.Ready && st != "GIPHY" && st != "Tenor" && st != "KLIPY" && st != "Discord" && st != "Pinterest" && !Resolver.IsDirectMedia(u);
+            bool needsEngine = !YtDlp.Ready && Resolver.NeedsEngine(u);
             if (needsEngine) { SetStatus(L.T("dl_need_engine"), Theme.Warn); info = null; UpdateView(); return; }
             fetching = true; info = null;
             busy.SetIndeterminate(true);

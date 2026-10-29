@@ -200,6 +200,8 @@ namespace FileConverter
                 case "trim": return new WheelItem { Action = a, Glyph = Ico.Trim, Label = () => L.T("wh_trim") };
                 case "combine": return new WheelItem { Action = a, Glyph = Ico.Combine, Label = () => L.T("wh_combine") };
                 case "merge": return new WheelItem { Action = a, Glyph = Ico.Combine, Label = () => L.T("wh_merge") };
+                case "joinv": return new WheelItem { Action = a, Glyph = Ico.Combine, Label = () => L.T("wh_join_videos") };
+                case "joina": return new WheelItem { Action = a, Glyph = Ico.Combine, Label = () => L.T("wh_join_audio") };
                 case "nobg": return new WheelItem { Action = a, Glyph = Ico.Cut, Label = () => L.T("wh_nobg_short") };
                 case "edit": return new WheelItem { Action = a, Glyph = Ico.Edit, Label = () => L.T("wh_edit") };
                 case "text": return new WheelItem { Action = a, Glyph = Ico.Text, Label = () => L.T("wh_text") };
@@ -390,6 +392,9 @@ namespace FileConverter
                 }
                 if (allPdf) actions.Insert(0, WheelConfig.ActionItem("merge"));
                 else if (allPics || picsOrPdf) actions.Insert(0, WheelConfig.ActionItem("combine"));
+                // several videos (or songs): one of them all, in the order you choose
+                else if (MergeWindow.AllVideo(files)) actions.Insert(0, WheelConfig.ActionItem("joinv"));
+                else if (MergeWindow.AllAudio(files)) actions.Insert(0, WheelConfig.ActionItem("joina"));
             }
         }
 

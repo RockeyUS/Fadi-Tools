@@ -43,6 +43,24 @@ namespace FileConverter
             return s;
         }
 
+        /// The same, from the start of the file only (no entropy): quick enough for whole folders.
+        public static Sniff Quick(string path)
+        {
+            Sniff s = new Sniff();
+            FileInfo fi = new FileInfo(path);
+            s.Size = fi.Length;
+            byte[] h = new byte[Math.Min(16384, (int)Math.Min(int.MaxValue, fi.Length))];
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                int n = 0, r;
+                while (n < h.Length && (r = fs.Read(h, n, h.Length - n)) > 0) n += r;
+            }
+            if (h.Length == 0) return s;
+            if (Magic(h, s, path)) return s;
+            TextCheck(h, s);
+            return s;
+        }
+
         static bool At(byte[] b, int off, params byte[] sig)
         {
             if (b.Length < off + sig.Length) return false;

@@ -14,6 +14,13 @@ namespace FileConverter
         /// glyph, title key, text key
         public static readonly string[][] Items =
         {
+            // 1.8.0
+            new[] { Ico.Fingerprint, "wn_safe180_t", "wn_safe180_d" },
+            new[] { Ico.Photo, "wn_hidden180_t", "wn_hidden180_d" },
+            new[] { Ico.Folder, "wn_inside180_t", "wn_inside180_d" },
+            new[] { Ico.Combine, "wn_merge180_t", "wn_merge180_d" },
+            new[] { Ico.Download, "wn_links180_t", "wn_links180_d" },
+            new[] { Ico.Play, "wn_play180_t", "wn_play180_d" },
             // 1.7.1
             new[] { Ico.Play, "wn_play171_t", "wn_play171_d" },
             new[] { "\uE8BE", "wn_caps171_t", "wn_caps171_d" },
