@@ -1,0 +1,100 @@
+# Builds Fadi Tools on GitHub, has SignPath sign it, and puts the signed exe on the release.
+# Runs when a version tag is pushed (for example 1.8.2), or by hand from the Actions tab ("Run workflow").
+#
+# Before it can sign, these must be set in the repo: Settings -> Secrets and variables -> Actions
+#   secret   SIGNPATH_API_TOKEN        the API token of the SignPath "CI user"
+#   variable SIGNPATH_ORGANIZATION_ID  the organization ID shown in SignPath
+#   variable SIGNPATH_PROJECT_SLUG     the project's short name in SignPath (for example fadi-tools)
+#   variable SIGNPATH_POLICY_SLUG      the signing policy's short name (release-signing)
+# Until they're set, the workflow still builds and tests, and keeps the unsigned exe as a download.
+name: Release
+
+on:
+  push:
+    tags: [ '*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Self-test
+        shell: pwsh
+        run: |
+          $out = Join-Path $PWD 'selftest'
+          $p = Start-Process -FilePath 'build\Fadi Tools.exe' -ArgumentList '/selftest', "`"$out`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0)
+          {
+            if (Test-Path "$out\selftest.log") { Get-Content "$out\selftest.log" | Where-Object { $_ -match 'PROBLEM|FAILED' } | Select-Object -First 20 | ForEach-Object { Write-Host "::error::$_" } }
+            throw "The self-test failed (exit code $($p.ExitCode))"
+          }
+
+      - name: Keep the unsigned exe
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fadi Tools (unsigned)
+          path: build/Fadi Tools.exe
+          if-no-files-found: error
+
+  sign:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign with SignPath
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          github-artifact-id: ${{ needs.build.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Check the signature
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature 'signed\Fadi Tools.exe'
+          Write-Host "Signature: $($sig.Status) by $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "The exe isn't signed properly ($($sig.Status))" }
+
+      - name: Keep the signed exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fadi Tools (signed)
+          path: signed/Fadi Tools.exe
+
+      - name: Put it on the release
+        if: ${{ github.ref_type == 'tag' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          Copy-Item 'signed\Fadi Tools.exe' 'Fadi.Tools.exe'
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0)
+          {
+            $notes = "release/notes-$tag.md"
+            if (Test-Path $notes) { gh release create $tag --title "Fadi Tools $tag" --notes-file $notes }
+            else { gh release create $tag --title "Fadi Tools $tag" --generate-notes }
+          }
+          gh release upload $tag 'Fadi.Tools.exe' --clobber

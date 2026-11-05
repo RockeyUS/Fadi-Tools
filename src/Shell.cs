@@ -13,7 +13,7 @@ namespace FileConverter
     /// Windows integration: install location, shortcuts, right-click menu, file associations, uninstall.
     public static class Shell
     {
-        public const string Version = "1.8.1";
+        public const string Version = "1.8.2";
 
         [DllImport("shell32.dll")]
         static extern void SHChangeNotify(int eventId, int flags, IntPtr item1, IntPtr item2);

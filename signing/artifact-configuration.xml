@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paste this into SignPath: your project -> Artifact configurations -> Add.
+     GitHub hands SignPath the build as a zip that holds "Fadi Tools.exe": SignPath signs the exe inside,
+     and only if its product name is Fadi Tools. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="Fadi Tools.exe" product-name="Fadi Tools">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

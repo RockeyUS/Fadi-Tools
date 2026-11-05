@@ -65,3 +65,11 @@ Windows 10 or 11. The app updates itself when a new version comes out.
 </picture>
 
 More pictures (every page, light and dark, English and Arabic) are in the [screenshots](screenshots) folder. They're made by the app itself: press **Ctrl+Alt+Shift+S** and it saves a fresh set, with made-up example files, to *Downloads › Fadi Tools screenshots*.
+
+## Code signing and privacy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org). See the [code signing policy](CODE_SIGNING.md), which also says what Fadi Tools connects to and when.
+
+## License
+
+Fadi Tools is open source under the [MIT License](LICENSE).

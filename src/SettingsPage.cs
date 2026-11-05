@@ -20,7 +20,7 @@ namespace FileConverter
         Rectangle themeLbl, langLbl, openAfterLbl, askSaveLbl, aboutR, animLbl;
         readonly Toggle askSave = new Toggle(), anim = new Toggle();
         float scrollTo, scrollNow; int maxScroll;
-        Rectangle[] engineRows = new Rectangle[4], integRows = new Rectangle[11];
+        Rectangle[] engineRows = new Rectangle[4], integRows = new Rectangle[12];
         Segments theme, lang, logoSeg;
         Swatches accent;
         Rectangle accentLbl, logoLbl;
@@ -30,9 +30,9 @@ namespace FileConverter
         FolderButton folder;
         Btn btnReset, btnUninstall, btnLo, btnYt, btnYtUpdate;
         Toggle openAfter;
-        Toggle[] integ = new Toggle[11];
+        Toggle[] integ = new Toggle[12];
         // Windows integration, in three groups: -1, -2, -3 are the group headings
-        static readonly int[] IntegOrder = { -1, 0, 1, 2, 7, -2, 3, 9, 10, -3, 4, 6, 8, 5 };
+        static readonly int[] IntegOrder = { -1, 0, 1, 2, 7, -2, 3, 9, 10, -3, 4, 6, 8, 5, 11 };
         static readonly string[] IntegGroups = { "int_g_explorer", "int_g_notify", "int_g_background" };
         readonly Rectangle[] integHeads = new Rectangle[3];
         Progress ytProgress;
@@ -117,6 +117,8 @@ namespace FileConverter
             integ[5].CheckedChanged += (s, e) => Settings.Set("WatchLinks", integ[5].Checked ? "1" : "0");
             integ[6] = new Toggle();
             integ[6].CheckedChanged += (s, e) => { Settings.Set("CloseToTray", integ[6].Checked ? "1" : "0"); DragWheel.NotifyChanged(); };
+            integ[11] = new Toggle();
+            integ[11].CheckedChanged += (s, e) => Settings.Set("AutoUpdate", integ[11].Checked ? "1" : "0");
             integ[8] = new Toggle();
             integ[8].CheckedChanged += (s, e) => Shell.SetStartsWithWindows(integ[8].Checked);
             integ[7] = new Toggle();
@@ -305,6 +307,7 @@ namespace FileConverter
             integ[6].SetSilently(Settings.Get("CloseToTray", "0") == "1");
             integ[7].SetSilently(DragWheel.On);
             integ[8].SetSilently(Shell.StartsWithWindows);
+            integ[11].SetSilently(Settings.Get("AutoUpdate", "1") == "1");
         }
 
         public override void OnShown() { Tools.Reset(); LoadValues(); Refresh2(); RefreshAddOns(); if (!openingWheel) CloseWheel(false); }
@@ -568,8 +571,8 @@ namespace FileConverter
                 Label(g, L.T(IntegGroups[h]).ToUpper(System.Globalization.CultureInfo.CurrentCulture), Theme.F(7.75f, FontStyle.Bold), Theme.InkFaint, integHeads[h], Align.Start);
             using (Pen lp = new Pen(Theme.Line)) { Rectangle l = M(new Rectangle(zipRow.X, zipRow.Y - Theme.S(4), zipRow.Width, 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
             Label(g, zipStatus ?? L.T(Paths.Portable ? "zip_label_portable" : "zip_label"), Theme.F(9.5f), zipStatus != null ? Theme.InkSoft : Theme.Ink, new Rectangle(zipRow.X, zipRow.Y, zipRow.Width - Theme.S(150), zipRow.Height), Align.Start, true, true);
-            string[] ik = { "int_desktop", "int_menu", "int_viewer", "int_notify", "int_tray", "int_links", "int_close_tray", "int_wheel", "int_startup", "int_notify_long", "int_notify_sound" };
-            for (int i = 0; i < 11; i++)
+            string[] ik = { "int_desktop", "int_menu", "int_viewer", "int_notify", "int_tray", "int_links", "int_close_tray", "int_wheel", "int_startup", "int_notify_long", "int_notify_sound", "int_updates" };
+            for (int i = 0; i < 12; i++)
             {
                 bool subRow = i == 9 || i == 10;
                 Label(g, L.T(ik[i]), Theme.F(subRow ? 9f : 9.5f), subRow ? (integ[3].Checked ? Theme.InkSoft : Theme.InkFaint) : Theme.Ink, new Rectangle(integRows[i].X, integRows[i].Y, integRows[i].Width - Theme.S(64), integRows[i].Height), Align.Start, true, true);
