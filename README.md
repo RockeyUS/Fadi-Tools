@@ -68,7 +68,7 @@ More pictures (every page, light and dark, English and Arabic) are in the [scree
 
 ## Code signing and privacy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org). See the [code signing policy](CODE_SIGNING.md), which also says what Fadi Tools connects to and when.
+Fadi Tools isn't code-signed yet, which is why Windows and some antivirus programs may warn about it. Every release is built and tested by GitHub Actions from the code in this repository. See [privacy and builds](CODE_SIGNING.md) for how releases are made and what Fadi Tools connects to, and when.
 
 ## License
 

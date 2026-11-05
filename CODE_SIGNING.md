@@ -1,15 +1,15 @@
-# Code signing policy
+# Privacy and builds
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+Fadi Tools isn't code-signed yet. Free signing from the [SignPath Foundation](https://signpath.org) is for projects that are already widely known, so Fadi Tools will apply again once more people use it.
 
-Fadi Tools.exe is built from the source code in this repository by GitHub Actions ([release.yml](.github/workflows/release.yml)), tested, and then signed. Only files built from this repository are signed. The programs Fadi Tools uses (FFmpeg, ImageMagick, yt-dlp and the others) are not signed by this project; they come from their own makers.
+Every release of Fadi Tools.exe is built from the source code in this repository by GitHub Actions ([release.yml](.github/workflows/release.yml)) and tested before it's published. The programs Fadi Tools uses (FFmpeg, ImageMagick, yt-dlp and the others) come from their own makers.
 
 ## Team roles
 
 - **Committers and reviewers:** [RockeyUS](https://github.com/RockeyUS)
 - **Approvers:** [RockeyUS](https://github.com/RockeyUS)
 
-Every release is approved by hand before it is signed.
+Every release is checked by hand before it's published.
 
 ## Privacy policy
 
