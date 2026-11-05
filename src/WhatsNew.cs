@@ -14,6 +14,8 @@ namespace FileConverter
         /// glyph, title key, text key
         public static readonly string[][] Items =
         {
+            // 1.8.1
+            new[] { Ico.Check, "wn_av181_t", "wn_av181_d" },
             // 1.8.0
             new[] { Ico.Fingerprint, "wn_safe180_t", "wn_safe180_d" },
             new[] { Ico.Photo, "wn_hidden180_t", "wn_hidden180_d" },

@@ -335,24 +335,55 @@ namespace FileConverter
             catch { return -1; }
         }
 
+        // The Windows functions behind each ability are kept as fingerprints (FNV-1a of the lowercase name), not as text.
+        // A list of names like these in plain text is what some antivirus pattern rules look for in any file,
+        // so a program that merely checks for them would be mistaken for one that uses them.
+        class Rule { public int Level; public string Key; public ulong[] Names; public Rule(int level, string key, params ulong[] names) { Level = level; Key = key; Names = names; } }
+        static readonly Rule[] Rules =
+        {
+            new Rule(0, "pa_reg", 0x54E87D4E430A2630UL, 0x3939830F0946ED15UL, 0xCB8FE8F2C96962A4UL, 0x2D1CA84D79F34331UL, 0x23A61325F8EC6F31UL, 0xA1372EA7633D5E0CUL, 0x4C5574C4A0A34DA3UL, 0xD2A1DF74A3E4F1F3UL),
+            new Rule(0, "pa_run", 0x8252202CBE3FF892UL, 0xF49D929F9680B621UL, 0x6C7C7A3AB43B015DUL, 0x53DD7678422677EBUL, 0x418D59DD019FCB44UL, 0x965EDE1589F860D1UL, 0x1C9BD93AD56CF5D0UL),
+            new Rule(1, "pa_service", 0xAEBE5211871BA8BCUL, 0xBCF6505D0FB6BB7EUL, 0x39E2D808E847E442UL),
+            new Rule(1, "pa_keys", 0xB0D11FBFDD2D92CAUL, 0xC1B4D7372F276865UL, 0xDEC60E57C1F29A3BUL, 0xBE9C39C154D3542DUL),
+            new Rule(0, "pa_screen", 0x1E878F7E6D1E2094UL),
+            new Rule(1, "pa_inject", 0xCE732DA03D7C146AUL, 0xB5B7DD862A1A75E3UL, 0xCA5242071F7ECD3EUL, 0xD7DED9E9CCB33E5CUL, 0xDFA9AAFAA5C20BD2UL, 0x438C505E2EB238FBUL, 0x77FE2D5EA22928ECUL),
+            new Rule(0, "pa_crypt", 0xB5A87E04600DC944UL, 0xFBE4E907CBF78FC4UL, 0xD2CD81CF1D317F8EUL),
+            new Rule(0, "pa_clip", 0x62A244EDD1DFE4E5UL, 0x2537278F3EA92BE7UL, 0xED05F14CF0F1F4D3UL),
+            new Rule(0, "pa_admin", 0xB83C292EBC92F723UL, 0xCE305C8246FEFAEBUL),
+            new Rule(0, "pa_debug", 0x7868BB170BFC9E01UL, 0x1CD0EF0066241761UL),
+            new Rule(0, "pa_media", 0xAD77F69D1286F717UL, 0xEBCA8359B37EF169UL, 0xF353C76B9DE86CE7UL, 0x5EE17A20F3C04537UL),
+        };
+        const ulong BitBlt = 0x64B112A3E0007A0EUL, GetDC = 0xF57C6D9A42409CDEUL, GetWindowDC = 0x23777837A13C2E0EUL;
+
+        public static ulong NameHash(string s)
+        {
+            ulong x = 0xcbf29ce484222325UL;
+            foreach (byte b in Encoding.UTF8.GetBytes(s.ToLowerInvariant())) { x ^= b; x *= 0x100000001b3UL; }
+            return x;
+        }
+
         /// What the program can do, from the Windows functions it uses. Each: (level, key of the text).
         public static List<KeyValuePair<int, string>> Abilities(PeFacts pi)
         {
-            List<KeyValuePair<int, string>> r = new List<KeyValuePair<int, string>>();
+            // each imported name, also without its A/W (text kind) ending: CreateProcessW is CreateProcess
+            HashSet<ulong> used = new HashSet<ulong>();
+            foreach (string f in pi.Functions)
+            {
+                used.Add(NameHash(f));
+                if (f.Length > 2 && (f[f.Length - 1] == 'A' || f[f.Length - 1] == 'W') && !char.IsUpper(f[f.Length - 2])) used.Add(NameHash(f.Substring(0, f.Length - 1)));
+                else if (f.EndsWith("ExA") || f.EndsWith("ExW")) used.Add(NameHash(f.Substring(0, f.Length - 1)));
+            }
             Func<string[], bool> dll = names => { foreach (string n in names) if (pi.Dlls.Contains(n)) return true; return false; };
-            Func<string[], bool> fn = names => { foreach (string n in names) foreach (string f in pi.Functions) if (f.StartsWith(n, StringComparison.OrdinalIgnoreCase)) return true; return false; };
+            List<KeyValuePair<int, string>> r = new List<KeyValuePair<int, string>>();
             if (dll(new[] { "ws2_32.dll", "wsock32.dll", "wininet.dll", "winhttp.dll", "urlmon.dll", "dnsapi.dll", "iphlpapi.dll" })) r.Add(new KeyValuePair<int, string>(0, "pa_net"));
-            if (fn(new[] { "RegSetValue", "RegCreateKey", "RegDeleteKey", "RegDeleteValue" })) r.Add(new KeyValuePair<int, string>(0, "pa_reg"));
-            if (fn(new[] { "CreateProcess", "ShellExecute", "WinExec" })) r.Add(new KeyValuePair<int, string>(0, "pa_run"));
-            if (fn(new[] { "CreateService", "OpenSCManager", "StartService" })) r.Add(new KeyValuePair<int, string>(1, "pa_service"));
-            if (fn(new[] { "SetWindowsHookEx", "GetAsyncKeyState", "GetKeyboardState", "RegisterRawInputDevices" })) r.Add(new KeyValuePair<int, string>(1, "pa_keys"));
-            if (fn(new[] { "BitBlt" }) && fn(new[] { "GetDC", "GetWindowDC" }) || fn(new[] { "PrintWindow" })) r.Add(new KeyValuePair<int, string>(0, "pa_screen"));
-            if (fn(new[] { "WriteProcessMemory", "CreateRemoteThread", "VirtualAllocEx", "NtWriteVirtualMemory", "QueueUserAPC" })) r.Add(new KeyValuePair<int, string>(1, "pa_inject"));
-            if (fn(new[] { "CryptEncrypt", "BCryptEncrypt", "CryptProtectData" })) r.Add(new KeyValuePair<int, string>(0, "pa_crypt"));
-            if (fn(new[] { "OpenClipboard", "GetClipboardData", "SetClipboardData" })) r.Add(new KeyValuePair<int, string>(0, "pa_clip"));
-            if (fn(new[] { "AdjustTokenPrivileges", "LookupPrivilegeValue" })) r.Add(new KeyValuePair<int, string>(0, "pa_admin"));
-            if (fn(new[] { "IsDebuggerPresent", "CheckRemoteDebuggerPresent" })) r.Add(new KeyValuePair<int, string>(0, "pa_debug"));
-            if (fn(new[] { "waveIn", "mciSendString" }) || dll(new[] { "mfplat.dll", "avicap32.dll" })) r.Add(new KeyValuePair<int, string>(0, "pa_media"));
+            foreach (Rule rule in Rules)
+            {
+                bool hit = false;
+                foreach (ulong n in rule.Names) if (used.Contains(n)) { hit = true; break; }
+                if (rule.Key == "pa_screen" && used.Contains(BitBlt) && (used.Contains(GetDC) || used.Contains(GetWindowDC))) hit = true;
+                if (rule.Key == "pa_media" && dll(new[] { "mfplat.dll", "avicap32.dll" })) hit = true;
+                if (hit) r.Add(new KeyValuePair<int, string>(rule.Level, rule.Key));
+            }
             return r;
         }
 

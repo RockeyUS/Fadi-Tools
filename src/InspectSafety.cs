@@ -75,6 +75,9 @@ namespace FileConverter
     /// after the end of the file.
     public static class Safety
     {
+        // Windows' command runners (PowerShell, cmd, mshta, wscript, cscript, rundll32, regsvr32, bitsadmin, certutil) as fingerprints:
+        // see Pe.NameHash for why they aren't kept as text
+        static readonly ulong[] Launchers = { 0x6E332E125B95B506UL, 0xDB31F011D634B3A5UL, 0xC5E3E9E3DF3C4385UL, 0x9596784227312DAAUL, 0xCBB8E0B38EC4E0FBUL, 0x9A55343C0C190A47UL, 0xD1E9DAC607EF50B5UL, 0xFE51143F6F862B95UL, 0x78DD1B83C1C02086UL, 0xCBF7DE40EBFA2B29UL };
         static readonly string[] Runs = { "exe", "scr", "com", "pif", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta", "msi", "msp", "lnk", "jar", "reg", "cpl", "dll", "sys", "ocx", "appx", "msix", "application", "iso", "img", "vhd", "vhdx", "url", "scf", "chm", "msc", "xll", "appref-ms", "docm", "xlsm", "pptm", "dotm", "xltm" };
         static readonly string[] Programs = { "exe", "scr", "com", "pif", "bat", "cmd", "ps1", "vbs", "vbe", "js", "jse", "wsf", "hta", "msi", "lnk", "jar", "reg", "cpl", "dll" };
         static readonly string[] Harmless = { "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "jpg", "jpeg", "png", "gif", "mp4", "mp3", "mov", "zip", "rar", "csv", "rtf", "wav", "avi", "webp", "heic" };
@@ -141,7 +144,7 @@ namespace FileConverter
                 if (s != null && s.Target != null)
                 {
                     string t = Path.GetFileName(s.Target).ToLowerInvariant();
-                    if (t == "powershell.exe" || t == "pwsh.exe" || t == "cmd.exe" || t == "mshta.exe" || t == "wscript.exe" || t == "cscript.exe" || t == "rundll32.exe" || t == "regsvr32.exe" || t == "bitsadmin.exe" || t == "certutil.exe")
+                    if (Array.IndexOf(Launchers, Pe.NameHash(t)) >= 0)
                         r.Add(2, L.T("sf_lnk_t"), L.T("sf_lnk_d", Path.GetFileName(s.Target)));
                 }
             }

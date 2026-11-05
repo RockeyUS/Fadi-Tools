@@ -137,7 +137,7 @@ foreach ($path in $In.Split('|')) {
             string ps1 = Path.Combine(workDir, "ocr.ps1"), outp = Path.Combine(workDir, "out_" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".txt");
             File.WriteAllText(ps1, Script, new UTF8Encoding(true));
             string o;
-            Tools.RunHidden(PowerShell, "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + Tools.Quote(ps1) + " -In " + Tools.Quote(string.Join("|", new List<string>(pngs).ToArray())) + " -Out " + Tools.Quote(outp), 600000, out o);
+            Tools.RunHidden(PowerShell, "-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File " + Tools.Quote(ps1) + " -In " + Tools.Quote(string.Join("|", new List<string>(pngs).ToArray())) + " -Out " + Tools.Quote(outp), 600000, out o);
             if (!File.Exists(outp))
             {
                 if ((o ?? "").Contains("NOLANG")) throw new UserError(L.T("ocr_no_lang"));

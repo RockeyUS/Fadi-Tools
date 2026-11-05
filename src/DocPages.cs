@@ -110,7 +110,7 @@ for ($i = 0; $i -lt $doc.PageCount; $i++) {
             string ps = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
             int total = 0;
             StringBuilder err = new StringBuilder();
-            int code = Tools.Stream(ps, "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + Tools.Quote(ps1) + " -In " + Tools.Quote(pdf) + " -Out " + Tools.Quote(dir) + " -MaxPx " + maxPx +
+            int code = Tools.Stream(ps, "-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File " + Tools.Quote(ps1) + " -In " + Tools.Quote(pdf) + " -Out " + Tools.Quote(dir) + " -MaxPx " + maxPx +
                 " -Only " + only + " -MaxK " + maxK.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 line =>
                 {
