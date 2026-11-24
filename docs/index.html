@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fadi Tools</title>
+<meta name="description" content="Fadi Tools: a free Windows app to convert, compress, edit and download files, offline, in English and Arabic.">
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Readex+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* VOICE: friendly, confident, plain words, like the app itself.
+   IDEA: the page behaves like the app's own window: same orange, same calm dark/light panels.
+   PICTURE: the real app (its own screenshots) in a window frame, large, on an orange field.
+   COLOUR and TYPE: Fadi orange #f0743e leads, warm ink, white or near-black panels; Readex Pro (Latin and Arabic).
+   LAYOUT: header, orange hero with the window, what it does, a screenshot gallery, download steps, privacy, footer. */
+:root{color-scheme:light dark;
+  --bg:light-dark(#f6f4f2,#161514);--panel:light-dark(#ffffff,#211f1e);--line:light-dark(#e6e1dc,#33302e);
+  --ink:light-dark(#1d1a18,#f1ede9);--soft:light-dark(#5e5751,#b3aca6);
+  --or:#f0743e;--or-deep:light-dark(#d9581f,#f58a59);--or-field:light-dark(#f0743e,#2b1a12);--on-or:light-dark(#fff,#fff3ec)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+html{scroll-padding-top:72px;scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important;animation:none!important}}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Readex Pro",system-ui,"Segoe UI",Tahoma,sans-serif;overflow-x:clip}
+a{color:inherit}
+.wrap{max-width:1240px;margin:0 auto;padding:0 max(5vw,16px)}
+.band{padding:clamp(40px,6vw,88px) 0}
+h1,h2,h3{line-height:1.08;text-wrap:balance;margin:0}
+h1{font-size:clamp(34px,5vw,52px);font-weight:700}
+h2{font-size:clamp(28px,3.4vw,40px);font-weight:700;margin-bottom:12px}
+h3{font-size:18px;font-weight:600;line-height:1.3}
+p{margin:0}
+.lead{font-size:18px;color:var(--soft);max-width:60ch}
+/* header */
+header{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.bar{display:flex;align-items:center;gap:20px;height:64px}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;font-weight:600;font-size:18px}
+.brand img{width:34px;height:34px;border-radius:9px}
+nav{display:flex;gap:4px;margin-inline-start:auto;flex-wrap:wrap}
+nav a,.lang{text-decoration:none;color:var(--soft);padding:10px 12px;border-radius:10px;font-size:15px;min-height:44px;display:inline-flex;align-items:center}
+nav a:hover,.lang:hover{color:var(--ink);background:var(--line)}
+.lang{border:1px solid var(--line);background:none;font:inherit;font-size:15px;cursor:pointer;color:var(--ink)}
+:focus-visible{outline:3px solid var(--or);outline-offset:2px}
+@media(max-width:760px){nav a{display:none}.lang{margin-inline-start:auto}}
+/* hero */
+.hero{background:var(--or-field);color:var(--on-or);padding:clamp(40px,6vw,80px) 0 0;overflow:hidden}
+.hero .wrap{display:grid;gap:clamp(28px,4vw,48px)}
+.hero p.lead{color:color-mix(in srgb,var(--on-or) 86%,transparent)}
+.cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:26px}
+.btn{display:inline-flex;align-items:center;gap:10px;min-height:48px;padding:0 22px;border-radius:12px;font-weight:600;text-decoration:none;font-size:16px;border:1.5px solid transparent}
+.btn svg{width:20px;height:20px;flex:none}
+.btn.main{background:#fff;color:#c2481a;box-shadow:0 6px 18px rgba(80,25,0,.22)}
+.btn.main:hover{background:#fff4ee}
+.btn.ghost{border-color:color-mix(in srgb,var(--on-or) 55%,transparent);color:var(--on-or)}
+.btn.ghost:hover{background:rgba(255,255,255,.12)}
+.facts{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:22px;font-size:15px;color:color-mix(in srgb,var(--on-or) 86%,transparent)}
+.facts span{display:inline-flex;align-items:center;gap:7px}
+.facts span::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.7}
+.win{background:var(--panel);border-radius:14px 14px 0 0;box-shadow:0 30px 70px rgba(60,20,0,.35);overflow:hidden;border:1px solid rgba(0,0,0,.12);border-bottom:0}
+.win img{display:block;width:100%;height:auto;aspect-ratio:1220/811}
+/* features */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,270px),1fr));gap:16px;margin-top:34px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px}
+.card .ic{width:44px;height:44px;border-radius:12px;background:color-mix(in srgb,var(--or) 16%,transparent);color:var(--or-deep);display:grid;place-items:center;margin-bottom:14px}
+.card .ic svg{width:22px;height:22px}
+.card p{color:var(--soft);margin-top:6px;font-size:15.5px}
+/* gallery */
+.tabrow{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:26px 0 18px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.tabs button{font:inherit;font-size:15px;min-height:44px;padding:0 16px;border-radius:11px;border:1px solid var(--line);background:var(--panel);color:var(--soft);cursor:pointer}
+.tabs button[aria-selected=true]{background:var(--or);border-color:var(--or);color:#fff;font-weight:600}
+.shots{border-radius:16px;touch-action:pan-y}
+.shot{margin:0;display:none}
+.shot.on{display:block;animation:in .35s ease}
+@keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.shot .win{border-radius:14px;border:1px solid var(--line);box-shadow:0 18px 44px rgba(0,0,0,.14)}
+.shot figcaption{color:var(--soft);margin-top:12px;font-size:15px}
+.arrows{display:flex;gap:8px;margin-inline-start:auto}
+.arrows button{width:44px;height:44px;border-radius:50%;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer;font-size:20px;line-height:1}
+[dir=rtl] .arrows button span{display:inline-block;transform:scaleX(-1)}
+/* download */
+.dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:16px;margin-top:30px}
+.opt{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;display:flex;flex-direction:column;gap:10px}
+.opt .tag{align-self:flex-start;font-size:13px;font-weight:600;padding:3px 10px;border-radius:99px;background:color-mix(in srgb,var(--or) 16%,transparent);color:var(--or-deep)}
+.opt p{color:var(--soft)}
+.opt .btn{align-self:flex-start;margin-top:auto;background:var(--or);color:#fff}
+.opt .btn:hover{background:#e0602a}
+.note{margin-top:18px;display:flex;gap:14px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px 20px;color:var(--soft)}
+.note b{color:var(--ink)}
+.note svg{flex:none;width:22px;height:22px;color:var(--or-deep);margin-top:2px}
+.req{display:flex;flex-wrap:wrap;gap:10px 28px;margin-top:20px;color:var(--soft);font-size:15px}
+.req b{color:var(--ink);font-weight:600}
+/* privacy */
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:clamp(24px,4vw,56px);align-items:start}
+.list{display:grid;gap:14px;margin:0;padding:0;list-style:none}
+.list li{display:flex;gap:12px;align-items:flex-start}
+.list li svg{flex:none;width:22px;height:22px;color:var(--or-deep);margin-top:2px}
+footer{border-top:1px solid var(--line);padding:28px 0 40px;color:var(--soft);font-size:15px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:10px 24px;align-items:center}
+footer .test{margin-inline-start:auto;font-size:13px;border:1px dashed var(--line);border-radius:8px;padding:4px 10px}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="brand" href="#top"><img src="img/logo.png" alt=""><span data-t="name">Fadi Tools</span></a>
+    <nav>
+      <a href="#features" data-t="nav_features">What it does</a>
+      <a href="#screens" data-t="nav_screens">Screenshots</a>
+      <a href="#download" data-t="nav_download">Download</a>
+      <a href="https://github.com/RockeyUS/Fadi-Tools">GitHub</a>
+    </nav>
+    <button class="lang" id="lang" type="button" lang="ar">العربية</button>
+  </div>
+</header>
+
+<main id="top">
+<section class="hero">
+  <div class="wrap">
+    <div>
+      <h1 data-t="h1">Convert, compress, edit and download files. All on your PC.</h1>
+      <p class="lead" style="margin-top:16px" data-t="sub">Fadi Tools is one free Windows app for the jobs you'd otherwise need five websites for. It works offline, nothing gets uploaded, and it speaks English and Arabic.</p>
+      <div class="cta">
+        <a class="btn main" href="https://github.com/RockeyUS/Fadi-Tools/releases/latest"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-5-5m5 5 5-5M5 21h14"/></svg><span data-t="dl_btn">Download for Windows</span></a>
+        <a class="btn ghost" href="https://github.com/RockeyUS/Fadi-Tools"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.4 1.1 2.9.8.1-.6.4-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9V21c0 .3.2.6.7.5A10 10 0 0 0 12 2Z"/></svg><span data-t="src_btn">Open source on GitHub</span></a>
+      </div>
+      <div class="facts"><span data-t="f1">Free (MIT license)</span><span data-t="f2">Windows 10 and 11</span><span data-t="f3">English and العربية</span><span data-t="f4">Updates itself</span></div>
+    </div>
+    <div class="win"><picture><source media="(prefers-color-scheme: dark)" srcset="img/studio-dark-en.webp"><img src="img/studio-light-en.webp" alt="The Studio page of Fadi Tools" width="1220" height="811"></picture></div>
+  </div>
+</section>
+
+<section class="band" id="features">
+  <div class="wrap">
+    <h2 data-t="feat_h">What it does</h2>
+    <p class="lead" data-t="feat_sub">Everything runs on your computer, so private files stay private and big files don't wait on an upload.</p>
+    <div class="grid" id="feats"></div>
+  </div>
+</section>
+
+<section class="band" id="screens" style="padding-top:0">
+  <div class="wrap">
+    <h2 data-t="shots_h">Take a look</h2>
+    <p class="lead" data-t="shots_sub">The real app, in light or dark to match your system, and fully right to left in Arabic.</p>
+    <div class="tabrow">
+      <div class="tabs" role="tablist" id="tabs"></div>
+      <div class="arrows"><button type="button" id="prev" aria-label="Previous"><span>‹</span></button><button type="button" id="next" aria-label="Next"><span>›</span></button></div>
+    </div>
+    <div class="shots" id="shots" tabindex="0"></div>
+  </div>
+</section>
+
+<section class="band" id="download" style="background:var(--panel);border-block:1px solid var(--line)">
+  <div class="wrap">
+    <h2 data-t="dl_h">Download</h2>
+    <p class="lead" data-t="dl_sub">Pick one. Both are the same app, from the latest release on GitHub.</p>
+    <div class="dl">
+      <div class="opt" style="background:var(--bg)">
+        <span class="tag" data-t="zip_tag">Recommended</span>
+        <h3>Fadi.Tools.zip</h3>
+        <p data-t="zip_p">Everything included. Unzip it anywhere and open Fadi Tools.exe. Works straight away, even without internet.</p>
+        <a class="btn" href="https://github.com/RockeyUS/Fadi-Tools/releases/latest" data-t="zip_btn">Get the zip</a>
+      </div>
+      <div class="opt" style="background:var(--bg)">
+        <span class="tag" data-t="exe_tag">Small download</span>
+        <h3>Fadi.Tools.exe</h3>
+        <p data-t="exe_p">Just the app. The first time it opens, it downloads the engines it needs (like FFmpeg) and asks before anything big.</p>
+        <a class="btn" href="https://github.com/RockeyUS/Fadi-Tools/releases/latest" data-t="exe_btn">Get the exe</a>
+      </div>
+    </div>
+    <div class="note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2.5 20h19L12 3Z"/><path d="M12 10v4m0 3h.01"/></svg><p data-t="smart"><b>Windows protected your PC?</b> Fadi Tools isn't code-signed yet, so Windows may warn about it. Click More info, then Run anyway. Every release is built and tested by GitHub Actions from the public code.</p></div>
+    <div class="req"><span><b data-t="req1a">Needs</b> <span data-t="req1b">Windows 10 or 11 (64-bit)</span></span><span><b data-t="req2a">Price</b> <span data-t="req2b">Free, no account, no ads</span></span><span><b data-t="req3a">Updates</b> <span data-t="req3b">The app updates itself when a new version is out</span></span></div>
+  </div>
+</section>
+
+<section class="band" id="privacy">
+  <div class="wrap two">
+    <div>
+      <h2 data-t="priv_h">Your files stay on your PC</h2>
+      <p class="lead" data-t="priv_sub">Fadi Tools connects to the internet only when you ask it to: to download a video, to fetch an engine the first time, or to check for an update.</p>
+    </div>
+    <ul class="list" id="privlist"></ul>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span data-t="foot">Fadi Tools · open source under the MIT License</span>
+    <a href="https://github.com/RockeyUS/Fadi-Tools" data-t="foot_src">Source code</a>
+    <a href="https://github.com/RockeyUS/Fadi-Tools/releases" data-t="foot_rel">All releases</a>
+    <a href="https://github.com/RockeyUS/Fadi-Tools/blob/main/CODE_SIGNING.md" data-t="foot_priv">Privacy and builds</a>
+    <span class="test" data-t="test">Test site</span>
+  </div>
+</footer>
+
+<script>
+{
+const ICON = {
+  convert:'<path d="M4 7h13l-3-3M20 17H7l3 3"/>',
+  compress:'<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
+  studio:'<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>',
+  text:'<path d="M4 7V5h16v2M12 5v14M9 19h6"/>',
+  rename:'<path d="M4 20h4L19 9l-4-4L4 16v4ZM13 7l4 4"/>',
+  dup:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
+  download:'<path d="M12 3v12m0 0-5-5m5 5 5-5M5 21h14"/>',
+  inspect:'<circle cx="11" cy="11" r="7"/><path d="m21 21-5-5"/>',
+  check:'<path d="m5 12 5 5 9-10"/>'
+};
+const svg = k => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + ICON[k] + '</svg>';
+
+const T = {
+ en:{name:"Fadi Tools",nav_features:"What it does",nav_screens:"Screenshots",nav_download:"Download",
+  h1:"Convert, compress, edit and download files. All on your PC.",
+  sub:"Fadi Tools is one free Windows app for the jobs you'd otherwise need five websites for. It works offline, nothing gets uploaded, and it speaks English and Arabic.",
+  dl_btn:"Download for Windows",src_btn:"Open source on GitHub",f1:"Free (MIT license)",f2:"Windows 10 and 11",f3:"English and العربية",f4:"Updates itself",
+  feat_h:"What it does",feat_sub:"Everything runs on your computer, so private files stay private and big files don't wait on an upload.",
+  shots_h:"Take a look",shots_sub:"The real app, in light or dark to match your system, and fully right to left in Arabic.",
+  dl_h:"Download",dl_sub:"Pick one. Both are the same app, from the latest release on GitHub.",
+  zip_tag:"Recommended",zip_p:"Everything included. Unzip it anywhere and open Fadi Tools.exe. Works straight away, even without internet.",zip_btn:"Get the zip",
+  exe_tag:"Small download",exe_p:"Just the app. The first time it opens, it downloads the engines it needs (like FFmpeg) and asks before anything big.",exe_btn:"Get the exe",
+  smart:"<b>Windows protected your PC?</b> Fadi Tools isn't code-signed yet, so Windows may warn about it. Click More info, then Run anyway. Every release is built and tested by GitHub Actions from the public code.",
+  req1a:"Needs",req1b:"Windows 10 or 11 (64-bit)",req2a:"Price",req2b:"Free, no account, no ads",req3a:"Updates",req3b:"The app updates itself when a new version is out",
+  priv_h:"Your files stay on your PC",priv_sub:"Fadi Tools connects to the internet only when you ask it to: to download a video, to fetch an engine the first time, or to check for an update.",
+  foot:"Fadi Tools · open source under the MIT License",foot_src:"Source code",foot_rel:"All releases",foot_priv:"Privacy and builds",test:"Test site",
+  prev:"Previous",next:"Next",lang:"العربية",alt:"The {0} page of Fadi Tools"},
+ ar:{name:"أدوات فادي",nav_features:"ماذا يفعل",nav_screens:"لقطات الشاشة",nav_download:"التنزيل",
+  h1:"حوّل الملفات واضغطها وعدّلها ونزّلها. كل ذلك على جهازك.",
+  sub:"أدوات فادي تطبيق ويندوز مجاني واحد للمهام التي كنت ستحتاج لها خمسة مواقع. يعمل دون إنترنت، ولا يُرفع أي شيء، ويتحدث العربية والإنجليزية.",
+  dl_btn:"التنزيل لويندوز",src_btn:"مفتوح المصدر على GitHub",f1:"مجاني (رخصة MIT)",f2:"ويندوز 10 و11",f3:"العربية وEnglish",f4:"يحدّث نفسه",
+  feat_h:"ماذا يفعل",feat_sub:"كل شيء يعمل على جهازك، فتبقى ملفاتك الخاصة خاصة، ولا تنتظر الملفات الكبيرة رفعها.",
+  shots_h:"ألقِ نظرة",shots_sub:"التطبيق الحقيقي، فاتحاً أو داكناً حسب نظامك، ومن اليمين إلى اليسار بالكامل بالعربية.",
+  dl_h:"التنزيل",dl_sub:"اختر واحداً. كلاهما التطبيق نفسه، من أحدث إصدار على GitHub.",
+  zip_tag:"المُوصى به",zip_p:"كل شيء مضمّن. فك الضغط في أي مكان وافتح Fadi Tools.exe. يعمل فوراً، حتى دون إنترنت.",zip_btn:"تنزيل ملف zip",
+  exe_tag:"تنزيل صغير",exe_p:"التطبيق وحده. في أول مرة يُفتح، ينزّل المحركات التي يحتاجها (مثل FFmpeg) ويسأل قبل أي تنزيل كبير.",exe_btn:"تنزيل ملف exe",
+  smart:"<b>ظهرت رسالة «حمى Windows جهازك»؟</b> أدوات فادي غير موقّع رقمياً بعد، لذلك قد يحذّر منه ويندوز. انقر «مزيد من المعلومات» ثم «التشغيل على أي حال». كل إصدار يُبنى ويُختبر عبر GitHub Actions من الكود المنشور.",
+  req1a:"يحتاج",req1b:"ويندوز 10 أو 11 (64 بت)",req2a:"السعر",req2b:"مجاني، بلا حساب ولا إعلانات",req3a:"التحديثات",req3b:"يحدّث التطبيق نفسه عند صدور نسخة جديدة",
+  priv_h:"ملفاتك تبقى على جهازك",priv_sub:"لا يتصل أدوات فادي بالإنترنت إلا عندما تطلب ذلك: لتنزيل فيديو، أو لجلب محرك في المرة الأولى، أو للتحقق من التحديثات.",
+  foot:"أدوات فادي · مفتوح المصدر برخصة MIT",foot_src:"الكود المصدري",foot_rel:"كل الإصدارات",foot_priv:"الخصوصية وطريقة البناء",test:"موقع تجريبي",
+  prev:"السابق",next:"التالي",lang:"English",alt:"صفحة {0} في أدوات فادي"}
+};
+const FEATS = [
+ ["convert",{en:["Convert","Pictures, audio, video, documents and data files, from one format to another."],ar:["التحويل","الصور والصوت والفيديو والمستندات وملفات البيانات، من صيغة إلى أخرى."]}],
+ ["compress",{en:["Compress","Smaller videos and pictures, with one-click sizes for Discord, email and profile pictures."],ar:["الضغط","فيديوهات وصور أصغر، مع أحجام بنقرة واحدة لديسكورد والبريد وصور الملف الشخصي."]}],
+ ["studio",{en:["Studio","Edit photos and videos: text, photos on top, remove backgrounds, trim, transitions, music and auto captions. Edit PDFs: add text, combine, reorder, sign, number, watermark, lock and split."],ar:["الاستوديو","عدّل الصور والفيديو: نصوص، وصور فوقها، وإزالة الخلفيات، والقص، والانتقالات، والموسيقى، والترجمة التلقائية. وعدّل ملفات PDF: أضف نصاً، وادمج، وأعد الترتيب، ووقّع، ورقّم، وضع علامة مائية، واقفل، وقسّم."]}],
+ ["text",{en:["Copy text from pictures","Copy text out of screenshots and photos, and make scanned PDFs searchable, in Arabic and English."],ar:["نسخ النص من الصور","انسخ النص من لقطات الشاشة والصور، واجعل ملفات PDF الممسوحة قابلة للبحث، بالعربية والإنجليزية."]}],
+ ["rename",{en:["Rename","Many files at once: numbered, find and replace, or by the date a photo was taken and a song's tags. With undo."],ar:["إعادة التسمية","ملفات كثيرة دفعة واحدة: بالترقيم، أو البحث والاستبدال، أو بتاريخ التقاط الصورة ووسوم الأغنية. مع إمكانية التراجع."]}],
+ ["dup",{en:["Find duplicates","Finds files that are exact copies and moves the extra ones to the Recycle Bin."],ar:["البحث عن المكرر","يجد الملفات المتطابقة وينقل النسخ الزائدة إلى سلة المحذوفات."]}],
+ ["download",{en:["Download","From YouTube and over a thousand sites. Copy a link and it offers to download it."],ar:["التنزيل","من يوتيوب وأكثر من ألف موقع. انسخ رابطاً وسيعرض تنزيله."]}],
+ ["inspect",{en:["File inspector","See what's really inside a file, with Reverse engineer for the curious."],ar:["فاحص الملفات","اعرف ما بداخل الملف حقاً، مع «الهندسة العكسية» للفضوليين."]}]
+];
+const PRIV = {
+ en:["Converting, compressing, editing and copying text all happen on your computer.","No account, no sign-in, no ads, no tracking.","Open source: anyone can read the code and see what it does.","Releases are built and tested by GitHub Actions from that code."],
+ ar:["التحويل والضغط والتعديل ونسخ النص كلها تحدث على جهازك.","بلا حساب ولا تسجيل دخول ولا إعلانات ولا تتبع.","مفتوح المصدر: يمكن لأي أحد قراءة الكود ومعرفة ما يفعله.","تُبنى الإصدارات وتُختبر عبر GitHub Actions من ذلك الكود."]
+};
+const PAGES = [
+ ["convert",{en:"Convert",ar:"التحويل"}],["studio",{en:"Studio",ar:"الاستوديو"}],["compress",{en:"Compress",ar:"الضغط"}],
+ ["rename",{en:"Rename",ar:"إعادة التسمية"}],["duplicates",{en:"Duplicates",ar:"المكررات"}],["inspector",{en:"File inspector",ar:"فاحص الملفات"}],
+ ["download",{en:"Download",ar:"التنزيل"}],["settings",{en:"Settings",ar:"الإعدادات"}]
+];
+
+let lang = "en";
+try { const s = localStorage.getItem("ft-lang"); if (s === "ar" || s === "en") lang = s; else if ((navigator.language || "").startsWith("ar")) lang = "ar"; } catch (e) {}
+
+const shots = document.getElementById("shots"), tabs = document.getElementById("tabs");
+const pic = (page, l, alt) => '<picture><source media="(prefers-color-scheme: dark)" srcset="img/' + page + '-dark-' + l + '.webp"><img src="img/' + page + '-light-' + l + '.webp" alt="' + alt + '" width="1220" height="811" loading="lazy"></picture>';
+
+function render() {
+  const t = T[lang], rtl = lang === "ar";
+  document.documentElement.lang = lang; document.documentElement.dir = rtl ? "rtl" : "ltr";
+  document.title = t.name;
+  document.querySelectorAll("[data-t]").forEach(el => { const v = t[el.dataset.t]; if (v != null) { if (el.dataset.t === "smart") el.innerHTML = v; else el.textContent = v; } });
+  const btn = document.getElementById("lang"); btn.textContent = t.lang; btn.lang = rtl ? "en" : "ar";
+  document.getElementById("prev").setAttribute("aria-label", t.prev); document.getElementById("next").setAttribute("aria-label", t.next);
+  document.querySelector(".hero .win").innerHTML = pic("studio", lang, t.alt.replace("{0}", PAGES[1][1][lang])).replace(' loading="lazy"', "");
+  document.getElementById("feats").innerHTML = FEATS.map(([k, v]) => '<div class="card"><div class="ic">' + svg(k) + '</div><h3>' + v[lang][0] + '</h3><p>' + v[lang][1] + '</p></div>').join("");
+  document.getElementById("privlist").innerHTML = PRIV[lang].map(x => '<li>' + svg("check") + '<span>' + x + '</span></li>').join("");
+  tabs.innerHTML = PAGES.map(([k, n], i) => '<button type="button" role="tab" aria-selected="' + (i === cur) + '" data-i="' + i + '">' + n[lang] + '</button>').join("");
+  shots.innerHTML = PAGES.map(([k, n]) => '<figure class="shot"><div class="win">' + pic(k, lang, t.alt.replace("{0}", n[lang])) + '</div></figure>').join("");
+  cur = 0; go(0, false);
+}
+
+let cur = 0;
+function go(i, smooth) {
+  cur = (i + PAGES.length) % PAGES.length;
+  [...shots.children].forEach((c, j) => c.classList.toggle("on", j === cur));
+  tabs.querySelectorAll("button").forEach((b, j) => b.setAttribute("aria-selected", j === cur));
+}
+tabs.addEventListener("click", e => { const b = e.target.closest("button"); if (b) go(+b.dataset.i); });
+document.getElementById("prev").addEventListener("click", () => go(cur - 1));
+document.getElementById("next").addEventListener("click", () => go(cur + 1));
+shots.addEventListener("keydown", e => {
+  const back = document.documentElement.dir === "rtl" ? "ArrowRight" : "ArrowLeft", fwd = back === "ArrowLeft" ? "ArrowRight" : "ArrowLeft";
+  if (e.key === back) { e.preventDefault(); go(cur - 1); } else if (e.key === fwd) { e.preventDefault(); go(cur + 1); }
+});
+// a swipe sideways on a phone moves to the next or previous picture (the way the page reads)
+let sx = null;
+shots.addEventListener("touchstart", e => { sx = e.touches[0].clientX; }, { passive: true });
+shots.addEventListener("touchend", e => {
+  if (sx == null) return; const dx = e.changedTouches[0].clientX - sx; sx = null;
+  if (Math.abs(dx) < 40) return; const rtl = document.documentElement.dir === "rtl";
+  go(cur + ((dx < 0) !== rtl ? 1 : -1));
+});
+document.getElementById("lang").addEventListener("click", () => { lang = lang === "en" ? "ar" : "en"; try { localStorage.setItem("ft-lang", lang); } catch (e) {} render(); });
+render();
+}
+</script>
+</body>
+</html>
