@@ -172,6 +172,57 @@ namespace FileConverter
             }
         }
 
+        /// The picture Windows itself shows for a file or a folder: its thumbnail when it has one, otherwise its
+        /// icon (a folder, a zip, a program), with the see-through parts kept. Null when Windows has nothing, or
+        /// off Windows. Call from a thread of its own (it can take a moment).
+        public static Bitmap ShellPicture(string path, int size)
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return null;
+            IShellItemImageFactory f = null;
+            IntPtr h = IntPtr.Zero;
+            try
+            {
+                if (SHCreateItemFromParsingName(Path.GetFullPath(path.TrimEnd('\\', '/')), IntPtr.Zero, typeof(IShellItemImageFactory).GUID, out f) != 0 || f == null) return null;
+                // 0 = the thumbnail when there is one, otherwise the icon, sized to fit
+                if (f.GetImage(new SIZE { cx = size, cy = size }, 0x0, out h) != 0 || h == IntPtr.Zero) return null;
+                using (Bitmap raw = Image.FromHbitmap(h)) return WithAlpha(raw);
+            }
+            catch { return null; }
+            finally
+            {
+                if (h != IntPtr.Zero) DeleteObject(h);
+                if (f != null) try { Marshal.ReleaseComObject(f); } catch { }
+            }
+        }
+
+        /// Windows hands icons over with their see-through parts in the fourth byte, which the plain copy ignores:
+        /// this keeps them (when there are any; a picture with none stays solid).
+        static Bitmap WithAlpha(Bitmap raw)
+        {
+            if (Image.GetPixelFormatSize(raw.PixelFormat) < 32) return new Bitmap(raw);
+            Rectangle r = new Rectangle(0, 0, raw.Width, raw.Height);
+            int n = raw.Width * raw.Height;
+            int[] px = new int[n];
+            BitmapData bd = raw.LockBits(r, ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
+            try
+            {
+                if (bd.Stride != raw.Width * 4) return new Bitmap(raw);
+                Marshal.Copy(bd.Scan0, px, 0, n);
+            }
+            finally { raw.UnlockBits(bd); }
+            bool clear = false, solid = false;
+            for (int i = 0; i < n; i++) { int al = (px[i] >> 24) & 0xFF; if (al == 0) clear = true; else solid = true; if (clear && solid) break; }
+            // every pixel "see-through" means the fourth byte isn't in use: it's a solid picture
+            bool alpha = solid && clear || solid && HasPartial(px);
+            if (!solid) for (int i = 0; i < n; i++) px[i] |= unchecked((int)0xFF000000);
+            Bitmap res = new Bitmap(raw.Width, raw.Height, alpha ? PixelFormat.Format32bppPArgb : PixelFormat.Format32bppRgb);
+            BitmapData od = res.LockBits(r, ImageLockMode.WriteOnly, res.PixelFormat);
+            try { Marshal.Copy(px, 0, od.Scan0, n); }
+            finally { res.UnlockBits(od); }
+            return res;
+        }
+        static bool HasPartial(int[] px) { for (int i = 0; i < px.Length; i++) { int al = (px[i] >> 24) & 0xFF; if (al != 0xFF) return true; } return false; }
+
         /// Draws a file's picture filling a rounded box (cropped to fit), or returns false when there isn't one (yet).
         public static bool Draw(Graphics g, string path, Rectangle box, float radius, Action repaint)
         {

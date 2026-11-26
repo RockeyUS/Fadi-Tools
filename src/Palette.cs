@@ -84,7 +84,7 @@ namespace FileConverter
             };
             rows.Picked += Pick;
             Controls.Add(search); Controls.Add(rows);
-            Deactivate += (s, e) => Dismiss();
+            Deactivate += (s, e) => this.Later(Dismiss);
             Rebuild();
         }
 
@@ -279,6 +279,16 @@ namespace FileConverter
     /// A small floating menu (Claude-style): icon + text rows, optional section titles, dividers and shortcuts.
     /// It grows out of the spot it was opened from and shrinks back when it closes; the row under the mouse
     /// lights up softly. Arrow keys move, Enter picks, Esc closes.
+    public static class FormLater
+    {
+        /// Runs a moment later, after Windows has finished moving the focus. A pop-up closed right inside its own
+        /// Deactivate made Windows hand the focus to another program, so Fadi Tools went behind other windows.
+        public static void Later(this Form f, Action a)
+        {
+            try { if (f.IsHandleCreated && !f.IsDisposed) f.BeginInvoke(a); else a(); } catch { }
+        }
+    }
+
     public class MenuPopup : Form
     {
         public class Item { public string Text, Sub, Glyph, Header, Shortcut; public Action Run; public bool Divider, Disabled, Danger; }
@@ -351,7 +361,7 @@ namespace FileConverter
                 try { if (o != null && o.IsHandleCreated) o.BeginInvoke(it.Run); else it.Run(); } catch { }
             };
             Controls.Add(rows);
-            Deactivate += (s, e) => Dismiss(false);
+            Deactivate += (s, e) => this.Later(() => Dismiss(false));
         }
 
         /// Shrinks back towards where it came from and closes (quickly when something was picked).
@@ -360,7 +370,12 @@ namespace FileConverter
             if (closing || IsDisposed) return;
             closing = true;
             if (open == this) open = null;
+            Form o = owner;
             Fx.PopOut(this, owner, from, Theme.S(12), picked ? 80 : 110, () => { if (!IsDisposed) Close(); });
+            // closed by a click elsewhere in Fadi Tools: its window stays in front (Windows could otherwise bring up
+            // whatever window was behind it, as if Fadi Tools had gone away)
+            if (!picked && o != null && !o.IsDisposed && o.Visible && o.WindowState != FormWindowState.Minimized && o.Bounds.Contains(Cursor.Position))
+                try { o.BeginInvoke((Action)(() => { try { if (!o.IsDisposed && Form.ActiveForm == null) o.Activate(); } catch { } })); } catch { }
         }
 
         protected override CreateParams CreateParams { get { CreateParams cp = base.CreateParams; cp.ClassStyle |= 0x20000; return cp; } }

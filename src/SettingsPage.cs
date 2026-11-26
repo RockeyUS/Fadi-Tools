@@ -575,7 +575,7 @@ namespace FileConverter
             for (int i = 0; i < 12; i++)
             {
                 bool subRow = i == 9 || i == 10;
-                Label(g, L.T(ik[i]), Theme.F(subRow ? 9f : 9.5f), subRow ? (integ[3].Checked ? Theme.InkSoft : Theme.InkFaint) : Theme.Ink, new Rectangle(integRows[i].X, integRows[i].Y, integRows[i].Width - Theme.S(64), integRows[i].Height), Align.Start, true, true);
+                Label(g, L.T(ik[i], DragWheel.KeyName()), Theme.F(subRow ? 9f : 9.5f), subRow ? (integ[3].Checked ? Theme.InkSoft : Theme.InkFaint) : Theme.Ink, new Rectangle(integRows[i].X, integRows[i].Y, integRows[i].Width - Theme.S(64), integRows[i].Height), Align.Start, true, true);
             }
         }
 

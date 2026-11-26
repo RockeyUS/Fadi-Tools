@@ -236,13 +236,19 @@ namespace FileConverter
         }
 
         // ------------------------------------------------------------------ handles (Move)
-        enum Grab { None, Move, Scale, Rotate, Pan, Select, Lasso, Stroke, Crop, CropMove }
+        enum Grab { None, Move, Scale, Stretch, Rotate, Pan, Select, Lasso, Stroke, Crop, CropMove }
         Grab grab;
         int grabCorner;                // 0..3 corners, 4..7 sides (crop)
         PointF downDoc, downScreen;
         DocLayer grabLayer;
         float startX, startY, startScale, startAngle, startSize; PointF startPos;
         RectangleF startBounds;
+        /// Moving or sizing a layer past the edge makes the canvas grow with it, and shrink back as it comes in (never
+        /// smaller than the canvas chosen on purpose: Doc.GrowBase).
+        public bool AutoGrow;
+        float startStretch;
+        RectangleF growBase;   // the canvas when the drag began (its own coordinates follow the canvas as it grows)
+        bool growOn;           // this drag moves the canvas along (the layer was all on the canvas when it began)
         bool changedThisDrag;
         List<PointF> stroke = new List<PointF>();
         RectangleF dragRect; bool dragEllipse;
@@ -253,6 +259,19 @@ namespace FileConverter
         DocLayer Movable { get { DocLayer l = Doc == null ? null : Doc.Cur; return l != null && (l.Kind == LayerKind.Image || l.Kind == LayerKind.Text || l.Kind == LayerKind.Group || (l.Kind == LayerKind.Paint && !l.Bounds(Doc).IsEmpty)) ? l : null; } }
 
         /// The current layer's frame on screen: 4 corners (turned with the layer).
+        /// The middles of the sides: top, right, bottom, left.
+        static PointF[] SideHandles(PointF[] f) { return new[] { Mid(f[0], f[1]), Mid(f[1], f[2]), Mid(f[2], f[3]), Mid(f[3], f[0]) }; }
+
+        /// ↔ or ↕ for a side handle, by which way it points on screen.
+        Cursor SideCursor(PointF side, DocLayer l)
+        {
+            PointF c = ToScreen(new PointF(l.X, l.Y));
+            float dx = Math.Abs(side.X - c.X), dy = Math.Abs(side.Y - c.Y);
+            if (dx > dy * 2) return Cursors.SizeWE;
+            if (dy > dx * 2) return Cursors.SizeNS;
+            return (side.X - c.X) * (side.Y - c.Y) > 0 ? Cursors.SizeNWSE : Cursors.SizeNESW;
+        }
+
         PointF[] Frame(DocLayer l)
         {
             if (l.Kind == LayerKind.Image)
@@ -277,6 +296,8 @@ namespace FileConverter
             if (Doc.IsLocked(l) || l.Kind == LayerKind.Group) return;
             float hs = Theme.S(9);
             foreach (PointF c in f) DrawHandle(g, c, hs);
+            // pictures also stretch from the middle of each side
+            if (l.Kind == LayerKind.Image) foreach (PointF c in SideHandles(f)) DrawHandle(g, c, hs * 0.8f);
             // the turn handle above the top edge
             PointF top = Mid(f[0], f[1]), rot = RotHandle(f);
             using (Pen p = new Pen(Theme.AccentColor, Theme.S(1.25f))) g.DrawLine(p, top, rot);
@@ -379,6 +400,12 @@ namespace FileConverter
             {
                 out1.Exclude(r);
                 using (SolidBrush b = new SolidBrush(Color.FromArgb(150, 0, 0, 0))) g.FillRegion(b, out1);
+            }
+            // the frame reaching past the canvas: that's new (see-through) space the canvas grows into
+            using (Region grow = new Region(r))
+            {
+                grow.Exclude(page);
+                using (HatchBrush hb = new HatchBrush(HatchStyle.LargeCheckerBoard, Color.FromArgb(70, 255, 255, 255), Color.FromArgb(25, 255, 255, 255))) g.FillRegion(hb, grow);
             }
             using (Pen p = new Pen(Color.FromArgb(120, 255, 255, 255), 1f))
                 for (int i = 1; i < 3; i++) { g.DrawLine(p, r.X + r.Width * i / 3, r.Y, r.X + r.Width * i / 3, r.Bottom); g.DrawLine(p, r.X, r.Y + r.Height * i / 3, r.Right, r.Y + r.Height * i / 3); }
@@ -502,6 +529,7 @@ namespace FileConverter
                     PointF rot = RotHandle(f);
                     if (Dist(at, rot) <= hs) { StartGrab(l, Grab.Rotate, 0); return; }
                     for (int i = 0; i < 4; i++) if (Dist(at, f[i]) <= hs) { StartGrab(l, Grab.Scale, i); return; }
+                    if (l.Kind == LayerKind.Image) { PointF[] sd = SideHandles(f); for (int i = 0; i < 4; i++) if (Dist(at, sd[i]) <= hs) { StartGrab(l, Grab.Stretch, i); return; } }
                     if (Inside(f, at)) { StartGrab(l, Grab.Move, 0); return; }
                 }
             }
@@ -512,7 +540,10 @@ namespace FileConverter
                 DocLayer gp = l != null && l.Kind == LayerKind.Group && hit.Group == l.Id ? l : hit;
                 Select(gp);
                 if (!Doc.IsLocked(gp)) StartGrab(gp, Grab.Move, 0);
+                return;
             }
+            // nothing there to move (the empty space around the picture, or an empty spot): drag the view instead
+            if (Tool == PhotoTool.Move) { grab = Grab.Pan; Cursor = Cursors.SizeAll; }
         }
 
         static float Dist(PointF a, PointF b) { float dx = a.X - b.X, dy = a.Y - b.Y; return (float)Math.Sqrt(dx * dx + dy * dy); }
@@ -558,6 +589,11 @@ namespace FileConverter
             if (l.Kind == LayerKind.Image) { startX = l.X; startY = l.Y; startScale = l.Scale; startAngle = l.Angle; }
             else if (l.Kind == LayerKind.Text) { startPos = l.Text.Pos; startSize = l.Text.SizePx; startAngle = l.Text.Angle; }
             startBounds = l.Bounds(Doc);
+            startStretch = l.Stretch;
+            growBase = new RectangleF(0, 0, Doc.W, Doc.H);
+            // a layer that already hung past the edge (cropped on purpose) doesn't drag the canvas along
+            growOn = AutoGrow && Doc.Within(l, growBase);
+            if (growOn) Doc.RememberOriginal();
             groupStart.Clear();
             if (l.Kind == LayerKind.Group)
                 foreach (DocLayer c in Doc.Layers) if (c.Group == l.Id) groupStart[c] = c.Kind == LayerKind.Text ? c.Text.Pos : new PointF(c.X, c.Y);
@@ -594,7 +630,7 @@ namespace FileConverter
                     if (Dist(ToScreen(stroke[stroke.Count - 1]), e.Location) >= 2) { stroke.Add(d); Invalidate(); }
                     return;
                 case Grab.Crop: case Grab.CropMove: CropDrag(d); return;
-                case Grab.Move: case Grab.Scale: case Grab.Rotate:
+                case Grab.Move: case Grab.Scale: case Grab.Rotate: case Grab.Stretch:
                     DragLayer(d, e.Location);
                     return;
             }
@@ -614,9 +650,16 @@ namespace FileConverter
                     {
                         if (Dist(at, RotHandle(f)) <= Theme.S(12)) return Cursors.Hand;
                         for (int i = 0; i < 4; i++) if (Dist(at, f[i]) <= Theme.S(12)) return i % 2 == 0 ? Cursors.SizeNWSE : Cursors.SizeNESW;
+                        if (l.Kind == LayerKind.Image) { PointF[] sd = SideHandles(f); for (int i = 0; i < 4; i++) if (Dist(at, sd[i]) <= Theme.S(12)) return SideCursor(sd[i], l); }
                         if (Inside(f, at)) return Cursors.SizeAll;
                     }
                 }
+            }
+            if (Tool == PhotoTool.Move)
+            {
+                // outside the picture there's nothing to move: a drag there moves the view
+                PointF d = ToDoc(at);
+                if (d.X < 0 || d.Y < 0 || d.X >= Doc.W || d.Y >= Doc.H) return Cursors.Hand;
             }
             if (Tool == PhotoTool.Crop)
             {
@@ -631,7 +674,7 @@ namespace FileConverter
         {
             DocLayer l = grabLayer;
             if (l == null) return;
-            if (!Begin(grab == Grab.Move ? "ps_h_move" : grab == Grab.Scale ? "ps_h_resize" : "ps_h_turn")) return;
+            if (!Begin(grab == Grab.Move ? "ps_h_move" : grab == Grab.Scale || grab == Grab.Stretch ? "ps_h_resize" : "ps_h_turn")) return;
             bool shift = (ModifierKeys & Keys.Shift) != 0;
             guidesX.Clear();
             if (grab == Grab.Move)
@@ -653,6 +696,29 @@ namespace FileConverter
                 if (l.Kind == LayerKind.Image) l.Scale = Math.Max(0.005f, startScale * k);
                 else if (l.Kind == LayerKind.Text) { l.Text.SizePx = Math.Max(4, startSize * k); l.Text.SizeChanging(); }
             }
+            else if (grab == Grab.Stretch && l.Kind == LayerKind.Image && l.Pixels != null)
+            {
+                // one side follows the mouse, the opposite side stays where it is (along the picture's own axes)
+                double a = startAngle * Math.PI / 180, ca = Math.Cos(a), sa = Math.Sin(a);
+                bool across = grabCorner == 1 || grabCorner == 3;            // the left or right side: the width changes
+                double ax = across ? ca : -sa, ay = across ? sa : ca;        // the axis that side moves along
+                double sign = grabCorner == 1 || grabCorner == 2 ? 1 : -1;  // right / bottom: +, left / top: −
+                float w0 = l.Pixels.Width * startScale, h0 = l.Pixels.Height * startScale * startStretch;
+                float len0 = across ? w0 : h0;
+                double u = ((d.X - startX) * ax + (d.Y - startY) * ay) * sign;   // where the mouse is, from the middle
+                double u0 = ((downDoc.X - startX) * ax + (downDoc.Y - startY) * ay) * sign;
+                float len1 = (float)Math.Max(2, len0 + (u - u0));
+                if (shift)
+                {
+                    // Shift: keep the shape (both sides grow), the opposite side still stays put
+                    float k = len1 / len0;
+                    l.Scale = Math.Max(0.005f, startScale * k); l.Stretch = startStretch;
+                }
+                else if (across) { l.Scale = Math.Max(0.005f, len1 / l.Pixels.Width); l.Stretch = h0 / (l.Pixels.Height * l.Scale); }
+                else { l.Scale = startScale; l.Stretch = Math.Max(0.001f, len1 / (l.Pixels.Height * startScale)); }
+                float shiftBy = (float)((len1 - len0) / 2 * sign);
+                l.X = startX + (float)(ax * shiftBy); l.Y = startY + (float)(ay * shiftBy);
+            }
             else if (grab == Grab.Rotate)
             {
                 PointF c = l.Kind == LayerKind.Image ? new PointF(l.X, l.Y) : new PointF(startBounds.X + startBounds.Width / 2, startBounds.Y + startBounds.Height / 2);
@@ -665,9 +731,31 @@ namespace FileConverter
                 else if (l.Kind == LayerKind.Text) { l.Text.Angle = ang; l.Text.Touch(); }
             }
             l.Version++;
+            if (AutoGrow) Grow();
             Redraw();
             if (Changed != null) Changed();
         }
+
+        /// The canvas follows the layer being dragged: big enough for everything, never smaller than it was when the
+        /// drag began. Where things are on screen doesn't move.
+        void Grow()
+        {
+            if (!growOn || grabLayer == null) return;
+            Rectangle r = Doc.FitFor(grabLayer, growBase);
+            if (r.IsEmpty || r == new Rectangle(0, 0, Doc.W, Doc.H) || r.Width > MaxSide || r.Height > MaxSide || r.Width < 1 || r.Height < 1) return;
+            Doc.Crop(r);
+            float dx = r.X, dy = r.Y;
+            growBase.Offset(-dx, -dy);
+            startX -= dx; startY -= dy;
+            startPos = new PointF(startPos.X - dx, startPos.Y - dy);
+            startBounds.Offset(-dx, -dy);
+            foreach (DocLayer k in new List<DocLayer>(groupStart.Keys)) groupStart[k] = new PointF(groupStart[k].X - dx, groupStart[k].Y - dy);
+            downDoc = new PointF(downDoc.X - dx, downDoc.Y - dy);
+            Pan = new PointF(Pan.X + dx * Zoom, Pan.Y + dy * Zoom);
+            if (SizeChanged != null) SizeChanged();
+        }
+        /// The canvas changed size by itself (while dragging).
+        public event Action SizeChanged;
 
         void MoveBy(DocLayer l, float dx, float dy)
         {
@@ -687,7 +775,9 @@ namespace FileConverter
         {
             sx = 0; sy = 0;
             float tol = Theme.S(6) / Zoom;
-            List<float> xs = new List<float> { 0, Doc.W / 2f, Doc.W }, ys = new List<float> { 0, Doc.H / 2f, Doc.H };
+            // the canvas edges (as they were when the drag began, while the canvas grows along)
+            RectangleF pg = growOn ? growBase : new RectangleF(0, 0, Doc.W, Doc.H);
+            List<float> xs = new List<float> { pg.Left, pg.X + pg.Width / 2f, pg.Right }, ys = new List<float> { pg.Top, pg.Y + pg.Height / 2f, pg.Bottom };
             foreach (DocLayer o in Doc.Layers)
             {
                 if (o == self || o.Group == self.Id || !Doc.Shown(o) || o.Kind == LayerKind.Adjust || o.Kind == LayerKind.Group) continue;
@@ -741,7 +831,7 @@ namespace FileConverter
                     stroke.Clear();
                     break;
                 case Grab.Stroke: FinishStroke(); break;
-                case Grab.Move: case Grab.Scale: case Grab.Rotate:
+                case Grab.Move: case Grab.Scale: case Grab.Rotate: case Grab.Stretch:
                     if (grabLayer != null && grabLayer.Kind == LayerKind.Text) { grabLayer.Text.Touch(); }
                     grabLayer = null;
                     break;
@@ -819,6 +909,9 @@ namespace FileConverter
         }
 
         // ------------------------------------------------------------------ crop
+        /// The biggest a canvas may become with the crop frame (pixels a side).
+        public const int MaxSide = 16000;
+
         void CropDown(Point at)
         {
             if (CropRect.IsEmpty) StartCrop();
@@ -837,8 +930,9 @@ namespace FileConverter
             float dx = d.X - downDoc.X, dy = d.Y - downDoc.Y;
             if (grab == Grab.CropMove)
             {
-                r.X = Math.Max(0, Math.Min(Doc.W - r.Width, r.X + dx));
-                r.Y = Math.Max(0, Math.Min(Doc.H - r.Height, r.Y + dy));
+                // it may go past the canvas (the canvas grows there), but keeps touching it
+                r.X = Math.Max(-r.Width + 4, Math.Min(Doc.W - 4, r.X + dx));
+                r.Y = Math.Max(-r.Height + 4, Math.Min(Doc.H - 4, r.Y + dy));
                 CropRect = r; Invalidate(); return;
             }
             float l = r.Left, t = r.Top, rt = r.Right, b = r.Bottom;
@@ -853,7 +947,10 @@ namespace FileConverter
                 case 6: b += dy; break;
                 case 7: l += dx; break;
             }
-            l = Math.Max(0, l); t = Math.Max(0, t); rt = Math.Min(Doc.W, rt); b = Math.Min(Doc.H, b);
+            // outward past the canvas is fine (it grows), up to MaxSide
+            l = Math.Max(Doc.W - MaxSide, l); t = Math.Max(Doc.H - MaxSide, t); rt = Math.Min(MaxSide, rt); b = Math.Min(MaxSide, b);
+            if (rt - l > MaxSide) { if (grabCorner == 0 || grabCorner == 3 || grabCorner == 7) l = rt - MaxSide; else rt = l + MaxSide; }
+            if (b - t > MaxSide) { if (grabCorner == 0 || grabCorner == 1 || grabCorner == 4) t = b - MaxSide; else b = t + MaxSide; }
             if (rt - l < 4) { if (grabCorner == 0 || grabCorner == 3 || grabCorner == 7) l = rt - 4; else rt = l + 4; }
             if (b - t < 4) { if (grabCorner == 0 || grabCorner == 1 || grabCorner == 4) t = b - 4; else b = t + 4; }
             RectangleF n = RectangleF.FromLTRB(l, t, rt, b);
@@ -864,7 +961,6 @@ namespace FileConverter
                 if (grabCorner == 4 || grabCorner == 6) { h = n.Height; w = h * CropRatio; }
                 if (grabCorner == 0 || grabCorner == 1 || grabCorner == 4) n = RectangleF.FromLTRB(grabCorner == 0 ? n.Right - w : n.Left, n.Bottom - h, grabCorner == 0 ? n.Right : n.Left + w, n.Bottom);
                 else n = new RectangleF(grabCorner == 3 || grabCorner == 7 ? n.Right - w : n.Left, n.Top, w, h);
-                n.Intersect(new RectangleF(0, 0, Doc.W, Doc.H));
             }
             CropRect = n;
             Invalidate();

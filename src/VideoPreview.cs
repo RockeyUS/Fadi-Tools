@@ -53,6 +53,27 @@ namespace FileConverter
             }
         }
 
+        /// The nearest frame of a file already at hand, without asking for the exact one (while playing: the player's
+        /// own decoder is about to give it, and a second FFmpeg on the same file would only slow that down).
+        public Bitmap Near(string file, double t)
+        {
+            lock (lk)
+            {
+                Bitmap b;
+                if (cache.TryGetValue(Key(file, t, Height), out b)) return b;
+                Bitmap near = null; double best = 1e9;
+                string pre = file + "|";
+                foreach (KeyValuePair<string, Bitmap> kv in cache)
+                {
+                    if (!kv.Key.StartsWith(pre)) continue;
+                    string[] p = kv.Key.Substring(pre.Length).Split('|');
+                    double d = Math.Abs(double.Parse(p[0], CultureInfo.InvariantCulture) / 12 - t);
+                    if (d < best) { best = d; near = kv.Value; }
+                }
+                return near;
+            }
+        }
+
         /// A clip's frame at a moment of its file (cut-outs are decoded with their see-through parts).
         public Bitmap Video(VClip c, double srcT, out bool exact)
         {
@@ -99,7 +120,7 @@ namespace FileConverter
                             byte[] png = Tools.FFmpeg == null ? null : Media.Capture(Tools.FFmpeg, "-hide_banner -loglevel error -c:v libvpx-vp9 -ss " + Math.Max(0, w.Value).ToString("0.###", CultureInfo.InvariantCulture) + " -i " + Tools.Quote(w.Key) + " -frames:v 1 -vf \"scale=-2:" + Height + "\" -f image2pipe -vcodec png -", 30000);
                             if (png != null) im = Image.FromStream(new MemoryStream(png));
                         }
-                        if (im == null) im = Media.Frame(w.Key, w.Value, Height);
+                        if (im == null) im = Media.Frame(alpha ? w.Key : ProxyCache.Use(w.Key) ?? w.Key, w.Value, Height);
                     }
                     catch { }
                     Bitmap b = null;
@@ -283,14 +304,19 @@ namespace FileConverter
             g.Restore(st);
         }
 
+        /// The clip being edited (paused preview only): drawn without its in and out animations.
+        [ThreadStatic] public static string Steady;
+
         static void DrawText(Graphics g, VProject p, VClip c, double t, float k)
         {
             if (c.Text == null) return;
             PointF mid; float scale, rot, alpha;
-            Placement(c, t, p.W, p.H, out mid, out scale, out rot, out alpha);
+            bool steady = Steady != null && c.Id == Steady;
+            if (steady) { mid = new PointF(c.Eval("x", t, c.X) * p.W, c.Eval("y", t, c.Y) * p.H); scale = c.Eval("scale", t, c.Scale); rot = c.Eval("rot", t, c.Rot); alpha = c.Eval("opacity", t, c.Opacity); }
+            else Placement(c, t, p.W, p.H, out mid, out scale, out rot, out alpha);
             if (alpha <= 0.01f) return;
             TextLayer tl = c.Text.CloneStyle();
-            if (c.AnimIn == "type")
+            if (c.AnimIn == "type" && !steady)
             {
                 double f = Math.Min(1, (t - c.At) / Math.Max(0.1, c.AnimInDur));
                 string s = tl.Text ?? "";

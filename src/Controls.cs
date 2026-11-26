@@ -84,6 +84,8 @@ namespace FileConverter
 
     public class Btn : UiControl
     {
+        /// Every click counts, however quick (play/pause, step): a quick second click isn't taken as a double-click.
+        public bool QuickClicks { set { SetStyle(ControlStyles.StandardDoubleClick, !value); } }
         public Func<string> Label;
         public string Glyph;
         public BtnKind Kind;

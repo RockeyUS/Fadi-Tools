@@ -145,7 +145,7 @@ namespace FileConverter
                 case SaveAs.Audio: return o.AudioFormat.ToUpperInvariant();
                 case SaveAs.Gif: return "GIF " + o.GifWidth + "px";
                 case SaveAs.Original: return L.T("dl_original");
-                default: return (o.MaxHeight > 0 ? o.MaxHeight + "p" : L.T("best")) + " MP4";
+                default: return (o.MaxHeight > 0 ? o.MaxHeight + "p" : L.T("best")) + " " + (o.Container ?? "mp4").ToUpperInvariant();
             }
         }
 
@@ -185,7 +185,7 @@ namespace FileConverter
             switch (it.State)
             {
                 case ItemState.Working:
-                    if (p.Finishing) sub = p.Stage == "gif" ? L.T("dl_making_gif") + (it.Info != null ? "  ·  " + DownloadPage.GifGuess(it.Options, it.Info.Duration) : "") : p.Stage == "convert" ? L.T("dl_converting") : L.T("yt_finishing");
+                    if (p.Finishing) sub = p.Stage == "gif" ? L.T("dl_making_gif") + (it.Info != null ? "  ·  " + DownloadPage.GifGuess(it.Options, it.Info.Duration) : "") : p.Stage == "convert" ? L.T("dl_converting") + (p.Percent > 0 ? "  " + (int)(p.Percent * 100) + "%" : "") : L.T("yt_finishing");
                     else if (p.Done <= 0) sub = L.T("yt_starting");
                     else
                     {
@@ -208,7 +208,7 @@ namespace FileConverter
             {
                 Rectangle pr = Mir(new Rectangle(b.X + tx, b.Y + Theme.S(58), b.Width - tx - aw, Theme.S(6)), b);
                 Theme.FillRound(g, pr, pr.Height / 2f, Theme.Track);
-                double pc = p.Finishing ? 1 : p.Percent;
+                double pc = p.Finishing && !(p.Stage == "convert" && p.Percent > 0) ? 1 : p.Percent;
                 if (pc > 0)
                 {
                     float fw = Math.Max(pr.Height, (float)(pr.Width * pc));
@@ -236,7 +236,8 @@ namespace FileConverter
     {
         Rectangle top, queueCard, infoR, queueTitleR, noteR, statusR, sitesR, bottomR;
         TextField url;
-        Btn btnPaste, btnGet, btnDownload, btnSetup;
+        Btn btnPaste, btnGet, btnDownload, btnSetup, btnFormat;
+        string vfmt = Settings.Get("YtVFormat", "mp4");
         Segments saveAs, qualityV, qualityA, gifSize, gifLen;
         Toggle playlist;
         Notice notice;
@@ -265,6 +266,9 @@ namespace FileConverter
             btnGet.Click += (s, e) => Fetch();
             btnDownload = new Btn(() => L.T("yt_download"), Ico.Download, BtnKind.Primary);
             btnDownload.Click += (s, e) => Enqueue();
+            if (vfmt != "mov" && vfmt != "mkv") vfmt = "mp4";
+            btnFormat = new Btn(() => vfmt.ToUpperInvariant() + "  ▾", Ico.Video, BtnKind.Secondary) { FontSize = 9.5f };
+            btnFormat.Click += (s, e) => FormatMenu();
             btnSetup = new Btn(() => L.T("yt_setup_btn"), Ico.Download, BtnKind.Primary);
             btnSetup.Click += (s, e) => Setup();
 
@@ -303,7 +307,7 @@ namespace FileConverter
                 });
             };
             thumbView = new ThumbView { Visible = false };
-            Controls.AddRange(new Control[] { url, btnPaste, btnGet, btnDownload, btnSetup, saveAs, qualityV, qualityA, gifSize, gifLen, playlist, notice, busy, queue, thumbView, btnClear });
+            Controls.AddRange(new Control[] { url, btnPaste, btnGet, btnDownload, btnFormat, btnSetup, saveAs, qualityV, qualityA, gifSize, gifLen, playlist, notice, busy, queue, thumbView, btnClear });
             UpdateView();
         }
 
@@ -330,6 +334,7 @@ namespace FileConverter
             gifSize.Visible = hasInfo && m == SaveAs.Gif && info.Kind == MediaKind.Video;
             gifLen.Visible = hasInfo && m == SaveAs.Gif && info.Kind == MediaKind.Video;
             btnDownload.Visible = hasInfo;
+            btnFormat.Visible = hasInfo && m == SaveAs.Video && info.Kind != MediaKind.Image;
             playlist.Visible = hasInfo && YtDlp.HasPlaylist(info.Url) && !info.IsPlaylist && m != SaveAs.Gif;
             busy.Visible = fetching || settingUp;
             DoLayout();
@@ -376,7 +381,10 @@ namespace FileConverter
             Place(gifSize, new Rectangle(qx, sy, qw, Theme.S(34)));
             int dw = Math.Max(Theme.S(180), btnDownload.PreferredWidth);
             Place(btnDownload, new Rectangle(cx + cw - dw, y + thH - Theme.S(42), dw, Theme.S(42)));
-            bottomR = new Rectangle(cx, y + thH - Theme.S(42), cw - dw - Theme.S(12), Theme.S(42));
+            // the video's format, just before Download
+            int fw = btnFormat.Wanted ? Math.Max(Theme.S(104), btnFormat.PreferredWidth + Theme.S(8)) : 0;
+            Place(btnFormat, new Rectangle(cx + cw - dw - Theme.S(10) - fw, y + thH - Theme.S(42), fw, Theme.S(42)));
+            bottomR = new Rectangle(cx, y + thH - Theme.S(42), cw - dw - Theme.S(12) - (fw > 0 ? fw + Theme.S(10) : 0), Theme.S(42));
             Place(gifLen, new Rectangle(cx, y + thH - Theme.S(32), Math.Min(Theme.S(320), cw - dw - Theme.S(14)), Theme.S(32)));
             Place(playlist, new Rectangle(cx, y + thH - Theme.S(80), Theme.S(50), Theme.S(30)));
 
@@ -652,6 +660,7 @@ namespace FileConverter
                 AudioFormat = new[] { "mp3", "m4a", "opus", "wav" }[qualityA.SelectedIndex],
                 GifWidth = new[] { 320, 480, 720 }[gifSize.SelectedIndex],
                 GifSeconds = new[] { 5, 10, 30, 0 }[gifLen.SelectedIndex],
+                Container = vfmt,
                 Playlist = info != null && (info.IsPlaylist || (playlist.Visible && playlist.Checked))
             };
         }
@@ -677,6 +686,18 @@ namespace FileConverter
                 }
             }
             catch { return null; }
+        }
+
+        /// MP4, MOV or MKV for videos (remembered).
+        void FormatMenu()
+        {
+            List<MenuPopup.Item> m = new List<MenuPopup.Item>();
+            foreach (string[] f in new[] { new[] { "mp4", "dl_fmt_mp4" }, new[] { "mov", "dl_fmt_mov" }, new[] { "mkv", "dl_fmt_mkv" } })
+            {
+                string k = f[0];
+                m.Add(new MenuPopup.Item { Text = k.ToUpperInvariant() + (vfmt == k ? "  ✓" : ""), Sub = L.T(f[1]), Glyph = Ico.Video, Run = () => { vfmt = k; Settings.Set("YtVFormat", k); btnFormat.Invalidate(); DoLayout(); UpdateSize(); } });
+            }
+            MenuPopup.Show(btnFormat, m, 360);
         }
 
         // ------------------------------------------------------------------ downloads

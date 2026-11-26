@@ -65,7 +65,7 @@ namespace FileConverter
             bReset.Bounds = Theme.Mirror(new Rectangle(pad - Theme.S(8), by + Theme.S(2), rw, Theme.S(32)), W);
             Controls.Add(bReset); Controls.Add(bDone);
             ClientSize = new Size(W, by + Theme.S(36) + pad);
-            Deactivate += (s, e) => Dismiss(false);
+            Deactivate += (s, e) => this.Later(() => Dismiss(false));
             Movable.Make(this, () => Theme.S(46));
         }
 

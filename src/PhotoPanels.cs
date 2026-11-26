@@ -393,7 +393,7 @@ namespace FileConverter
 
         Bitmap Thumb(DocLayer l, Size s)
         {
-            string key = l.Version + "/" + (l.Pixels == null ? 0 : l.Pixels.GetHashCode()) + "/" + (l.Mask == null ? 0 : l.Mask.GetHashCode()) + "/" + s.Width + "/" + Doc.W + "x" + Doc.H + "/" + l.X + "," + l.Y + "," + l.Scale + "," + l.Angle;
+            string key = l.Version + "/" + (l.Pixels == null ? 0 : l.Pixels.GetHashCode()) + "/" + (l.Mask == null ? 0 : l.Mask.GetHashCode()) + "/" + s.Width + "/" + Doc.W + "x" + Doc.H + "/" + l.X + "," + l.Y + "," + l.Scale + "," + l.Stretch + "," + l.Angle;
             KeyValuePair<string, Bitmap> c;
             if (thumbs.TryGetValue(l.Id, out c) && c.Key == key) return c.Value;
             if (c.Value != null) c.Value.Dispose();

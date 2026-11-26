@@ -11,7 +11,7 @@ namespace FileConverter
     {
         Sidebar sidebar;
         List<Page> pages = new List<Page>();
-        ConvertPage convert; StudioPage studio; DownloadPage youtube; InspectorHost inspector; CompressPage compress; RenamePage rename; SettingsPage settings; DuplicatesPage dupes;
+        ConvertPage convert; StudioPage studio; DownloadPage youtube; TransferPage transfer; InspectorHost inspector; CompressPage compress; RenamePage rename; SettingsPage settings; DuplicatesPage dupes;
         InspectPage inspect { get { return inspector.Inspect; } }
         PdfPage pdf { get { return studio.Pdf; } }
         Toast toast;
@@ -46,6 +46,7 @@ namespace FileConverter
             sidebar.Items.Add(new NavItem("nav_inspect", Ico.Search));
             sidebar.Items.Add(new NavItem("nav_dupes", Ico.Copy));
             sidebar.Items.Add(new NavItem("nav_download", Ico.Download) { Section = "nav_sec_web", Badge = () => youtube != null ? youtube.ActiveCount : 0 });
+            sidebar.Items.Add(new NavItem("nav_transfer", Ico.Send) { Badge = () => transfer != null ? transfer.ActiveCount : 0 });
             nav.AddRange(sidebar.Items);
             nav.Add(new NavItem("nav_settings", Ico.Settings));   // at the bottom of the side list, under Activity
             sidebar.Navigate += Go;
@@ -86,8 +87,8 @@ namespace FileConverter
             toast = new Toast();
             convert = new ConvertPage(); studio = new StudioPage(); youtube = new DownloadPage();
             inspector = new InspectorHost(); compress = new CompressPage(); rename = new RenamePage(); settings = new SettingsPage();
-            dupes = new DuplicatesPage();
-            pages.AddRange(new Page[] { convert, studio, compress, rename, inspector, dupes, youtube, settings });
+            dupes = new DuplicatesPage(); transfer = new TransferPage();
+            pages.AddRange(new Page[] { convert, studio, compress, rename, inspector, dupes, youtube, transfer, settings });
             for (int i = 0; i < pages.Count; i++) pages[i].Glyph = nav[i].Glyph;
             inspect.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
             studio.SendToConverter += f => { Go(0); convert.AcceptFiles(new[] { f }); };
@@ -106,6 +107,9 @@ namespace FileConverter
                 if (Settings.Get("KeepInTray", "1") == "1" || StartHidden) Notifier.ShowResident(this, true);
                 DragWheel.Dropped += OnWheelDrop;
                 DragWheel.Apply(this);
+                // File Transfer: PCs on the network find each other, and offers from them bring this window up
+                transfer.WantsAttention += () => { ComeBack(); Go(pages.IndexOf(transfer)); };
+                FtLan.Apply();
                 Watchers.Start(this);
                 if (StartHidden)
                 {
@@ -130,7 +134,7 @@ namespace FileConverter
 
             int start = 0;
             int.TryParse(Settings.Get("LastPage", "0"), out start);
-            if (Settings.Get("PagesV", "") != "9") { start = 0; Settings.Set("PagesV", "9"); }   // page order changed in 1.5 (Duplicates)
+            if (Settings.Get("PagesV", "") != "10") { start = 0; Settings.Set("PagesV", "10"); }   // 1.8.3: File Transfer added   // page order changed in 1.5 (Duplicates)
             if (start < 0 || start >= pages.Count || start == SettingsIndex) start = 0;
             bool hasFiles = files != null && files.Length > 0;
             if (!hasFiles) Go(start);
@@ -139,6 +143,8 @@ namespace FileConverter
 
             SingleInstance.FilesReceived += (paths, v) => BeginInvoke((Action)(() =>
             {
+                // "Send to a friend" from Explorer: its card pops up by the mouse; the window stays where it is
+                if (v == "send" && paths.Length > 0) { transfer.SendFromOutside(paths); return; }
                 if (!Visible) Show();   // it was working in the tray
                 if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
                 Activate();
@@ -269,6 +275,7 @@ namespace FileConverter
                     Ocr.Run(studio.Photos, paths[0], 0, (m, ok) => toast.Show(m, ok, null, null));
                     break;
                 case "inspect": Go(pages.IndexOf(inspector)); inspector.Show(inspect); inspect.AcceptFiles(paths); break;
+                case "send": Go(pages.IndexOf(transfer)); transfer.SendFromOutside(paths); break;
                 default:
                     Go(pages.IndexOf(convert));
                     if (!convert.Busy) convert.AcceptFiles(paths);
@@ -304,12 +311,12 @@ namespace FileConverter
             switch (it.Action)
             {
                 // small windows of their own: Fadi Tools itself stays where it is
-                case "crop": CropWindow.Open(files[0], Cursor.Position, studio); return;
+                case "crop": if (Formats.CategoryOf(Formats.Ext(files[0])) == Category.Video) VideoCropWindow.Open(files[0], Cursor.Position, studio); else CropWindow.Open(files[0], Cursor.Position, studio); return;
                 case "resize": ResizeWindow.Open(files[0], Cursor.Position, studio); return;
                 case "rotate": RotateWindow.Open(files[0], Cursor.Position, studio); return;
                 case "upscale": UpscaleWindow.Open(files[0], Cursor.Position, studio); return;
                 case "trim": TrimWindow.Open(files[0], Cursor.Position, studio); return;
-                case "combine": case "merge": QuickPdf.CombineInBackground(files, studio); return;
+                case "combine": case "merge": PdfMergeWindow.Open(files, Cursor.Position, studio); return;
                 case "joinv": case "joina": MergeWindow.Open(files, Cursor.Position, studio); return;
                 case "compress": CompressWindow.Open(files, Cursor.Position, compress); return;
                 case "edit": ComeBack(); Route(files, "studio"); return;
@@ -320,6 +327,7 @@ namespace FileConverter
                 case "f_compress": ComeBack(); Route(files, "compress"); return;
                 case "f_rename": ComeBack(); Go(pages.IndexOf(rename)); rename.AcceptFiles(files); return;
                 case "f_dupes": ComeBack(); Go(pages.IndexOf(dupes)); dupes.AcceptFiles(files); dupes.Scan(); return;
+                case "send": case "f_send": transfer.SendFromOutside(files); return;   // its own card, by the mouse
                 case "nobg":
                     if (!BgRemover.Ready) { ComeBack(); Route(new[] { files[0] }, "studio"); toast.Show(L.T("wh_nobg_get"), true, null, null); return; }
                     break;
@@ -613,6 +621,7 @@ namespace FileConverter
             add("pal_ocr", "\uE8EF", "ocr copy text from picture image screenshot read scan نسخ نص من صورة لقطة شاشة", () => { Go(pages.IndexOf(studio)); studio.CopyText(); });
             add("pal_rename", "\uE8AC", "rename batch many files names numbers numbered replace إعادة تسمية ملفات أسماء ترقيم", () => { Go(pages.IndexOf(rename)); rename.Browse(); });
             add("pal_vbg", "\uE77B", "remove video background green screen cut out person transparent إزالة خلفية الفيديو شاشة خضراء", () => { Go(pages.IndexOf(studio)); studio.Show(studio.Videos); if (studio.Videos.HasFile) studio.Videos.RemoveVideoBg(); else studio.Videos.Browse(false); });
+            add("pal_vpick", "\uE7C9", "pick click cut out object person thing video track follow segment anything اختيار نقر قص شخص شيء فيديو تتبع", () => { Go(pages.IndexOf(studio)); studio.Show(studio.Videos); if (studio.Videos.HasFile) studio.Videos.PickVideoBg(); else studio.Videos.Browse(false); });
             add("pal_sticker", "\uE899", "sticker whatsapp telegram discord emoji ملصق واتساب تيليجرام ديسكورد", () => { Go(pages.IndexOf(convert)); convert.Browse(); });
             add("pal_pdf_sign", "\uEC87", "sign pdf signature watermark page numbers password lock unlock توقيع علامة مائية ترقيم كلمة مرور قفل", () => { GoPdf(); pdf.StartMode(1, true); });
             add("pal_whatsnew", "\uE789", "what's new changes update version changelog الجديد التغييرات تحديث", () => WhatsNew.Show(this));

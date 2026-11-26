@@ -399,7 +399,7 @@ namespace FileConverter
                 if (Picked != null) Picked(v); Close();
             };
             Controls.Add(search); Controls.Add(rows);
-            Deactivate += (s, e) => Close();
+            Deactivate += (s, e) => this.Later(Close);
             Rebuild();
             rows.ScrollToSelected();
         }

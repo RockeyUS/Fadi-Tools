@@ -11,7 +11,9 @@ using System.Threading;
 
 namespace FileConverter
 {
-    /// Removes the background from a video, frame by frame, with the same AI as photos (it runs on this PC).
+    /// Removes the background from a video with Robust Video Matting (made for video: it remembers the earlier frames,
+    /// so edges don't flicker), or, when only the photo remover is here, frame by frame with it; or keeps just the thing
+    /// picked by clicking (Sam.Track). Runs on this PC.
     /// mode: 0 transparent (WebM), 1 a color, 2 the video's own background blurred, 3 a picture.
     public static class VideoBg
     {
@@ -27,11 +29,12 @@ namespace FileConverter
         public static double Fps(MediaInfo mi) { return Math.Max(1, Math.Min(24, mi != null && mi.Fps > 0 ? mi.Fps : 24)); }
 
         public static void Run(string input, double start, double length, int mode, Color color, string picture, string output,
-                               Action<int, int> progress, Func<bool> cancelled)
+                               Action<int, int> progress, Func<bool> cancelled, Sam.Track pick = null)
         {
             string ff = Tools.FFmpeg;
             if (ff == null) throw new UserError(L.T("err_need_ff"));
-            if (!BgRemover.Ready) throw new UserError(L.T("vbg_need_ai"));
+            bool rvm = pick == null && Rvm.Ready;
+            if (pick == null && !rvm && !BgRemover.Ready) throw new UserError(L.T("vbg_need_ai"));
             MediaInfo mi = Media.Probe(input);
             if (mi == null || !mi.HasVideo) throw new UserError(L.T("vbg_no_video"));
             Size sz = OutSize(mi.Width, mi.Height);
@@ -72,6 +75,7 @@ namespace FileConverter
                 byte[] buf = new byte[frameBytes];
                 float[] prev = null;
                 int n = 0;
+                Rvm.Matter matter = rvm ? new Rvm.Matter(W, H) : null;
                 using (Bitmap frame = new Bitmap(W, H, PixelFormat.Format32bppArgb))
                 {
                     while (true)
@@ -80,17 +84,23 @@ namespace FileConverter
                         int got = 0, r;
                         while (got < frameBytes && (r = inS.Read(buf, got, frameBytes - got)) > 0) got += r;
                         if (got < frameBytes) break;
-                        Put(frame, buf);
-                        byte[] mask = BgRemover.Mask(frame);
-                        // a little of the last frame's mask: edges flicker less
-                        float[] m = new float[mask.Length];
-                        for (int i = 0; i < m.Length; i++)
+                        float[] m;
+                        if (pick != null) m = pick.Alpha(n, W, H);   // the thing picked by clicking, followed through the clip
+                        else if (matter != null) m = matter.Next(buf);   // made for video: steady from frame to frame
+                        else
                         {
-                            float a = mask[i] / 255f;
-                            a = Math.Max(0, Math.Min(1, (a - 0.08f) / 0.62f));
-                            m[i] = prev == null ? a : a * 0.7f + prev[i] * 0.3f;
+                            Put(frame, buf);
+                            byte[] mask = BgRemover.Mask(frame);
+                            // a little of the last frame's mask: edges flicker less
+                            m = new float[mask.Length];
+                            for (int i = 0; i < m.Length; i++)
+                            {
+                                float a = mask[i] / 255f;
+                                a = Math.Max(0, Math.Min(1, (a - 0.08f) / 0.62f));
+                                m[i] = prev == null ? a : a * 0.7f + prev[i] * 0.3f;
+                            }
+                            prev = m;
                         }
-                        prev = m;
                         Compose(buf, W, H, m, mode, color, pic);
                         outS.Write(buf, 0, frameBytes);
                         n++;

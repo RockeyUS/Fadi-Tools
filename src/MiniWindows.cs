@@ -19,7 +19,7 @@ namespace FileConverter
         [DllImport("gdi32.dll")] static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
         [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
 
-        protected readonly Btn closeBtn;
+        protected readonly Btn closeBtn, minBtn;
         readonly Func<string> title;
         readonly string glyph;
         readonly System.Windows.Forms.Timer anim = new System.Windows.Forms.Timer { Interval = 15 };
@@ -40,7 +40,11 @@ namespace FileConverter
             Movable.Make(this, () => Head);
             closeBtn = new Btn(() => "", Ico.Close, BtnKind.Ghost) { Surface = Surface.Card, GlyphSize = 9f, AccessibleName = L.T("close") };
             closeBtn.Click += (s, e) => Dismiss();
-            Controls.Add(closeBtn);
+            // these windows stay on top: they can be put away to the taskbar (and back) while their work goes on
+            minBtn = new Btn(() => "", "\uE921", BtnKind.Ghost) { Surface = Surface.Card, GlyphSize = 8f, AccessibleName = L.T("mw_minimize") };
+            minBtn.Click += (s, e) => { try { WindowState = FormWindowState.Minimized; } catch { } };
+            minBtn.MouseEnter += (s, e) => { if (tip == null) tip = new ToolTip(); tip.SetToolTip(minBtn, L.T("mw_minimize")); };
+            Controls.Add(closeBtn); Controls.Add(minBtn);
             anim.Tick += (s, e) => Step();
         }
 
@@ -49,7 +53,9 @@ namespace FileConverter
         {
             int b = Theme.S(32);
             closeBtn.Bounds = Theme.Mirror(new Rectangle(ClientSize.Width - Theme.S(12) - b, (Head - b) / 2, b, b), ClientSize.Width);
+            minBtn.Bounds = Theme.Mirror(new Rectangle(ClientSize.Width - Theme.S(16) - b * 2, (Head - b) / 2, b, b), ClientSize.Width);
         }
+        ToolTip tip;
 
         protected override void OnResize(EventArgs e)
         {
@@ -65,7 +71,8 @@ namespace FileConverter
             try { Region = Region.FromHrgn(CreateRoundRectRgn(0, 0, Width + 1, Height + 1, r, r)); } catch { }
         }
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); SetRegion(); }
-        protected override CreateParams CreateParams { get { CreateParams cp = base.CreateParams; cp.ClassStyle |= 0x20000; return cp; } }   // a soft shadow
+        // a soft shadow; and its taskbar button minimizes and brings it back (WS_MINIMIZEBOX)
+        protected override CreateParams CreateParams { get { CreateParams cp = base.CreateParams; cp.ClassStyle |= 0x20000; cp.Style |= 0x20000; return cp; } }
 
         /// Opens centred on a point of the screen (the drop), kept inside the screen.
         public void ShowNear(Point at)
@@ -125,7 +132,7 @@ namespace FileConverter
             Rectangle ic = new Rectangle(Pad, (Head - Theme.S(30)) / 2, Theme.S(30), Theme.S(30));
             Theme.FillRound(g, Theme.Mirror(ic, W), Theme.S(9), Theme.AccentSoft);
             VectorIcons.Draw(g, glyph, 10f, Theme.AccentColor, Theme.Mirror(ic, W));
-            Theme.Text(g, title(), Theme.F(11f, FontStyle.Bold), Theme.Ink, Theme.Mirror(new Rectangle(ic.Right + Theme.S(10), 0, W - ic.Right - Theme.S(60), Head), W), Align.Start, true, false, true);
+            Theme.Text(g, title(), Theme.F(11f, FontStyle.Bold), Theme.Ink, Theme.Mirror(new Rectangle(ic.Right + Theme.S(10), 0, W - ic.Right - Theme.S(96), Head), W), Align.Start, true, false, true);
             PaintBody(g);
         }
         protected virtual void PaintBody(Graphics g) { }
@@ -391,6 +398,15 @@ namespace FileConverter
             if (shown != null) shown.Dispose();
             shown = b; ImageSize = full; Loading = false;
             crop = drawn = new RectangleF(0, 0, full.Width, full.Height);
+            Invalidate();
+        }
+
+        /// A new picture of the same thing (another moment of a video): the frame stays where it is.
+        public void SetShown(Bitmap b)
+        {
+            if (b == null) return;
+            if (shown != null) shown.Dispose();
+            shown = b; Loading = false;
             Invalidate();
         }
 

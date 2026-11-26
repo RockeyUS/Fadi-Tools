@@ -68,6 +68,51 @@ namespace FileConverter
             });
         }
 
+        /// Click-to-pick needs its AI models: asks before the one-time download (about 37 MB).
+        bool PickOk()
+        {
+            if (Sam.Ready) return true;
+            return Ask.Confirm(FindForm(), L.T("pick_dl_q_t"), L.T("pick_dl_q", (Sam.Needed + (1 << 20) - 1) >> 20), L.T("install"), L.T("not_now"), AskKind.Info);
+        }
+
+        /// Click to pick what to keep on a photo layer: the rest is hidden (a mask, so it can be painted back).
+        void PickLayer()
+        {
+            DocLayer l = doc == null ? null : doc.Cur;
+            if (l == null || l.Kind != LayerKind.Image || l.Pixels == null || busyJob != null || !PickOk()) return;
+            byte[] m;
+            using (Bitmap copy = new Bitmap(l.Pixels))
+            using (PickForm f = new PickForm(copy, "pick_title", "pick_sub_photo", null))
+            {
+                f.StartPosition = FormStartPosition.CenterParent;
+                if (f.ShowDialog(FindForm()) != DialogResult.OK) { LayoutProps(); return; }
+                m = f.MaskFor(copy.Width, copy.Height);
+            }
+            if (m == null || doc == null || !doc.Layers.Contains(l)) return;
+            Change("ps_h_pick");
+            l.Mask = m; l.Version++;
+            AfterChange(true);
+            ShowToast(L.T("ps_pick_done"), true, null, null);
+        }
+
+        /// Click to pick: the picked thing becomes the selection (of the whole picture as it looks).
+        void PickSelection()
+        {
+            if (doc == null || busyJob != null || !PickOk()) return;
+            byte[] m;
+            using (Bitmap flat = doc.Flatten())
+            using (PickForm f = new PickForm(flat, "pick_title", "pick_sub_sel", null))
+            {
+                f.StartPosition = FormStartPosition.CenterParent;
+                if (f.ShowDialog(FindForm()) != DialogResult.OK) { LayoutProps(); return; }
+                m = f.MaskFor(flat.Width, flat.Height);
+            }
+            if (m == null || doc == null) return;
+            if (canvas.Tool != PhotoTool.Marquee && canvas.Tool != PhotoTool.Ellipse && canvas.Tool != PhotoTool.Lasso && canvas.Tool != PhotoTool.Wand) SetTool(PhotoTool.Marquee);
+            canvas.ApplySel(m, SelOp.New, "ps_h_pick");
+            ShowToast(L.T("ps_pick_sel_done"), true, null, null);
+        }
+
         /// Remove background on a photo layer: what isn't the subject is hidden (a mask, so it can be painted back).
         void RemoveLayerBackground()
         {
@@ -454,7 +499,7 @@ namespace FileConverter
             Rectangle r = Selection.Bounds(doc.Sel, doc.W, doc.H);
             if (r.IsEmpty) return;
             Change("ps_h_crop");
-            doc.Crop(r);
+            doc.Crop(r); doc.GrowFrom = Rectangle.Empty;
             doc.Sel = null;
             canvas.Fit();
             AfterChange(true);
@@ -465,13 +510,43 @@ namespace FileConverter
             if (doc == null) return;
             RectangleF c = canvas.CropRect;
             Rectangle r = Rectangle.Round(c);
-            r.Intersect(new Rectangle(0, 0, doc.W, doc.H));
-            if (r.Width < 2 || r.Height < 2) return;
-            if (r.Width == doc.W && r.Height == doc.H) { SetTool(PhotoTool.Move); return; }
-            Change("ps_h_crop");
-            doc.Crop(r);
+            // past the canvas is allowed: the canvas grows there
+            if (r.Width < 2 || r.Height < 2 || r.Width > PhotoCanvas.MaxSide || r.Height > PhotoCanvas.MaxSide) return;
+            if (r == new Rectangle(0, 0, doc.W, doc.H)) { SetTool(PhotoTool.Move); return; }
+            Change(r.Left < 0 || r.Top < 0 || r.Right > doc.W || r.Bottom > doc.H ? "ps_h_grow" : "ps_h_crop");
+            doc.Crop(r); doc.GrowFrom = Rectangle.Empty;
             canvas.CropRect = RectangleF.Empty;
             SetTool(PhotoTool.Move);
+            canvas.Fit();
+            AfterChange(true);
+        }
+
+        /// Whether some of the picture is outside the canvas (and so isn't seen or saved).
+        bool SticksOut { get { return doc != null && doc.AllBounds() != new Rectangle(0, 0, doc.W, doc.H); } }
+
+        /// Makes the canvas big enough for everything on it (the new space is see-through).
+        void ShowAll()
+        {
+            if (doc == null) return;
+            Rectangle r = doc.AllBounds();
+            if (r == new Rectangle(0, 0, doc.W, doc.H)) return;
+            if (r.Width > PhotoCanvas.MaxSide || r.Height > PhotoCanvas.MaxSide) { ShowToast(L.T("ps_too_big", PhotoCanvas.MaxSide), false, null, null); return; }
+            if (canvas.Tool == PhotoTool.Crop) { canvas.CropRect = r; canvas.Invalidate(); return; }   // shown in the frame first
+            Change("ps_h_grow");
+            doc.Crop(r); doc.GrowFrom = Rectangle.Empty;
+            canvas.Fit();
+            AfterChange(true);
+            ShowToast(L.T("ps_grown", r.Width, r.Height), true, null, null);
+        }
+
+        /// The canvas goes back to the size and place it had before it was made bigger or smaller.
+        void BackToOriginal()
+        {
+            if (doc == null || !doc.SizeChanged) return;
+            Change("ps_h_grow");
+            doc.BackToOriginal(); doc.GrowFrom = Rectangle.Empty;
+            canvas.CropRect = RectangleF.Empty;
+            if (canvas.Tool == PhotoTool.Crop) SetTool(PhotoTool.Move);
             canvas.Fit();
             AfterChange(true);
         }
@@ -497,6 +572,8 @@ namespace FileConverter
             }
             if (l != null) LayerItems(m, l);
             m.Add(new MenuPopup.Item { Divider = true });
+            if (SticksOut) m.Add(new MenuPopup.Item { Text = L.T("ps_show_all_canvas"), Sub = L.T("ps_show_all_canvas_sub"), Glyph = Ico.Resize, Run = ShowAll });
+            if (doc.SizeChanged) m.Add(new MenuPopup.Item { Text = L.T("ps_orig_size", doc.Original.Width, doc.Original.Height), Glyph = Ico.Refresh, Run = BackToOriginal });
             m.Add(new MenuPopup.Item { Text = L.T("ocr_btn"), Glyph = "", Run = CopyText });
             m.Add(new MenuPopup.Item { Text = L.T("ps_paste"), Glyph = Ico.Paste, Shortcut = "Ctrl+V", Run = Paste, Disabled = !Clipboard.ContainsImage() });
             MenuPopup.ShowAt(canvas, screen, m);
@@ -519,6 +596,7 @@ namespace FileConverter
             if (l.Kind == LayerKind.Text || l.Kind == LayerKind.Image)
                 m.Add(new MenuPopup.Item { Text = L.T("ps_rasterize"), Sub = L.T("ps_rasterize_sub"), Glyph = Ps.Brush, Run = () => { Change("ps_h_rasterize"); doc.Rasterize(doc.Current); AfterChange(true); } });
             if (l.Kind == LayerKind.Image) m.Add(new MenuPopup.Item { Text = L.T(BgRemover.Ready ? "ps_remove_bg" : "bg_download"), Glyph = Ps.Subject, Run = RemoveLayerBackground });
+            if (l.Kind == LayerKind.Image) m.Add(new MenuPopup.Item { Text = L.T("ps_pick_layer"), Glyph = "\uE7C9", Run = PickLayer });
             if (l.Mask != null) m.Add(new MenuPopup.Item { Text = L.T("ps_show_all"), Glyph = Ico.Refresh, Run = () => { Change("ps_h_mask"); l.Mask = null; l.Version++; AfterChange(true); } });
             m.Add(new MenuPopup.Item { Text = L.T(l.Locked ? "ps_unlock" : "ps_lock"), Glyph = l.Locked ? Ps.Unlock : Ps.Lock, Run = () => { Change("ps_h_lock"); l.Locked = !l.Locked; AfterChange(true); } });
             m.Add(new MenuPopup.Item { Divider = true });

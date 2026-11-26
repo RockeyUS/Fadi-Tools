@@ -41,7 +41,7 @@ namespace FileConverter
             rows.GlyphOf = c => GlyphOf != null ? GlyphOf(c) : null;
             rows.Changed += () => Refresh2();
             Controls.Add(rows); Controls.Add(clear);
-            Deactivate += (s, e) => Dismiss();
+            Deactivate += (s, e) => this.Later(Dismiss);
             poll.Tick += (s, e) => { if (Activity.Version != seen) Refresh2(); };
             poll.Start();
         }

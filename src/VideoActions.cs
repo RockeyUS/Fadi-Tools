@@ -24,7 +24,62 @@ namespace FileConverter
                 case "text": AddText(); break;
                 case "captions": MakeCaptions(); break;
                 case "subs": ImportSubs(); break;
+                case "voice": ReadAloud(); break;
             }
+        }
+
+        /// Text to speech: the selected title's (or caption's) words to start with; the voice lands on a sound track
+        /// at the playhead.
+        void ReadAloud()
+        {
+            VClip c = Sel;
+            string start = "";
+            if (c != null && c.Text != null) start = c.Text.Text ?? "";
+            else if (c != null && c.Cues != null) { Cue q = c.Cues.Find(x => Playhead >= x.Start && Playhead < x.End) ?? (c.Cues.Count > 0 ? c.Cues[0] : null); if (q != null) start = q.Text; }
+            using (TtsForm f = new TtsForm(start, Path.Combine(ProjectsDir, "Media")))
+            {
+                f.StartPosition = FormStartPosition.CenterParent;
+                if (f.ShowDialog(FindForm()) != DialogResult.OK || f.Result == null || !File.Exists(f.Result)) return;
+                AddMedia(new[] { f.Result }, VTrackKind.Audio, Playhead);
+            }
+        }
+
+        /// Every caption read aloud, each voice placed at its caption's time on a sound track.
+        void ReadCaptions()
+        {
+            VClip c = Sel;
+            if (c == null || c.Cues == null || c.Cues.Count == 0 || busyJob != null || exporting) return;
+            List<Cue> cues = c.Cues.ConvertAll(q => q.Copy());
+            List<KeyValuePair<string, double>> got;
+            using (TtsForm f = new TtsForm("", Path.Combine(ProjectsDir, "Media"), cues))
+            {
+                f.StartPosition = FormStartPosition.CenterParent;
+                if (f.ShowDialog(FindForm()) != DialogResult.OK || f.Results.Count == 0) return;
+                got = new List<KeyValuePair<string, double>>(f.Results);
+            }
+            StopPlay();
+            loading = true; busyJob = L.T("loading_media"); InvalidateBar();
+            Thread t = new Thread(() =>
+            {
+                List<KeyValuePair<MediaSource, double>> srcs = new List<KeyValuePair<MediaSource, double>>();
+                foreach (KeyValuePair<string, double> kv in got) { MediaSource s = Source(kv.Key, VKind.Video); if (s != null) srcs.Add(new KeyValuePair<MediaSource, double>(s, kv.Value)); }
+                Ui(() =>
+                {
+                    loading = false; busyJob = null; InvalidateBar();
+                    if (srcs.Count == 0) return;
+                    Change("vs_h_voice");
+                    // all on one sound track when they fit (a voice that runs into the next goes on another)
+                    foreach (KeyValuePair<MediaSource, double> kv in srcs)
+                    {
+                        VClip v = new VClip { Kind = VKind.Audio, Src = kv.Key, In = 0, Out = kv.Key.Info.Duration, At = Math.Max(0, kv.Value) };
+                        P.TrackFor(VTrackKind.Audio, v.At, v.Length).Clips.Add(v);
+                    }
+                    P.Layout();
+                    AfterChange(true);
+                    ShowToast(L.T("vs_caps_voiced", srcs.Count), true, null, null);
+                });
+            });
+            t.IsBackground = true; t.Start();
         }
 
         void PickInto(VTrackKind kind, string title, bool pictures)
@@ -204,9 +259,11 @@ namespace FileConverter
             m.Add(new MenuPopup.Item { Text = L.T("vs_duplicate"), Glyph = Ico.Copy, Shortcut = "Ctrl+D", Run = DuplicateSelected });
             if (c.Kind == VKind.Video && c.HasSound) m.Add(new MenuPopup.Item { Text = L.T("vs_detach"), Glyph = "", Run = DetachAudio });
             if (c.Kind == VKind.Video) m.Add(new MenuPopup.Item { Text = L.T("vs_remove_bg"), Glyph = Ps.Subject, Run = RemoveVideoBg });
+            if (c.Kind == VKind.Video) m.Add(new MenuPopup.Item { Text = L.T("vs_pick"), Sub = L.T("vs_pick_sub"), Glyph = "\uE7C9", Run = PickVideoBg });
             if (c.Src != null) m.Add(new MenuPopup.Item { Text = L.T("vs_replace"), Glyph = Ico.Refresh, Run = ReplaceMedia });
             if (c.Kind == VKind.Image && P.TrackOf(c).Kind == VTrackKind.Main) m.Add(new MenuPopup.Item { Text = L.T("vs_edit_photo"), Glyph = Ico.Edit, Run = () => { if (OpenImage != null) OpenImage(c.File); } });
             if (c.Cues != null) m.Add(new MenuPopup.Item { Text = L.T("vs_caps_srt"), Glyph = Ico.Save, Run = ExportSrt });
+            if (c.Cues != null && c.Cues.Count > 0) m.Add(new MenuPopup.Item { Text = L.T("vs_caps_voice"), Sub = L.T("vs_caps_voice_sub"), Glyph = Ico.Volume, Run = ReadCaptions });
             m.Add(new MenuPopup.Item { Divider = true });
             m.Add(new MenuPopup.Item { Text = L.T("vs_delete"), Glyph = Ico.Delete, Shortcut = "Del", Danger = true, Run = DeleteSelected });
             MenuPopup.ShowAt(timeline, screen, m);
@@ -328,17 +385,59 @@ namespace FileConverter
         }
 
         // ------------------------------------------------------------------ removing a video's background (on this PC)
-        public void RemoveVideoBg()
+        VClip BgClip()
         {
             VClip c = Sel;
             if (c == null) c = P.Main.Clips.Find(x => x.Kind == VKind.Video && Playhead >= x.At && Playhead < x.End) ?? P.Main.Clips.Find(x => x.Kind == VKind.Video);
-            if (c == null || c.Kind != VKind.Video || c.Src == null || !c.Src.Info.HasVideo) { ShowToast(L.T("vbg_no_video"), false, null, null); return; }
-            if (busyJob != null || exporting) return;
+            if (c == null || c.Kind != VKind.Video || c.Src == null || !c.Src.Info.HasVideo) { ShowToast(L.T("vbg_no_video"), false, null, null); return null; }
+            return c;
+        }
+
+        /// Click to pick what to keep on the frame under the playhead; the pick then follows it through the clip.
+        public void PickVideoBg()
+        {
+            VClip c = BgClip();
+            if (c == null || busyJob != null || exporting) return;
+            if (!Sam.Ready && !Ask.Confirm(FindForm(), L.T("pick_dl_q_t"), L.T("pick_dl_q", (Sam.Needed + (1 << 20) - 1) >> 20), L.T("install"), L.T("not_now"), AskKind.Info)) return;
+            StopPlay();
+            double at = Playhead >= c.At && Playhead < c.End ? (Playhead - c.At) * c.Speed : 0;
+            at = Math.Max(0, Math.Min(c.Out - c.In - 0.05, at));
+            List<PickPoint> pts;
+            Bitmap b = null;
+            try
+            {
+                Cursor = Cursors.WaitCursor;
+                using (Image fr = Media.Frame(c.File, c.In + at, Math.Min(1080, Math.Max(360, c.Src.Info.Height)))) if (fr != null) b = new Bitmap(fr);
+            }
+            catch { }
+            finally { Cursor = Cursors.Default; }
+            if (b == null) { ShowToast(L.T("vbg_failed", "?"), false, null, null); return; }
+            using (b)
+            using (PickForm f = new PickForm(b, "pick_title", "pick_sub_video", null))
+            {
+                f.StartPosition = FormStartPosition.CenterParent;
+                if (f.ShowDialog(FindForm()) != DialogResult.OK) return;
+                pts = new List<PickPoint>(f.Points);
+            }
+            BgJob(c, pts, at);
+        }
+
+        public void RemoveVideoBg()
+        {
+            VClip c = BgClip();
+            if (c == null || busyJob != null || exporting) return;
             double vfps = VideoBg.Fps(c.Src.Info);
             int frames2 = Math.Max(1, (int)Math.Ceiling((c.Out - c.In) * vfps));
-            int minutes = Math.Max(1, (int)Math.Round(frames2 * 1.6 / 60));
-            string msg = L.T("vs_bg_msg", Theme.Time(c.Out - c.In, false), minutes) + (BgRemover.Ready ? "" : "\n\n" + L.T("vbg_need_dl"));
+            // the video matting AI is quicker per frame than the photo one was
+            int minutes = Math.Max(1, (int)Math.Round(frames2 * 0.35 / 60));
+            string msg = L.T("vs_bg_msg", Theme.Time(c.Out - c.In, false), minutes) + (Rvm.Ready ? "" : "\n\n" + L.T("vbg_need_dl_rvm"));
             if (!Ask.Confirm(FindForm(), L.T("vbg_title"), msg, L.T("vbg_start"), L.T("cancel"), AskKind.Info)) return;
+            BgJob(c, null, 0);
+        }
+
+        /// The background removal itself (pick: the clicks, at: where they were made, seconds into the clip).
+        void BgJob(VClip c, List<PickPoint> pick, double at)
+        {
             string outp = Path.Combine(ProjectsDir, "Media", Path.GetFileNameWithoutExtension(c.File) + " " + L.T("vbg_suffix") + " " + DateTime.Now.ToString("HHmmss") + ".webm");
             try { Directory.CreateDirectory(Path.GetDirectoryName(outp)); } catch { }
             string input = c.File; double start = c.In, len = c.Out - c.In;
@@ -350,18 +449,41 @@ namespace FileConverter
                 string err = null;
                 try
                 {
-                    if (!BgRemover.Ready)
+                    Sam.Track track = null;
+                    if (pick != null)
+                    {
+                        if (!Sam.Ready)
+                        {
+                            Activity.Update(job, -1, L.T("vbg_dl"));
+                            Sam.Install((f, label) => Activity.Update(job, f * 0.05, label), () => volatile_stop);
+                        }
+                        MediaInfo mi = c.Src.Info;
+                        double fps = VideoBg.Fps(mi);
+                        int total = Math.Max(1, (int)Math.Ceiling(len * fps));
+                        Size sz = VideoBg.OutSize(mi.Width, mi.Height);
+                        track = Sam.Track.Build(input, start, len, fps, total, sz.Width, sz.Height, pick, at, (n, tot) =>
+                        {
+                            Activity.Update(job, 0.7 * n / tot, L.T("pick_following") + "  " + n + " / " + tot);
+                            Ui(() => { busyJob = L.T("pick_following") + "  " + (n * 100 / Math.Max(1, tot)) + "%"; InvalidateBar(); });
+                        }, () => volatile_stop || Tools.ShuttingDown);
+                    }
+                    else if (!Rvm.Ready)
                     {
                         Activity.Update(job, -1, L.T("vbg_dl"));
-                        BgRemover.Install((f, label) => Activity.Update(job, f * 0.1, label), () => volatile_stop);
+                        Rvm.Install((f, label) => Activity.Update(job, f * 0.1, label), () => volatile_stop);
                         if (volatile_stop) throw new OperationCanceledException();
-                        if (!BgRemover.Ready) throw new UserError(L.T("vbg_need_ai"));
+                        if (!Rvm.Ready) throw new UserError(L.T("vbg_need_ai"));
                     }
-                    VideoBg.Run(input, start, len, 0, Color.Black, null, outp, (n, total) =>
+                    double from = track != null ? 0.7 : 0, part = 1 - from;
+                    try
                     {
-                        Activity.Update(job, n / (double)total, n + " / " + total);
-                        Ui(() => { busyJob = L.T("vbg_job") + "  " + (n * 100 / Math.Max(1, total)) + "%"; InvalidateBar(); });
-                    }, () => volatile_stop || Tools.ShuttingDown);
+                        VideoBg.Run(input, start, len, 0, Color.Black, null, outp, (n, total) =>
+                        {
+                            Activity.Update(job, from + part * n / (double)total, n + " / " + total);
+                            Ui(() => { busyJob = L.T("vbg_job") + "  " + (int)((from + part * n / Math.Max(1, total)) * 100) + "%"; InvalidateBar(); });
+                        }, () => volatile_stop || Tools.ShuttingDown, track);
+                    }
+                    finally { if (track != null) track.Dispose(); }
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex) { err = ex.Message; }

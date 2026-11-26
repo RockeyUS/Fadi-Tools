@@ -53,6 +53,8 @@ namespace FileConverter
             { '\uF43F', "M3 17L9 11L13 15L21 7M15 7H21V13" },    // curves / levels
             { '\uE74F', "M11 5L6 9H2V15H6L11 19ZM22 9L16 15M16 9L22 15" },    // mute
             { '\uF440', "M12 3L21 12L12 21L3 12Z" },    // keyframe
+            { '\uF450', "M22 2L11 13M22 2L15 22L11 13L2 9Z" },    // send (paper plane): File Transfer
+            { '\uF451', "R2 3 20 13 2M8 21H16M12 16V21" },    // a PC (File Transfer: PCs on the network)
             { '\uF441', "M6 3V11a6 6 0 0 0 12 0V3M6 3H10V11a2 2 0 0 0 4 0V3H18M6 7H10M14 7H18" },    // snap (magnet)
             { '\uF443', "R3 5 18 14 2M7 9H10M7 9V12M17 15H14M17 15V12" },    // aspect ratio
             { '\uF444', "M12 14L16 8M3.3 18A10 10 0 1 1 20.7 18" },    // speed

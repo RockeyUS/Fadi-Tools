@@ -58,12 +58,20 @@ namespace FileConverter
         /// Downloads the runtime (~7 MB) and the model (~170 MB). progress: 0..1
         public static void Install(Action<double, string> progress, Func<bool> cancelled)
         {
+            InstallRuntime(f => { if (progress != null) progress(0.04 * f, L.T("bg_dl_engine")); }, cancelled);
+            InstallModel(progress, cancelled);
+        }
+
+        /// Just the AI runtime (about 7 MB): the video background remover and the click-to-pick cut-out need only this
+        /// and their own (smaller) models.
+        public static void InstallRuntime(Action<double> progress, Func<bool> cancelled)
+        {
             try { File.Delete(RemoveMark); } catch { }
             Directory.CreateDirectory(Dir);
             if (!File.Exists(RuntimePath))
             {
                 string zip = Path.Combine(Dir, "ort.zip");
-                Net.Download(RuntimeZipUrl, zip, (d, t) => { if (progress != null) progress(t > 0 ? 0.04 * d / t : 0, L.T("bg_dl_engine")); }, cancelled);
+                Net.Download(RuntimeZipUrl, zip, (d, t) => { if (progress != null) progress(t > 0 ? d / (double)t : 0); }, cancelled);
                 using (System.IO.Compression.ZipArchive z = System.IO.Compression.ZipFile.OpenRead(zip))
                     foreach (System.IO.Compression.ZipArchiveEntry e in z.Entries)
                         if (e.Name.Equals("onnxruntime.dll", StringComparison.OrdinalIgnoreCase))
@@ -71,6 +79,10 @@ namespace FileConverter
                 try { File.Delete(zip); } catch { }
                 if (!File.Exists(RuntimePath)) throw new Exception("onnxruntime.dll not found in the download");
             }
+        }
+
+        static void InstallModel(Action<double, string> progress, Func<bool> cancelled)
+        {
             if (!File.Exists(ModelPath) || new FileInfo(ModelPath).Length < 1000000)
             {
                 string tmp = ModelPath + ".part";

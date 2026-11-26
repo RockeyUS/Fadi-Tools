@@ -487,7 +487,7 @@ namespace FileConverter
     /// Icon glyphs from Segoe MDL2 Assets (built into Windows 10).
     public static class Ico
     {
-        public const string Crop = "\uF406", Upscale = "\uF409", Trim = "\uF40A", Combine = "\uF40B", FlipH = "\uF40C", FlipV = "\uF40D", Scale = "\uF40E", Watch = "\uF40F", Recipe = "\uF410", Convert = "", Cut = "", Download = "", Search = "", Photo = "",
+        public const string Crop = "\uF406", Upscale = "\uF409", Trim = "\uF40A", Combine = "\uF40B", FlipH = "\uF40C", FlipV = "\uF40D", Scale = "\uF40E", Watch = "\uF40F", Recipe = "\uF410", Send = "\uF450", Pc = "\uF451", Convert = "", Cut = "", Download = "", Search = "", Photo = "",
             Settings = "", Sun = "", Moon = "", Globe = "", Add = "", Folder = "",
             FolderOpen = "", Delete = "", Close = "", Play = "", Pause = "", Paste = "",
             Link = "", Check = "", Error = "", Info = "", Music = "", Video = "",

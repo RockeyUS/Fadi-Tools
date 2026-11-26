@@ -307,7 +307,7 @@ namespace FileConverter
             double x = lx - l.Pixels.Width / 2.0, y = ly - l.Pixels.Height / 2.0;
             if (l.FlipX) x = -x;
             if (l.FlipY) y = -y;
-            x *= l.Scale; y *= l.Scale;
+            x *= l.Scale; y *= l.ScaleY;
             double a = l.Angle * Math.PI / 180, c = Math.Cos(a), s = Math.Sin(a);
             return new PointF((float)(l.X + x * c - y * s), (float)(l.Y + x * s + y * c));
         }

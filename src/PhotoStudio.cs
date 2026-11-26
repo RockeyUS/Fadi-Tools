@@ -253,7 +253,12 @@ namespace FileConverter
             UpdateUndo();
             InvalidateBar();
             if (structure) { LoadProps(); LayoutProps(); }
-            else SyncTransformFields();
+            else
+            {
+                SyncTransformFields();
+                // moved or sized past the canvas edge (or back), or the canvas grew: the panel changes with it
+                if (SticksOut != propsStickOut || doc.SizeChanged != propsSized) LayoutProps();
+            }
         }
 
         void Sync() { if (doc == null) return; if (LayersH() != lastLH) DoLayout(); layers.Refresh2(); layers.Reveal(); history.Invalidate(); UpdateUndo(); LoadProps(); LayoutProps(); canvas.Redraw(); InvalidateBar(); }

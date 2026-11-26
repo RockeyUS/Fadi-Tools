@@ -14,6 +14,18 @@ namespace FileConverter
         /// glyph, title key, text key
         public static readonly string[][] Items =
         {
+            // 1.9.0
+            new[] { Ico.Send, "wn_ft183_t", "wn_ft183_d" },
+            new[] { Ico.Combine, "wn_pdf183_t", "wn_pdf183_d" },
+            new[] { Ico.Crop, "wn_vcrop183_t", "wn_vcrop183_d" },
+            new[] { Ico.Trim, "wn_trim183_t", "wn_trim183_d" },
+            new[] { Ico.Settings, "wn_key183_t", "wn_key183_d" },
+            new[] { Ps.Subject, "wn_vbg183_t", "wn_vbg183_d" },
+            new[] { "\uE7C9", "wn_pick183_t", "wn_pick183_d" },
+            new[] { Ico.Volume, "wn_tts183_t", "wn_tts183_d" },
+            new[] { Ico.Download, "wn_dlfmt190_t", "wn_dlfmt190_d" },
+            new[] { Ico.Resize, "wn_canvas190_t", "wn_canvas190_d" },
+            new[] { Ico.Play, "wn_play190_t", "wn_play190_d" },
             // 1.8.2
             new[] { Ico.Refresh, "wn_upd182_t", "wn_upd182_d" },
             // 1.8.1

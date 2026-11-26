@@ -445,6 +445,18 @@ namespace FileConverter
             return job;
         }
 
+        public static string CodecsFor(string ext, MediaInfo mi) { return Codecs(ext, mi); }
+        /// Just the sound part of what Codecs uses for a video file of this type.
+        public static string AudioCodecFor(string ext)
+        {
+            string all = Codecs(ext, new MediaInfo { HasVideo = true, HasAudio = true });
+            int i = all.IndexOf("-c:a");
+            if (i < 0) return "-c:a aac -b:a 192k";
+            string a = all.Substring(i);
+            int m = a.IndexOf(" -movflags"); if (m >= 0) a = a.Substring(0, m);
+            return a;
+        }
+
         static string Codecs(string ext, MediaInfo mi)
         {
             string a;

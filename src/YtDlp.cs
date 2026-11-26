@@ -47,6 +47,9 @@ namespace FileConverter
         public int GifWidth = 480;
         public int GifSeconds = 10;        // 0 = whole clip
         public bool Playlist;
+        /// Videos: mp4 and mov are made H.264 + AAC (plays everywhere: phones, WhatsApp, iPhone, editors), converting
+        /// only when the site's own copy isn't; mkv keeps the site's own picture and sound as they are.
+        public string Container = "mp4";
     }
 
     public class YtProgress
@@ -339,7 +342,52 @@ namespace FileConverter
                 }
                 finally { try { Directory.Delete(tmp, true); } catch { } }
             }
-            return RunYtDlp(info.Url, opt, outDir, expected, progress, cancelled, opt.Playlist);
+            List<string> files = RunYtDlp(info.Url, opt, outDir, expected, progress, cancelled, opt.Playlist);
+            if (opt.Mode == SaveAs.Video) for (int i = 0; i < files.Count; i++) files[i] = Finish(files[i], opt, progress, cancelled);
+            return files;
+        }
+
+        /// A downloaded video in the chosen format: remuxed when its picture and sound already suit it, converted
+        /// (H.264 + AAC) only when they don't. Returns the file to keep.
+        public static string Finish(string file, YtOptions opt, Action<YtProgress> progress, Func<bool> cancelled)
+        {
+            string want = opt.Container == "mov" || opt.Container == "mkv" ? opt.Container : "mp4";
+            if (!File.Exists(file)) return file;
+            string ext = Path.GetExtension(file).TrimStart('.').ToLowerInvariant();
+            if (Array.IndexOf(new[] { "mp4", "m4v", "mov", "mkv", "webm" }, ext) < 0) return file;
+            MediaInfo mi = Media.Probe(file);
+            if (mi == null || !mi.HasVideo) return file;
+            bool okV = want == "mkv" || mi.VCodec == "h264";
+            bool okA = want == "mkv" || !mi.HasAudio || mi.ACodec == "aac";
+            if (okV && okA && ext == want) return file;
+            string outp = Paths.UniquePath(Path.GetDirectoryName(file), Path.GetFileNameWithoutExtension(file), want);
+            string args = "-hide_banner -y -i " + Q(file) + " -map 0:v:0 -map 0:a:0? " +
+                          (okV ? "-c:v copy " : "-c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p ") +
+                          (okA ? "-c:a copy " : "-c:a aac -b:a 192k ") +
+                          "-map_metadata 0 " + (want == "mkv" ? "" : "-movflags +faststart ") + Q(outp);
+            YtProgress p = new YtProgress { Finishing = true, Stage = "convert" };
+            try { FfmpegProgress(args, mi.Duration, progress, p, cancelled); }
+            catch { try { if (File.Exists(outp)) File.Delete(outp); } catch { } throw; }
+            if (!File.Exists(outp) || new FileInfo(outp).Length == 0) return file;
+            try { File.Delete(file); } catch { }
+            return outp;
+        }
+
+        /// FFmpeg with a percentage (from how far it got through the clip).
+        static void FfmpegProgress(string args, double duration, Action<YtProgress> progress, YtProgress p, Func<bool> cancelled)
+        {
+            string ff = Tools.FFmpeg;
+            if (ff == null) throw new UserError(L.T("err_need_ff"));
+            p.Percent = 0; progress(p);
+            StringBuilder err = new StringBuilder();
+            int code = Tools.Stream(ff, "-nostats -progress pipe:1 " + args, line =>
+            {
+                if (line == null || !line.StartsWith("out_time_us=")) return;
+                double us; if (!double.TryParse(line.Substring(12), NumberStyles.Float, CultureInfo.InvariantCulture, out us) || duration <= 0) return;
+                p.Percent = Math.Max(0, Math.Min(1, us / 1e6 / duration)); progress(p);
+            }, l => { lock (err) err.AppendLine(l); }, cancelled);
+            if (code == -2 || cancelled()) throw new OperationCanceledException();
+            if (code != 0) throw new UserError(Engine.Friendly(err.ToString()));
         }
 
         static List<string> RunYtDlp(string url, YtOptions opt, string outDir, long expected, Action<YtProgress> progress, Func<bool> cancelled, bool playlist)
@@ -387,7 +435,7 @@ namespace FileConverter
             else
             {
                 string sort = opt.MaxHeight > 0 ? "res:" + opt.MaxHeight + ",vcodec:h264,acodec:aac" : "res,vcodec:h264,acodec:aac";
-                a.Append("-f \"bv*+ba/b\" -S ").Append(Q(sort)).Append(" --merge-output-format mp4 ");
+                a.Append("-f \"bv*+ba/b\" -S ").Append(Q(sort)).Append(" --merge-output-format ").Append(opt.Container == "mkv" ? "mkv" : "mp4").Append(' ');
             }
             a.Append(Q(url));
 
@@ -487,7 +535,7 @@ namespace FileConverter
             {
                 string mp4 = Paths.UniquePath(outDir, name, "mp4");
                 fetch(info.AltVideoUrl, mp4);
-                return new List<string> { mp4 };
+                return new List<string> { Finish(mp4, opt, progress, cancelled) };
             }
             if (info.Kind == MediaKind.Gif && wantVideo)
             {
@@ -497,7 +545,7 @@ namespace FileConverter
                     fetch(info.DirectUrl, tmpGif);
                     string mp4 = Paths.UniquePath(outDir, name, "mp4");
                     Ffmpeg("-hide_banner -y -i " + Q(tmpGif) + " -movflags +faststart -pix_fmt yuv420p -vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" " + Q(mp4), progress, p, cancelled);
-                    return new List<string> { mp4 };
+                    return new List<string> { Finish(mp4, opt, progress, cancelled) };
                 }
                 finally { try { File.Delete(tmpGif); } catch { } }
             }
@@ -522,6 +570,7 @@ namespace FileConverter
             }
             string dest2 = Paths.UniquePath(outDir, name, info.DirectExt ?? "bin");
             fetch(info.DirectUrl, dest2);
+            if (wantVideo && info.Kind == MediaKind.Video) dest2 = Finish(dest2, opt, progress, cancelled);
             return new List<string> { dest2 };
         }
 

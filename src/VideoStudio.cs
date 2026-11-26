@@ -100,7 +100,7 @@ namespace FileConverter
             bOpen.Click += (s, e) => { string f = PickProject(FindForm()); if (f != null) OpenProject(f, false); };
             // ---- under the picture: playing
             bBack = Icon("", "vs_back5", () => SeekTo(Playhead - 5));
-            bPlay = new Btn(() => "", Ico.Play, BtnKind.Ghost) { GlyphSize = 12f };
+            bPlay = new Btn(() => "", Ico.Play, BtnKind.Ghost) { GlyphSize = 12f, QuickClicks = true };
             bPlay.Click += (s, e) => TogglePlay();
             bPlay.MouseEnter += (s, e) => tips.SetToolTip(bPlay, L.T("vs_play_tip"));
             bFwd = Icon("", "vs_fwd5", () => SeekTo(Playhead + 5));
@@ -169,6 +169,8 @@ namespace FileConverter
             composing = true; composeAgain = false;
             VProject snap = P.Copy();
             double t = playhead;
+            // the text being edited shows whole while paused (not faded out at its first moment), so what's typed is seen
+            VClip sel = Sel; string steady = sel != null && sel.Kind == VKind.Text ? sel.Id : null;
             RectangleF s = preview.Screen;
             int w = Math.Max(16, Math.Min(1280, (int)s.Width)), h = Math.Max(16, (int)Math.Round(w * P.H / (double)P.W));
             frames.Height = Math.Max(240, Math.Min(720, h));
@@ -178,14 +180,16 @@ namespace FileConverter
                 Bitmap b = null;
                 lock (frames.Gate)
                 {
+                    Composer.Steady = steady;
                     try { b = Composer.Compose(snap, t, w, h, frames, out waiting); } catch { }
+                    finally { Composer.Steady = null; }
                 }
                 Ui(() =>
                 {
                     composing = false;
                     if (playing) { if (b != null) b.Dispose(); return; }
                     preview.SetFrame(b);
-                    if (composeAgain) Recompose();
+                    if (composeAgain) Recompose(); else WarmSoon();
                 });
             });
         }
@@ -195,13 +199,40 @@ namespace FileConverter
 
         void TogglePlay() { if (playing) StopPlay(); else Play(); }
 
+        /// How big the picture is drawn while playing.
+        void PlaySize(out int w, out int h)
+        {
+            RectangleF s = preview.Screen;
+            w = Math.Max(64, Math.Min(960, (int)s.Width)); h = Math.Max(64, (int)Math.Round(w * P.H / (double)P.W));
+            if (h > 960) { h = 960; w = Math.Max(64, (int)Math.Round(h * P.W / (double)P.H)); }
+        }
+
+        /// While paused, a moment after the playhead stops moving: the video's decoders get ready right there, so
+        /// pressing play (or Space) starts moving at once instead of freezing for a few frames first.
+        System.Windows.Forms.Timer warmTimer;
+        void WarmSoon()
+        {
+            if (P.Empty || playing || exporting) return;
+            if (warmTimer == null)
+            {
+                warmTimer = new System.Windows.Forms.Timer { Interval = 180 };
+                warmTimer.Tick += (s, e) =>
+                {
+                    warmTimer.Stop();
+                    if (playing || exporting || P.Empty || IsDisposed) return;
+                    int ww, hh; PlaySize(out ww, out hh);
+                    live.Warm(P.Copy(), Playhead, ww, hh, P.Fps);
+                };
+            }
+            warmTimer.Stop(); warmTimer.Start();
+        }
+
         void Play()
         {
             if (P.Empty || exporting || playing) return;
             if (Playhead >= P.Duration - 0.05) Playhead = 0;
-            RectangleF s = preview.Screen;
-            int w = Math.Max(64, Math.Min(960, (int)s.Width)), h = Math.Max(64, (int)Math.Round(w * P.H / (double)P.W));
-            if (h > 960) { h = 960; w = Math.Max(64, (int)Math.Round(h * P.W / (double)P.H)); }
+            if (warmTimer != null) warmTimer.Stop();
+            int w, h; PlaySize(out w, out h);
             playing = true; preview.Playing = true; lastLiveT = -1;
             bPlay.Glyph = Ico.Pause; bPlay.Invalidate(); preview.Invalidate();
             live.Master = volBar.Muted ? 0 : volBar.Value;
@@ -220,6 +251,7 @@ namespace FileConverter
             else Recompose();
             UpdateButtons();
             SyncPlacement();
+            WarmSoon();
         }
 
         /// Moves the playhead; while playing, it plays on from there.
@@ -227,7 +259,7 @@ namespace FileConverter
         {
             Playhead = t;
             if (playing) live.Seek(Playhead);
-            else { Recompose(); UpdateButtons(); SyncPlacement(); }
+            else { Recompose(); UpdateButtons(); SyncPlacement(); WarmSoon(); }
         }
 
         // ------------------------------------------------------------------ history
@@ -444,6 +476,8 @@ namespace FileConverter
             LoadPictures(s);
             // its sound, decoded ahead so playing starts with sound right away
             if (s.Info != null && s.Info.HasAudio) PcmCache.Get(file);
+            // and a light copy of a heavy video, so the preview jumps and plays from anywhere at once
+            if (s.Info != null && s.Info.HasVideo) ProxyCache.Get(file, s.Info);
             return s;
         }
 
@@ -684,6 +718,7 @@ namespace FileConverter
             new[] { "overlay", Ico.Photo, "vs_a_overlay" },
             new[] { "text", Ico.Text, "vs_a_text" },
             new[] { "audio", Ico.Music, "vs_a_audio" },
+            new[] { "voice", Ico.Volume, "vs_a_voice" },
             new[] { "captions", "", "vs_a_captions" },
             new[] { "subs", Ico.Doc, "vs_a_subs" },
         };

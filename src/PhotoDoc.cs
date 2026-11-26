@@ -140,6 +140,9 @@ namespace FileConverter
         public byte[] Mask;
         // a picture's place: its middle on the canvas, its size, turn and mirror
         public float X, Y, Scale = 1f, Angle;
+        /// Picture layers stretched by a side handle: the height is Scale × Stretch (the width is Scale).
+        public float Stretch = 1f;
+        public float ScaleY { get { return Scale * Stretch; } }
         public bool FlipX, FlipY;
         public string SourcePath;
 
@@ -180,7 +183,7 @@ namespace FileConverter
         public PointF[] Corners()
         {
             if (Pixels == null) return new PointF[0];
-            float w = Pixels.Width * Scale / 2, h = Pixels.Height * Scale / 2;
+            float w = Pixels.Width * Scale / 2, h = Pixels.Height * ScaleY / 2;
             PointF[] p = { new PointF(-w, -h), new PointF(w, -h), new PointF(w, h), new PointF(-w, h) };
             double a = Angle * Math.PI / 180, c = Math.Cos(a), s = Math.Sin(a);
             for (int i = 0; i < 4; i++) p[i] = new PointF((float)(X + p[i].X * c - p[i].Y * s), (float)(Y + p[i].X * s + p[i].Y * c));
@@ -192,7 +195,7 @@ namespace FileConverter
         {
             double a = -Angle * Math.PI / 180, c = Math.Cos(a), s = Math.Sin(a);
             double dx = doc.X - X, dy = doc.Y - Y;
-            double lx = (dx * c - dy * s) / Scale, ly = (dx * s + dy * c) / Scale;
+            double lx = (dx * c - dy * s) / Scale, ly = (dx * s + dy * c) / ScaleY;
             if (FlipX) lx = -lx;
             if (FlipY) ly = -ly;
             return new PointF((float)(lx + Pixels.Width / 2.0), (float)(ly + Pixels.Height / 2.0));
@@ -286,6 +289,18 @@ namespace FileConverter
     {
         public const string ProjectExt = "fphoto";
         public int W, H;
+        /// The canvas as it was before it was made bigger or smaller (where it is now, in canvas pixels), so it can go back.
+        /// Empty: never changed (or remade since, by turning or resizing).
+        public Point OrigAt; public Size OrigSize = Size.Empty;
+        public Rectangle Original { get { return OrigSize.IsEmpty ? new Rectangle(0, 0, W, H) : new Rectangle(OrigAt, OrigSize); } }
+        /// The smallest the canvas gets while it grows along with a dragged picture (empty: the whole canvas as it is).
+        /// Set back to the whole canvas whenever its size is chosen on purpose (crop, fit, back to the original…).
+        public Rectangle GrowFrom = Rectangle.Empty;
+        public RectangleF GrowBase { get { return GrowFrom.IsEmpty ? new RectangleF(0, 0, W, H) : GrowFrom; } }
+        /// Where each layer was (and how big) when the canvas first changed size, so "Back to the original size" can put
+        /// back whatever would stick out. Image: x, y, scale, stretch, angle; text: x, y, size. Never changed once made.
+        public Dictionary<string, float[]> OrigPlace;
+        public bool SizeChanged { get { return !OrigSize.IsEmpty && Original != new Rectangle(0, 0, W, H); } }
         public List<DocLayer> Layers = new List<DocLayer>();
         /// What's selected: one byte per canvas pixel (0 out … 255 in); null = nothing.
         public byte[] Sel;
@@ -411,12 +426,32 @@ namespace FileConverter
             {
                 Bitmap px = MaskedPixels(l);
                 GraphicsState st = g.Save();
-                g.InterpolationMode = scale * l.Scale < 0.99f ? InterpolationMode.HighQualityBicubic : InterpolationMode.HighQualityBilinear;
+                g.InterpolationMode = scale * Math.Min(l.Scale, l.ScaleY) < 0.99f ? InterpolationMode.HighQualityBicubic : InterpolationMode.HighQualityBilinear;
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                Rectangle snap;
+                if (Straight(l, out snap))
+                {
+                    // not turned: its edges go on whole canvas pixels, so no faint half-see-through line runs along them
+                    g.ScaleTransform(scale, scale);
+                    // pixel for pixel (its own size, saving or at 100%): an exact copy, nothing blurred at the edges
+                    if (snap.Width == l.Pixels.Width && snap.Height == l.Pixels.Height && Math.Abs(scale - 1) < 0.0005f) { g.InterpolationMode = InterpolationMode.NearestNeighbor; g.PixelOffsetMode = PixelOffsetMode.Half; }
+                    bool half = Math.Abs(Math.Abs(l.Angle) - 180) < 0.01f, fx = l.FlipX ^ half, fy = l.FlipY ^ half;
+                    if (fx || fy)
+                    {
+                        float cx = snap.X + snap.Width / 2f, cy = snap.Y + snap.Height / 2f;
+                        g.TranslateTransform(cx, cy); g.ScaleTransform(fx ? -1 : 1, fy ? -1 : 1); g.TranslateTransform(-cx, -cy);
+                    }
+                    // only inside its own rectangle (some drawing engines repeat the edge past it when stretched)
+                    g.SetClip(snap, CombineMode.Intersect);
+                    using (ImageAttributes ia = Alpha(opacity))
+                        g.DrawImage(px, snap, 0, 0, px.Width, px.Height, GraphicsUnit.Pixel, ia);
+                    g.Restore(st);
+                    return;
+                }
                 g.ScaleTransform(scale, scale);
                 g.TranslateTransform(l.X, l.Y);
                 g.RotateTransform(l.Angle);
-                g.ScaleTransform(l.Scale * (l.FlipX ? -1 : 1), l.Scale * (l.FlipY ? -1 : 1));
+                g.ScaleTransform(l.Scale * (l.FlipX ? -1 : 1), l.ScaleY * (l.FlipY ? -1 : 1));
                 using (ImageAttributes ia = Alpha(opacity))
                     g.DrawImage(px, new Rectangle(-px.Width / 2, -px.Height / 2, px.Width, px.Height), 0, 0, px.Width, px.Height, GraphicsUnit.Pixel, ia);
                 g.Restore(st);
@@ -437,6 +472,95 @@ namespace FileConverter
                 l.Text.Opacity = opacity;
                 try { l.Text.DrawScreen(g, 0, 0, scale); } finally { l.Text.Opacity = was; }
             }
+        }
+
+        /// Where a layer shows on the canvas, as it's drawn (whole pixels for pictures that aren't turned).
+        public RectangleF FitBounds(DocLayer l)
+        {
+            if (l.Kind == LayerKind.Group)
+            {
+                RectangleF u = RectangleF.Empty;
+                foreach (DocLayer c in Layers) if (c.Group == l.Id && Shown(c)) { RectangleF b = FitBounds(c); if (!b.IsEmpty) u = u.IsEmpty ? b : RectangleF.Union(u, b); }
+                return u;
+            }
+            if (l.Kind == LayerKind.Adjust) return RectangleF.Empty;
+            Rectangle sr;
+            return Straight(l, out sr) ? (RectangleF)sr : l.Bounds(this);
+        }
+
+        /// Whether a layer is all inside a rectangle (a pixel either way is fine).
+        public bool Within(DocLayer l, RectangleF r)
+        {
+            RectangleF b = FitBounds(l);
+            if (b.IsEmpty) return false;
+            r.Inflate(1.01f, 1.01f);
+            return r.Contains(b);
+        }
+
+        /// The canvas that fits a layer being moved or sized: the layer itself, plus what can be seen of every other
+        /// layer in `visible` (the canvas as it was before). Empty when there's nothing to fit.
+        public Rectangle FitFor(DocLayer moving, RectangleF visible)
+        {
+            RectangleF a = FitBounds(moving);
+            foreach (DocLayer o in Layers)
+            {
+                if (o == moving || !Shown(o) || o.Kind == LayerKind.Group || o.Kind == LayerKind.Adjust) continue;
+                if (moving.Kind == LayerKind.Group && o.Group == moving.Id) continue;
+                RectangleF b = FitBounds(o);
+                if (b.IsEmpty) continue;
+                b.Intersect(visible);
+                if (b.Width <= 0 || b.Height <= 0) continue;
+                a = a.IsEmpty ? b : RectangleF.Union(a, b);
+            }
+            if (a.IsEmpty) return Rectangle.Empty;
+            return Rectangle.FromLTRB((int)Math.Round(a.Left), (int)Math.Round(a.Top), (int)Math.Round(a.Right), (int)Math.Round(a.Bottom));
+        }
+
+        /// Notes the canvas and where every layer is, the first time the canvas is about to change size (call before the
+        /// change: a drag that may grow the canvas calls it when it begins).
+        public void RememberOriginal()
+        {
+            if (!OrigSize.IsEmpty) return;
+            OrigAt = Point.Empty; OrigSize = new Size(W, H);
+            OrigPlace = new Dictionary<string, float[]>();
+            foreach (DocLayer l in Layers)
+            {
+                if (l.Id == null) continue;
+                if (l.Kind == LayerKind.Image) OrigPlace[l.Id] = new[] { 0f, l.X, l.Y, l.Scale, l.Stretch, l.Angle };
+                else if (l.Kind == LayerKind.Text && l.Text != null) OrigPlace[l.Id] = new[] { 1f, l.Text.Pos.X, l.Text.Pos.Y, l.Text.SizePx };
+            }
+        }
+
+        /// Back to the size and place the canvas had at first, with its layers back where (and how big) they were then.
+        /// Layers added since stay as they are.
+        public void BackToOriginal()
+        {
+            if (!SizeChanged) return;
+            Dictionary<string, float[]> place = OrigPlace;
+            Crop(Original);
+            if (place == null) return;
+            foreach (DocLayer l in Layers)
+            {
+                float[] v;
+                if (l.Id == null || !place.TryGetValue(l.Id, out v)) continue;
+                if (l.Kind == LayerKind.Image && v[0] == 0) { l.X = v[1]; l.Y = v[2]; l.Scale = v[3]; l.Stretch = v[4]; l.Angle = v[5]; }
+                else if (l.Kind == LayerKind.Text && l.Text != null && v[0] == 1) { l.Text.Pos = new PointF(v[1], v[2]); l.Text.SizePx = v[3]; l.Text.Touch(); }
+                l.Version++;
+            }
+        }
+
+        /// A picture layer that isn't turned (or is upside down): where it lands, edges on whole canvas pixels.
+        public static bool Straight(DocLayer l, out Rectangle r)
+        {
+            r = Rectangle.Empty;
+            if (l.Kind != LayerKind.Image || l.Pixels == null) return false;
+            float a = Math.Abs(l.Angle);
+            if (a > 0.01f && Math.Abs(a - 180) > 0.01f) return false;
+            float hw = l.Pixels.Width * l.Scale / 2f, hh = l.Pixels.Height * l.ScaleY / 2f;
+            int x0 = (int)Math.Round(l.X - hw), y0 = (int)Math.Round(l.Y - hh), x1 = (int)Math.Round(l.X + hw), y1 = (int)Math.Round(l.Y + hh);
+            if (x1 - x0 < 1 || y1 - y0 < 1) return false;
+            r = Rectangle.FromLTRB(x0, y0, x1, y1);
+            return true;
         }
 
         static ImageAttributes Alpha(float a)
@@ -654,6 +778,7 @@ namespace FileConverter
         {
             public string Name;
             public int W, H, Current;
+            public Point OrigAt; public Size OrigSize; public Rectangle GrowFrom; public Dictionary<string, float[]> OrigPlace;
             public List<DocLayer> Layers;
             public byte[] Sel;
         }
@@ -662,7 +787,7 @@ namespace FileConverter
         /// Every change made, oldest first (what History shows), and how many of them are applied.
         public State Snapshot(string name)
         {
-            State s = new State { Name = name, W = W, H = H, Current = Current, Sel = Sel, Layers = new List<DocLayer>() };
+            State s = new State { Name = name, W = W, H = H, Current = Current, Sel = Sel, OrigAt = OrigAt, OrigSize = OrigSize, GrowFrom = GrowFrom, OrigPlace = OrigPlace, Layers = new List<DocLayer>() };
             foreach (DocLayer l in Layers) s.Layers.Add(l.Copy());
             return s;
         }
@@ -680,7 +805,7 @@ namespace FileConverter
 
         void Restore(State s)
         {
-            W = s.W; H = s.H; Sel = s.Sel;
+            W = s.W; H = s.H; Sel = s.Sel; OrigAt = s.OrigAt; OrigSize = s.OrigSize; GrowFrom = s.GrowFrom; OrigPlace = s.OrigPlace;
             Layers = new List<DocLayer>();
             foreach (DocLayer l in s.Layers) { DocLayer c = l.Copy(); c.Version++; Layers.Add(c); }
             Current = Math.Min(s.Current, Layers.Count - 1);
@@ -722,10 +847,14 @@ namespace FileConverter
 
         // ------------------------------------------------------------------ changes to the whole photo
         /// Crops the canvas to a rectangle (canvas pixels); layers keep their place on the photo.
+        /// The rectangle may reach outside the canvas: the canvas grows there (the new space is see-through).
         public void Crop(Rectangle r)
         {
-            r.Intersect(new Rectangle(0, 0, W, H));
             if (r.Width < 1 || r.Height < 1) return;
+            RememberOriginal();
+            OrigAt = new Point(OrigAt.X - r.X, OrigAt.Y - r.Y);
+            if (GrowFrom.IsEmpty) GrowFrom = new Rectangle(0, 0, W, H);
+            GrowFrom.Offset(-r.X, -r.Y);
             foreach (DocLayer l in Layers)
             {
                 if (l.Kind == LayerKind.Image) { l.X -= r.X; l.Y -= r.Y; }
@@ -733,16 +862,46 @@ namespace FileConverter
                 else if (l.Kind == LayerKind.Paint && l.Pixels != null)
                 {
                     Bitmap b = new Bitmap(r.Width, r.Height, PixelFormat.Format32bppArgb);
-                    using (Graphics g = Graphics.FromImage(b)) { g.CompositingMode = CompositingMode.SourceCopy; g.DrawImage(l.Pixels, new Rectangle(0, 0, r.Width, r.Height), r, GraphicsUnit.Pixel); }
+                    using (Graphics g = Graphics.FromImage(b)) { g.CompositingMode = CompositingMode.SourceCopy; g.DrawImage(l.Pixels, new Rectangle(-r.X, -r.Y, l.Pixels.Width, l.Pixels.Height), new Rectangle(0, 0, l.Pixels.Width, l.Pixels.Height), GraphicsUnit.Pixel); }
+                    if (l.Mask != null) l.Mask = CropMask(l.Mask, l.Pixels.Width, l.Pixels.Height, r, 255);
                     l.Pixels = b;
-                    if (l.Mask != null) l.Mask = CropMask(l.Mask, W, r);
                     l.X = r.Width / 2f; l.Y = r.Height / 2f;
                 }
-                else if (l.Kind == LayerKind.Adjust && l.Mask != null) l.Mask = CropMask(l.Mask, W, r);
+                else if (l.Kind == LayerKind.Adjust && l.Mask != null) l.Mask = CropMask(l.Mask, W, H, r, 255);
                 l.Version++;
             }
-            if (Sel != null) Sel = CropMask(Sel, W, r);
+            if (Sel != null) Sel = CropMask(Sel, W, H, r, 0);
             W = r.Width; H = r.Height;
+        }
+
+        /// Like CropMask, but r may reach outside the w×h mask: that part gets fill.
+        static byte[] CropMask(byte[] m, int w, int h, Rectangle r, byte fill)
+        {
+            if (r.X >= 0 && r.Y >= 0 && r.Right <= w && r.Bottom <= h) return CropMask(m, w, r);
+            byte[] o = new byte[r.Width * r.Height];
+            if (fill != 0) for (int i = 0; i < o.Length; i++) o[i] = fill;
+            int x0 = Math.Max(0, r.X), x1 = Math.Min(w, r.Right);
+            if (x1 <= x0) return o;
+            for (int y = Math.Max(0, r.Y); y < Math.Min(h, r.Bottom); y++)
+                Buffer.BlockCopy(m, y * w + x0, o, (y - r.Y) * r.Width + (x0 - r.X), x1 - x0);
+            return o;
+        }
+
+        /// The canvas and everything on it (every layer that shows), in canvas pixels.
+        public Rectangle AllBounds() { return AllBounds(new RectangleF(0, 0, W, H)); }
+
+        /// A rectangle and everything on the canvas, in canvas pixels.
+        public Rectangle AllBounds(RectangleF start)
+        {
+            RectangleF a = start;
+            foreach (DocLayer l in Layers)
+            {
+                if (!Shown(l) || l.Kind == LayerKind.Group || l.Kind == LayerKind.Adjust) continue;
+                Rectangle sr;
+                RectangleF b = Straight(l, out sr) ? sr : l.Bounds(this);
+                if (!b.IsEmpty) a = RectangleF.Union(a, b);
+            }
+            return Rectangle.FromLTRB((int)Math.Round(a.Left), (int)Math.Round(a.Top), (int)Math.Round(a.Right), (int)Math.Round(a.Bottom));
         }
 
         static byte[] CropMask(byte[] m, int w, Rectangle r)
@@ -772,7 +931,7 @@ namespace FileConverter
                 l.Version++;
             }
             if (Sel != null) Sel = ScaleMask(Sel, W, H, nw, nh);
-            W = nw; H = nh;
+            W = nw; H = nh; OrigSize = Size.Empty; GrowFrom = Rectangle.Empty; OrigPlace = null;
         }
 
         public static byte[] ScaleMask(byte[] m, int w, int h, int nw, int nh)
@@ -797,7 +956,7 @@ namespace FileConverter
             if (flipH) flat.RotateFlip(RotateFlipType.RotateNoneFlipX);
             if (flipV) flat.RotateFlip(RotateFlipType.RotateNoneFlipY);
             Layers.Clear();
-            W = flat.Width; H = flat.Height;
+            W = flat.Width; H = flat.Height; OrigSize = Size.Empty; GrowFrom = Rectangle.Empty; OrigPlace = null;
             Layers.Add(new DocLayer { Kind = LayerKind.Image, Name = L.T("ps_l_photo"), Pixels = flat, X = W / 2f, Y = H / 2f });
             Current = 0; Sel = null;
         }
@@ -854,7 +1013,7 @@ namespace FileConverter
             if (l.Mask != null) l.Mask = CropMask(l.Mask, l.Pixels.Width, b);
             l.Pixels = px;
             l.Kind = LayerKind.Image;
-            l.X = b.X + b.Width / 2f; l.Y = b.Y + b.Height / 2f; l.Scale = 1; l.Angle = 0; l.FlipX = l.FlipY = false;
+            l.X = b.X + b.Width / 2f; l.Y = b.Y + b.Height / 2f; l.Scale = 1; l.Stretch = 1; l.Angle = 0; l.FlipX = l.FlipY = false;
             l.Version++;
         }
 
@@ -880,7 +1039,7 @@ namespace FileConverter
                 l.Version++;
             }
             if (Sel != null) Sel = TurnMask(Sel, W0, H0, q);
-            W = nw; H = nh;
+            W = nw; H = nh; OrigSize = Size.Empty; GrowFrom = Rectangle.Empty; OrigPlace = null;
         }
         static float Norm(float a) { a = ((a % 360) + 360) % 360; return a > 180 ? a - 360 : a; }
 
@@ -968,7 +1127,7 @@ namespace FileConverter
                     Kv(s, "id", l.Id); Kv(s, "name", l.Name); Kv(s, "kind", l.Kind.ToString()); Kv(s, "hidden", l.Hidden ? "1" : "0");
                     Kv(s, "locked", l.Locked ? "1" : "0"); Kv(s, "collapsed", l.Collapsed ? "1" : "0"); Kv(s, "opacity", Fs(l.Opacity)); Kv(s, "blend", l.Blend.ToString());
                     Kv(s, "group", l.Group ?? "");
-                    Kv(s, "x", Fs(l.X)); Kv(s, "y", Fs(l.Y)); Kv(s, "scale", Fs(l.Scale)); Kv(s, "angle", Fs(l.Angle));
+                    Kv(s, "x", Fs(l.X)); Kv(s, "y", Fs(l.Y)); Kv(s, "scale", Fs(l.Scale)); Kv(s, "stretch", Fs(l.Stretch)); Kv(s, "angle", Fs(l.Angle));
                     Kv(s, "flip", (l.FlipX ? "1" : "0") + (l.FlipY ? "1" : "0")); Kv(s, "path", l.SourcePath ?? "");
                     if (l.Pixels != null)
                     {
@@ -1061,6 +1220,7 @@ namespace FileConverter
                         case "x": l.X = f; break;
                         case "y": l.Y = f; break;
                         case "scale": l.Scale = f; break;
+                        case "stretch": l.Stretch = f > 0 ? f : 1; break;
                         case "angle": l.Angle = f; break;
                         case "flip": l.FlipX = v.Length > 0 && v[0] == '1'; l.FlipY = v.Length > 1 && v[1] == '1'; break;
                         case "path": l.SourcePath = v.Length > 0 ? v : null; break;

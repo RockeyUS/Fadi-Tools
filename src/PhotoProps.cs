@@ -45,7 +45,13 @@ namespace FileConverter
         }
 
         public bool Editing { get { return focused; } }
-        bool Parse(out float v) { return float.TryParse(Box.Text.Replace(Unit, "").Replace(',', '.').Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out v); }
+        bool Parse(out float v)
+        {
+            // (Replace with an empty unit throws: only the boxes with a unit, like the angle's °, take it out)
+            string t = Box.Text ?? "";
+            if (!string.IsNullOrEmpty(Unit)) t = t.Replace(Unit, "");
+            return float.TryParse(t.Replace(',', '.').Replace("°", "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out v);
+        }
         void Commit() { float v; if (Parse(out v) && Math.Abs(v - Value) > 0.0001f) { Value = v; if (Committed != null) Committed(v); } SetValue(Value); }
 
         public void SetValue(float v)
@@ -82,18 +88,18 @@ namespace FileConverter
         // selection
         Segments selMode;
         readonly Slider feather = new Slider { Min = 0, Max = 100, Value = 0 }, tolerance = new Slider { Min = 0, Max = 120, Value = 32 };
-        readonly Toggle contiguous = new Toggle();
-        Btn bSubject, bSelAll, bInvert, bDeselect, bSelCopy, bSelFill, bSelClear, bSelCrop;
+        readonly Toggle contiguous = new Toggle(), growToggle = new Toggle();
+        Btn bSubject, bPickSel, bSelAll, bInvert, bDeselect, bSelCopy, bSelFill, bSelClear, bSelCrop;
         // brush, eraser, remove
         readonly Slider brushSize = new Slider { Min = 1, Max = 600, Value = 30, Curved = true }, brushHard = new Slider { Min = 0, Max = 100, Value = 60 }, brushOpac = new Slider { Min = 1, Max = 100, Value = 100 };
         readonly Swatches brushColors = new Swatches();
         // crop
         readonly ChipGrid cropRatio = new ChipGrid { Columns = 4, RowH = 32 };
-        Btn bCropApply, bCropCancel;
+        Btn bCropApply, bCropCancel, bCropAll, bFitCanvas, bOrigSize;
         // place & size
         readonly NumBox nX = new NumBox(() => "X"), nY = new NumBox(() => "Y"), nW = new NumBox(() => "W"), nH = new NumBox(() => "H"), nAngle = new NumBox(() => "°");
         Btn bFlipH, bFlipV, bAL, bAC, bAR, bAT, bAM, bAB;
-        Btn bRemoveBg, bShowAll;
+        Btn bRemoveBg, bPickLayer, bShowAll;
         // text
         readonly MultiField textBox = new MultiField();
         readonly DropDown font = new DropDown { PreviewFonts = true };
@@ -146,6 +152,8 @@ namespace FileConverter
             contiguous.CheckedChanged += (s, e) => canvas.WandContiguous = contiguous.Checked;
             bSubject = new Btn(() => L.T("ps_subject"), Ps.Subject, BtnKind.Secondary) { FontSize = 9f };
             bSubject.Click += (s, e) => SelectSubject();
+            bPickSel = new Btn(() => L.T("ps_pick_sel"), "\uE7C9", BtnKind.Secondary) { FontSize = 9f };
+            bPickSel.Click += (s, e) => PickSelection();
             bSelAll = Small(() => L.T("ps_sel_all"), null, SelectAll);
             bInvert = Small(() => L.T("ps_sel_invert"), Ps.Invert, InvertSel);
             bDeselect = Small(() => L.T("ps_sel_none"), Ico.Close, () => { if (doc != null && doc.Sel != null) canvas.ApplySel(null, SelOp.New, "ps_h_deselect"); });
@@ -177,6 +185,15 @@ namespace FileConverter
             bCropApply = new Btn(() => L.T("ed_crop_apply"), Ico.Check, BtnKind.Primary) { FontSize = 9f };
             bCropApply.Click += (s, e) => ApplyCrop();
             bCropCancel = Small(() => L.T("cancel"), Ico.Close, () => SetTool(PhotoTool.Move));
+            bCropAll = new Btn(() => L.T("ps_crop_all"), Ico.Resize, BtnKind.Secondary) { FontSize = 9f };
+            bCropAll.Click += (s, e) => ShowAll();
+            bFitCanvas = new Btn(() => L.T("ps_show_all_canvas"), Ico.Resize, BtnKind.Secondary) { FontSize = 9f };
+            bFitCanvas.Click += (s, e) => ShowAll();
+            bOrigSize = new Btn(() => doc == null ? "" : L.T("ps_orig_size", doc.Original.Width, doc.Original.Height), Ico.Refresh, BtnKind.Secondary) { FontSize = 9f };
+            bOrigSize.Click += (s, e) => BackToOriginal();
+            growToggle.SetSilently(Settings.Get("PsGrow", "1") == "1");
+            canvas.AutoGrow = growToggle.Checked;
+            growToggle.CheckedChanged += (s, e) => { canvas.AutoGrow = growToggle.Checked; Settings.Set("PsGrow", growToggle.Checked ? "1" : "0"); };
             // ---- place & size
             nAngle.Unit = "";
             nX.Committed += v => Transform(TrX, v); nY.Committed += v => Transform(TrY, v);
@@ -188,6 +205,8 @@ namespace FileConverter
             bAT = Ico2(Ps.AlignT, "ps_al_t", () => Align2(3)); bAM = Ico2(Ps.AlignM, "ps_al_m", () => Align2(4)); bAB = Ico2(Ps.AlignB, "ps_al_b", () => Align2(5));
             bRemoveBg = new Btn(() => L.T(BgRemover.Ready ? "ps_remove_bg" : "bg_download"), Ps.Subject, BtnKind.Secondary) { FontSize = 9f };
             bRemoveBg.Click += (s, e) => RemoveLayerBackground();
+            bPickLayer = new Btn(() => L.T("ps_pick_layer"), "\uE7C9", BtnKind.Secondary) { FontSize = 9f };
+            bPickLayer.Click += (s, e) => PickLayer();
             bShowAll = Small(() => L.T("ps_show_all"), Ico.Refresh, () => { DocLayer l = doc == null ? null : doc.Cur; if (l == null || l.Mask == null) return; Change("ps_h_mask"); l.Mask = null; l.Version++; AfterChange(true); });
             // ---- text
             textBox.Box.TextChanged += (s, e) =>
@@ -272,9 +291,9 @@ namespace FileConverter
             }
             bAdjReset = Small(() => L.T("ps_reset"), Ico.Refresh, ResetAdjust);
             bAuto = Small(() => L.T("ps_auto"), "\uE945", AutoLevels);
-            propCtl.AddRange(new Control[] { selMode, feather, tolerance, contiguous, bSubject, bSelAll, bInvert, bDeselect, bSelCopy, bSelFill, bSelClear, bSelCrop,
-                brushSize, brushHard, brushOpac, brushColors, cropRatio, bCropApply, bCropCancel, nX, nY, nW, nH, nAngle, bFlipH, bFlipV, bAL, bAC, bAR, bAT, bAM, bAB,
-                bRemoveBg, bShowAll, textBox, font, textSize, textColors, boxColors, textStyles, textAlign, aBright, aContrast, aSat, aWarm, aBlur, aSharp, aFilter,
+            propCtl.AddRange(new Control[] { selMode, feather, tolerance, contiguous, bSubject, bPickSel, bSelAll, bInvert, bDeselect, bSelCopy, bSelFill, bSelClear, bSelCrop,
+                brushSize, brushHard, brushOpac, brushColors, cropRatio, bCropApply, bCropCancel, bCropAll, bFitCanvas, bOrigSize, growToggle, nX, nY, nW, nH, nAngle, bFlipH, bFlipV, bAL, bAC, bAR, bAT, bAM, bAB,
+                bRemoveBg, bPickLayer, bShowAll, textBox, font, textSize, textColors, boxColors, textStyles, textAlign, aBright, aContrast, aSat, aWarm, aBlur, aSharp, aFilter,
                 levels, curves, hueRange, hHue, hSat, hLight, bAdjReset, bAuto });
             foreach (Control c in propCtl) { if (c is UiControl) ((UiControl)c).Surface = Surface.Card; c.Visible = false; }
             props.Controls.AddRange(propCtl.ToArray());
@@ -434,7 +453,7 @@ namespace FileConverter
             if (l.Kind == LayerKind.Image && l.Pixels != null)
             {
                 if (!nW.Editing) nW.SetValue((float)Math.Round(l.Pixels.Width * l.Scale));
-                if (!nH.Editing) nH.SetValue((float)Math.Round(l.Pixels.Height * l.Scale));
+                if (!nH.Editing) nH.SetValue((float)Math.Round(l.Pixels.Height * l.ScaleY));
                 if (!nAngle.Editing) nAngle.SetValue((float)Math.Round(l.Angle, 1));
             }
             else
@@ -478,8 +497,11 @@ namespace FileConverter
         }
         void Gap() { py += Theme.S(6); }
 
+        bool propsStickOut, propsSized;
         void LayoutProps()
         {
+            propsStickOut = SticksOut;
+            propsSized = doc != null && doc.SizeChanged;
             if (doc == null || props.Width <= 0 || propCtl.Count == 0) return;
             placed.Clear(); hints.Clear(); rowLabels.Clear();
             py = Theme.S(2); pw = props.Width - Theme.S(10);
@@ -494,6 +516,8 @@ namespace FileConverter
                     Gap();
                     Put(bSubject, Theme.S(36));
                     if (!BgRemover.Ready) Hint(L.T("ps_subject_dl"));
+                    Put(bPickSel, Theme.S(36));
+                    Hint(L.T(Sam.Ready ? "ps_pick_hint" : "ps_pick_dl"));
                     PutRow(bh, bSelAll, bInvert);
                     if (doc.Sel != null)
                     {
@@ -520,6 +544,8 @@ namespace FileConverter
                     Head("ps_crop_shape"); Put(cropRatio, cropRatio.NeededHeight(8));
                     PutRow(Theme.S(36), bCropCancel, bCropApply);
                     Hint(L.T("ps_crop_hint"));
+                    if (SticksOut) Put(bCropAll, Theme.S(36));
+                    if (doc.SizeChanged) Put(bOrigSize, Theme.S(36));
                     break;
                 case PhotoTool.Text:
                     if (l != null && l.Kind == LayerKind.Text) LayerProps(l);
@@ -564,10 +590,15 @@ namespace FileConverter
                     break;
                 case LayerKind.Image:
                     Head("ps_place"); PutRow(bh, nX, nY); PutRow(bh, nW, nH); PutRow(bh, nAngle, bFlipH, bFlipV);
+                    PutToggle(growToggle, "ps_grow");
+                    if (SticksOut) { Put(bFitCanvas, Theme.S(36)); Hint(L.T("ps_sticks_out")); }
+                    if (doc.SizeChanged) Put(bOrigSize, Theme.S(36));
                     AlignRows();
                     Head("ps_background");
                     Put(bRemoveBg, Theme.S(36));
                     if (!BgRemover.Ready) Hint(L.T("ps_subject_dl"));
+                    Put(bPickLayer, Theme.S(36));
+                    Hint(L.T(Sam.Ready ? "ps_pick_hint" : "ps_pick_dl"));
                     if (l.Mask != null) Put(bShowAll, bh);
                     break;
                 case LayerKind.Paint:
@@ -630,6 +661,9 @@ namespace FileConverter
         {
             DocLayer l = doc == null ? null : doc.Cur;
             if (l == null || loading || doc.IsLocked(l)) { SyncTransformFields(); return; }
+            RectangleF was = new RectangleF(0, 0, doc.W, doc.H);
+            bool follow = canvas.AutoGrow && doc.Within(l, was);
+            if (follow) doc.RememberOriginal();
             RectangleF b = l.Bounds(doc);
             if (b.IsEmpty && l.Kind != LayerKind.Image) return;
             if (what == TrX || what == TrY)
@@ -649,9 +683,20 @@ namespace FileConverter
             else if (l.Kind == LayerKind.Image && l.Pixels != null && v >= 1)
             {
                 Change("ps_h_resize");
-                l.Scale = what == TrW ? v / l.Pixels.Width : v / l.Pixels.Height;
+                l.Scale = what == TrW ? v / l.Pixels.Width : v / (l.Pixels.Height * l.Stretch);
             }
             l.Version++;
+            // typed past the edge: the canvas grows to show it (when that's on)
+            if (follow)
+            {
+                Rectangle r = doc.FitFor(l, was);
+                if (!r.IsEmpty && r != new Rectangle(0, 0, doc.W, doc.H) && r.Width <= PhotoCanvas.MaxSide && r.Height <= PhotoCanvas.MaxSide)
+                {
+                    PointF at = canvas.ToScreen(PointF.Empty);
+                    doc.Crop(r);
+                    canvas.Pan = new PointF(at.X + r.X * canvas.Zoom, at.Y + r.Y * canvas.Zoom);
+                }
+            }
             AfterChange(false);
         }
 

@@ -83,7 +83,7 @@ namespace FileConverter
             foreach (Control c in Controls) { UiControl u = c as UiControl; if (u != null) u.Surface = Surface.Card; }
 
             DoLayout();
-            Deactivate += (s, e) => Dismiss();
+            Deactivate += (s, e) => this.Later(Dismiss);
             anim.Tick += (s, e) => Step();
             // a click anywhere else closes it, even when Windows didn't let it take the focus
             // (it never stays in the way of the taskbar or other apps)

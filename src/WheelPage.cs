@@ -141,6 +141,11 @@ namespace FileConverter
         readonly WheelPreview preview = new WheelPreview();
         public event Action BackRequested;
 
+        Rectangle keyRow;
+        // the key held while dragging to open the wheel: click, then press the new key
+        readonly Btn bKey;
+        Action stopCapture;
+        bool capturing;
         Rectangle previewCard, pickCard, onRow, fmtHead, actHead, hintR, captionR, sizeLbl;
         readonly Slider size;
         // recipes for this kind of file: listed under the choices, each opens its editor
@@ -190,9 +195,11 @@ namespace FileConverter
             size = new Slider { Min = WheelConfig.MinSize, Max = WheelConfig.MaxSize, Value = WheelConfig.SizePct, Format = v => ((int)Math.Round(v)) + "%" };
             size.ValueChanged += (s, e) => preview.SetSize((int)Math.Round(360f * Theme.Scale * size.Value / 100f));
             size.Committed += (s, e) => WheelConfig.SizePct = (int)Math.Round(size.Value);
+            bKey = new Btn(() => capturing ? L.T("whp_key_press") : DragWheel.KeyName(), null, BtnKind.Secondary) { FontSize = 9.5f, AccessibleName = L.T("whp_key") };
+            bKey.Click += (s, e) => CaptureKey();
             bNewRecipe = new Btn(() => L.T("rc_new_short"), Ico.Add, BtnKind.Secondary) { FontSize = 9f };
             bNewRecipe.Click += (s, e) => EditRecipe(null);
-            Controls.AddRange(new Control[] { back, reset, kinds, onOff, preview, size, bNewRecipe });
+            Controls.AddRange(new Control[] { back, reset, kinds, onOff, preview, size, bKey, bNewRecipe });
             Cursor = Cursors.Default;
         }
 
@@ -203,8 +210,35 @@ namespace FileConverter
             preview.SetSize(WheelConfig.WheelPx);
             Load(false);
         }
+        /// Waits for the next key (or mouse side button); Escape keeps the one there was.
+        void CaptureKey()
+        {
+            if (capturing) { EndCapture(); return; }
+            capturing = true;
+            bKey.Kind = BtnKind.Primary;
+            DoLayout(); bKey.Invalidate();
+            stopCapture = DragWheel.CaptureKey(vk =>
+            {
+                EndCapture();
+                if (vk <= 0) return;
+                DragWheel.KeyVk = vk;
+                DoLayout(); Invalidate();
+                ShowToast(L.T("whp_key_set", DragWheel.KeyName()), false, null, null);
+            });
+        }
+        void EndCapture()
+        {
+            if (stopCapture != null) { stopCapture(); stopCapture = null; }
+            capturing = false;
+            bKey.Kind = BtnKind.Secondary;
+            DoLayout(); bKey.Invalidate();
+        }
+        protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); if (!Visible && capturing) EndCapture(); }
+
         protected override bool ProcessCmdKey(ref Message msg, Keys k)
         {
+            // while a new key is being chosen, keys go to it (Escape just cancels)
+            if (capturing) return true;
             if (k == Keys.Escape && BackRequested != null) { BackRequested(); return true; }
             return base.ProcessCmdKey(ref msg, k);
         }
@@ -319,6 +353,11 @@ namespace FileConverter
             onRow = new Rectangle(x, cy, w - Theme.S(64), Theme.S(44));
             Place(onOff, new Rectangle(x + w - Theme.S(52), cy + Theme.S(5), Theme.S(52), Theme.S(34)));
             cy += Theme.S(60);
+            // which key opens it
+            int kbw = Math.Max(Theme.S(120), Math.Min(Theme.S(220), bKey.PreferredWidth + Theme.S(16)));
+            keyRow = new Rectangle(x, cy, w - kbw - Theme.S(12), Theme.S(44));
+            Place(bKey, new Rectangle(x + w - kbw, cy + Theme.S(4), kbw, Theme.S(36)));
+            cy += Theme.S(60);
             fmtHead = new Rectangle(x, cy, w, Theme.S(22)); cy += Theme.S(30);
             fmtR.Clear();
             int chipW = Theme.S(78), chipH = Theme.S(40), cg = Theme.S(8);
@@ -396,8 +435,12 @@ namespace FileConverter
 
             // on / off
             Label(g, L.T("whp_on"), Theme.F(10.5f, FontStyle.Bold), Theme.Ink, new Rectangle(onRow.X, onRow.Y, onRow.Width, Theme.S(22)), Align.Start);
-            Label(g, L.T("whp_on_d"), Theme.F(8.75f), Theme.InkSoft, new Rectangle(onRow.X, onRow.Y + Theme.S(22), onRow.Width, Theme.S(20)), Align.Start);
+            Label(g, L.T("whp_on_d", DragWheel.KeyName()), Theme.F(8.75f), Theme.InkSoft, new Rectangle(onRow.X, onRow.Y + Theme.S(22), onRow.Width, Theme.S(20)), Align.Start);
             using (Pen lp = new Pen(Theme.Line)) { Rectangle l = M(new Rectangle(onRow.X, onRow.Bottom + Theme.S(7), pickCard.Width - Theme.S(40), 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
+            // the key that opens it
+            Label(g, L.T("whp_key"), Theme.F(10.5f, FontStyle.Bold), Theme.Ink, new Rectangle(keyRow.X, keyRow.Y, keyRow.Width, Theme.S(22)), Align.Start);
+            Label(g, L.T(capturing ? "whp_key_d_wait" : "whp_key_d"), Theme.F(8.75f), capturing ? Theme.AccentColor : Theme.InkSoft, new Rectangle(keyRow.X, keyRow.Y + Theme.S(22), keyRow.Width, Theme.S(20)), Align.Start, true, false);
+            using (Pen lp = new Pen(Theme.Line)) { Rectangle l = M(new Rectangle(keyRow.X, keyRow.Bottom + Theme.S(7), pickCard.Width - Theme.S(40), 1)); g.DrawLine(lp, l.X, l.Y, l.Right, l.Y); }
 
             Head(g, fmtHead, L.T("whp_formats"), formats.Count + " / " + WheelConfig.MaxFormats);
             for (int i = 0; i < fmtR.Count; i++)

@@ -105,9 +105,15 @@ namespace FileConverter
         {
             string text = L.T("wh_hint_drag");
             Font f = Theme.F(9.5f, FontStyle.Bold);
-            int tw;
-            using (Bitmap probe = new Bitmap(1, 1)) using (Graphics pg = Graphics.FromImage(probe)) tw = (int)Math.Ceiling(pg.MeasureString(text, f).Width);
-            int h = Theme.S(40), pad = Theme.S(12), donut = Theme.S(24), key = Theme.S(48);
+            string keyName = DragWheel.KeyName();
+            Font kf = Theme.F(8.5f, FontStyle.Bold);
+            int tw, kw;
+            using (Bitmap probe = new Bitmap(1, 1)) using (Graphics pg = Graphics.FromImage(probe))
+            {
+                tw = (int)Math.Ceiling(pg.MeasureString(text, f).Width);
+                kw = (int)Math.Ceiling(pg.MeasureString(keyName, kf).Width);
+            }
+            int h = Theme.S(40), pad = Theme.S(12), donut = Theme.S(24), key = Math.Max(Theme.S(48), kw + Theme.S(18));
             int w = pad + donut + Theme.S(10) + key + Theme.S(8) + tw + pad, m = Theme.S(8);
             Bitmap b = new Bitmap(w + m * 2, h + m * 2, PixelFormat.Format32bppPArgb);
             using (Graphics g = Graphics.FromImage(b))
@@ -130,7 +136,7 @@ namespace FileConverter
                 x += donut + Theme.S(10);
                 Rectangle k = M(new Rectangle(x, m + (h - Theme.S(24)) / 2, key, Theme.S(24)));
                 Theme.FillRound(g, k, Theme.S(6), Theme.AccentFill);
-                Theme.Text(g, "Shift", Theme.F(8.5f, FontStyle.Bold), Theme.PrimaryInk, k, Align.Center);
+                Theme.Text(g, keyName, kf, Theme.PrimaryInk, k, Align.Center);
                 x += key + Theme.S(8);
                 Theme.Text(g, text, f, Theme.Dark ? Color.FromArgb(235, 232, 226) : Color.FromArgb(40, 36, 32), M(new Rectangle(x, m, tw + Theme.S(4), h)), Align.Start);
             }

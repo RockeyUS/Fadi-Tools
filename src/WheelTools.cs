@@ -880,6 +880,11 @@ namespace FileConverter
         string status; Color statusColor;
         string result;
         int frameAsk; double frameAt = -1;
+        // plays inside this window: click the strip to listen from there
+        readonly ClipPlayer player = new ClipPlayer();
+        float frameAspect;
+        bool keyEdit;
+        Rectangle hintR;
 
         public static void Open(string file, Point at, Control activitySource)
         {
@@ -893,9 +898,21 @@ namespace FileConverter
             this.file = file; this.activitySource = activitySource;
             video = Formats.CategoryOf(Formats.Ext(file)) == Category.Video;
             frame.Loading = true;
-            strip.Changed += (which) => { Invalidate(); bGo.Enabled = !busy && info != null && strip.End - strip.Start >= 0.1; if (video) AskFrame(which == 1 ? strip.End : strip.Start); };
-            bPlay = new Btn(() => L.T("tr_play"), Ico.Play, BtnKind.Secondary) { Surface = Surface.Card, FontSize = 9f, Enabled = false };
-            bPlay.Click += (s, e) => { if (info != null) try { Media.Play(file, strip.Start, strip.End - strip.Start, info.HasVideo); } catch { } };
+            strip.Changed += (which) =>
+            {
+                Invalidate(); bGo.Enabled = !busy && info != null && strip.End - strip.Start >= 0.1;
+                // moving an end while it plays: it stops, ready to play from the new place
+                // (not for I and O, which set an end while you listen)
+                if (keyEdit) return;
+                if (which != 2 || player.Playing) { if (player.Playing) Pause(); strip.Playhead = which == 1 ? strip.End : strip.Start; }
+                if (video) AskFrame(which == 1 ? strip.End : strip.Start);
+            };
+            strip.Seek += t => PlayFrom(t);
+            bPlay = new Btn(() => L.T(player.Playing ? "tr_pause" : "tr_play"), Ico.Play, BtnKind.Secondary) { Surface = Surface.Card, FontSize = 9f, Enabled = false, QuickClicks = true };
+            bPlay.Click += (s, e) => PlayPause();
+            player.Tick += t => Ui(() => { if (!player.Playing) return; strip.Playhead = t; strip.Invalidate(); Invalidate(timesInv); });
+            player.Frame += (b, t) => Ui(() => { if (IsDisposed || !player.Playing) { b.Dispose(); return; } frame.SetPicture(b); });
+            player.Finished += () => Ui(() => { PlayState(); });
             quickCut.SetSilently(Settings.Get("TrimQuick", "0") == "1");
             quickCut.CheckedChanged += (s, e) => Settings.Set("TrimQuick", quickCut.Checked ? "1" : "0");
             bGo = new Btn(() => L.T(done ? "wn_ok" : "tr_go"), Ico.Trim, BtnKind.Primary) { Surface = Surface.Card, Enabled = false };
@@ -906,8 +923,60 @@ namespace FileConverter
             bShow.Click += (s, e) => { if (result != null) ShowInFolder(result); };
             Controls.AddRange(new Control[] { frame, strip, bPlay, quickCut, bar, bGo, bCancel, bShow });
             if (!video) frame.Visible = false;
-            ClientSize = new Size(Theme.S(620), video ? Theme.S(640) : Theme.S(380));
+            ClientSize = new Size(Theme.S(620), video ? Theme.S(668) : Theme.S(408));
         }
+
+        Rectangle timesInv { get { return M(timesR); } }
+
+        /// Plays from a time: to the end of the kept part when it's before it, otherwise to the end of the file.
+        void PlayFrom(double t)
+        {
+            if (info == null || busy) return;
+            t = Math.Max(0, Math.Min(info.Duration - 0.05, t));
+            double to = t < strip.End - 0.05 ? strip.End : info.Duration;
+            strip.Playhead = t;
+            int w = 0, h = 0;
+            if (video)
+            {
+                // pictures the size they're shown (not bigger than needed)
+                float ar = frameAspect > 0 ? frameAspect : info.Width > 0 && info.Height > 0 ? info.Width / (float)info.Height : 16f / 9f;
+                h = Math.Max(90, Math.Min(frame.Height, Theme.S(420)));
+                w = (int)Math.Round(h * ar);
+                if (w > frame.Width) { w = Math.Max(160, frame.Width); h = (int)Math.Round(w / ar); }
+            }
+            try { player.Play(file, t, to, info.HasAudio, video, w, h); } catch { }
+            PlayState();
+        }
+
+        void PlayPause()
+        {
+            if (info == null) return;
+            if (player.Playing) { Pause(); return; }
+            double ph = strip.Playhead;
+            // from where it was paused, when that's in the kept part; otherwise from the start of it
+            PlayFrom(ph >= strip.Start && ph < strip.End - 0.05 ? ph : strip.Start);
+        }
+
+        void Pause() { player.Stop(); PlayState(); }
+
+        void PlayState()
+        {
+            bPlay.Glyph = player.Playing ? Ico.Pause : Ico.Play;
+            bPlay.Invalidate(); strip.Invalidate(); DoLayout(); Invalidate();
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys k)
+        {
+            if (info != null && !busy)
+            {
+                // Space plays or pauses; I and O put the start and the end where it's playing
+                if (k == Keys.Space) { PlayPause(); return true; }
+                if ((k == Keys.I || k == Keys.O) && strip.Playhead >= 0) { keyEdit = true; try { strip.SetEnd(k == Keys.O, strip.Playhead); } finally { keyEdit = false; } return true; }
+            }
+            return base.ProcessCmdKey(ref msg, k);
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e) { try { player.Dispose(); } catch { } base.OnFormClosed(e); }
 
         void Load2()
         {
@@ -931,7 +1000,7 @@ namespace FileConverter
                     if (err != null) { status = err; statusColor = Theme.Error; frame.Message = err; frame.Loading = false; frame.Invalidate(); Invalidate(); return; }
                     info = mi;
                     strip.SetMedia(strp, mi.Duration, video);
-                    if (first != null) frame.SetPicture(new Bitmap(first));
+                    if (first != null) { frameAspect = first.Width / (float)Math.Max(1, first.Height); frame.SetPicture(new Bitmap(first)); }
                     if (first != null) first.Dispose();
                     bPlay.Enabled = true; bGo.Enabled = true;
                     Invalidate();
@@ -974,8 +1043,10 @@ namespace FileConverter
             int W = ClientSize.Width, H = ClientSize.Height, p = Pad;
             int y = Head;
             if (video) { frame.Bounds = M(new Rectangle(p, y, W - p * 2, H - Head - Theme.S(300))); y = frame.Bottom + Theme.S(14); }
-            strip.Bounds = M(new Rectangle(p, y, W - p * 2, Theme.S(84)));
-            y += Theme.S(90);
+            strip.Bounds = M(new Rectangle(p, y, W - p * 2, Theme.S(92)));
+            y += Theme.S(94);
+            hintR = new Rectangle(p, y, W - p * 2, Theme.S(20));
+            y += Theme.S(26);
             timesR = new Rectangle(p, y, W - p * 2 - Theme.S(140), Theme.S(36));
             int pw = Math.Max(Theme.S(120), bPlay.PreferredWidth);
             bPlay.Bounds = M(new Rectangle(W - p - pw, y, pw, Theme.S(36)));
@@ -1002,7 +1073,12 @@ namespace FileConverter
         protected override void PaintBody(Graphics g)
         {
             if (info != null)
-                Theme.Text(g, Clock(strip.Start) + "  →  " + Clock(strip.End) + "     ·     " + L.T("tr_length", Clock(strip.End - strip.Start)), Theme.F(9.5f, FontStyle.Bold), Theme.Ink, M(timesR), Align.Start, true, false, true);
+            {
+                Theme.Text(g, L.T(video ? "tr_hint_video" : "tr_hint"), Theme.F(8.25f), Theme.InkFaint, M(hintR), Align.Start, true, false, true);
+                string times = Clock(strip.Start) + "  →  " + Clock(strip.End) + "     ·     " + L.T("tr_length", Clock(strip.End - strip.Start));
+                if (player.Playing && strip.Playhead >= 0) times += "     ·     ▶ " + Clock(strip.Playhead);
+                Theme.Text(g, times, Theme.F(9.5f, FontStyle.Bold), Theme.Ink, M(timesR), Align.Start, true, false, true);
+            }
             Theme.Text(g, L.T("tr_quick"), Theme.F(9f), Theme.Ink, M(quickR), Align.Start, true, true);
             if (status != null) Theme.Text(g, status, Theme.F(9f, done ? FontStyle.Bold : FontStyle.Regular), statusColor, M(statusR), Align.Start, true, true);
         }
@@ -1014,6 +1090,7 @@ namespace FileConverter
             if (busy || done || info == null) return;
             double s0 = strip.Start, s1 = strip.End;
             if (s1 - s0 < 0.1) return;
+            if (player.Playing) Pause();
             busy = true; cancel = false;
             bGo.Enabled = false; strip.Enabled = false; bCancel.Invalidate();
             bar.Visible = true; bar.Value = 0;
@@ -1057,9 +1134,18 @@ namespace FileConverter
         double dur;
         bool video;
         public double Start, End;
+        /// Where it's playing (or last played); -1 = nowhere yet.
+        public double Playhead = -1;
         int grab = -1; double grabT, grabS, grabE;
+        // what a press becomes once the mouse moves (0 start, 1 end, 2 both, 3 the nearer end); a press that
+        // doesn't move is a click: play from there
+        int press = -1; int downX; bool moved;
+        int hoverX = -1;
         float hotHandle = -1;
         public event Action<int> Changed;   // 0 start, 1 end, 2 both
+        /// Clicked (without dragging) at a time: listen from there.
+        public event Action<double> Seek;
+        public double Duration { get { return dur; } }
 
         public TrimStrip() { Surface = Surface.Card; Cursor = Cursors.Hand; }
 
@@ -1089,27 +1175,50 @@ namespace FileConverter
         {
             base.OnMouseDown(e);
             if (dur <= 0 || !Enabled || e.Button != MouseButtons.Left) return;
-            grab = Hit(e.Location);
-            if (grab < 0)
-            {
-                // a click outside the kept part moves the nearer end there
-                double t = T(e.X);
-                grab = Math.Abs(t - Start) < Math.Abs(t - End) ? 0 : 1;
-                Move2(e.X);
-            }
+            press = Hit(e.Location);
+            if (press < 0) press = 3;
+            downX = e.X; moved = false;
             grabT = T(e.X); grabS = Start; grabE = End;
             Capture = true;
         }
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            if (grab >= 0) { Move2(e.X); return; }
+            if (press >= 0)
+            {
+                if (!moved && Math.Abs(e.X - downX) > Theme.S(4))
+                {
+                    moved = true;
+                    // dragged outside the kept part: the nearer end follows
+                    if (press == 3) { double t = T(downX); grab = Math.Abs(t - Start) < Math.Abs(t - End) ? 0 : 1; }
+                    else grab = press;
+                }
+                if (moved) Move2(e.X);
+                return;
+            }
             int h = Hit(e.Location);
             Cursor = h == 0 || h == 1 ? Cursors.SizeWE : h == 2 ? Cursors.SizeAll : Cursors.Hand;
             float hh = h == 0 || h == 1 ? h : -1;
-            if (hh != hotHandle) { hotHandle = hh; Invalidate(); }
+            if (hh != hotHandle || e.X != hoverX) { hotHandle = hh; hoverX = e.X; Invalidate(); }
         }
-        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); grab = -1; Capture = false; Invalidate(); }
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (press >= 0 && !moved && dur > 0 && Seek != null)
+                Seek(press == 0 ? Start : press == 1 ? End : T(e.X));
+            press = -1; grab = -1; Capture = false; Invalidate();
+        }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (hoverX >= 0) { hoverX = -1; Invalidate(); } }
+
+        /// Moves an end to a time (the I and O keys).
+        public void SetEnd(bool end, double t)
+        {
+            double min = Math.Min(0.1, dur / 2);
+            if (end) End = Math.Min(dur, Math.Max(Start + min, t));
+            else Start = Math.Max(0, Math.Min(End - min, t));
+            Invalidate();
+            if (Changed != null) Changed(end ? 1 : 0);
+        }
 
         void Move2(int x)
         {
@@ -1154,6 +1263,18 @@ namespace FileConverter
             }
             Color acc = Theme.AccentColor;
             using (Pen fp = new Pen(acc, Math.Max(2f, Theme.S(3)))) { g.DrawLine(fp, a, r.Y + 1, b, r.Y + 1); g.DrawLine(fp, a, r.Bottom - 1, b, r.Bottom - 1); }
+            // where the mouse would start playing from, and where it's playing
+            if (hoverX >= 0 && press < 0 && hotHandle < 0)
+                using (Pen hp = new Pen(Color.FromArgb(Theme.Dark ? 90 : 70, Theme.Ink), 1f)) g.DrawLine(hp, hoverX, r.Y, hoverX, r.Bottom);
+            if (Playhead >= 0)
+            {
+                float px = X(Playhead);
+                using (Pen sh = new Pen(Color.FromArgb(80, 0, 0, 0), Theme.S(3))) g.DrawLine(sh, px, r.Y - Theme.S(1), px, r.Bottom + Theme.S(1));
+                using (Pen pp = new Pen(Theme.Dark ? Color.White : Theme.Ink, Math.Max(1.5f, Theme.S(2)))) g.DrawLine(pp, px, r.Y - Theme.S(1), px, r.Bottom + Theme.S(1));
+                float k = Theme.S(5);
+                using (SolidBrush pb = new SolidBrush(Theme.Dark ? Color.White : Theme.Ink))
+                    g.FillPolygon(pb, new[] { new PointF(px - k, r.Bottom + Theme.S(2) + k), new PointF(px + k, r.Bottom + Theme.S(2) + k), new PointF(px, r.Bottom + Theme.S(2)) });
+            }
             float hw = Theme.S(10);
             for (int i = 0; i < 2; i++)
             {

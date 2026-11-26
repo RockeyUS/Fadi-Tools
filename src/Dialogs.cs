@@ -376,7 +376,7 @@ namespace FileConverter
             Rectangle tr = new Rectangle(pad, art.Bottom + Theme.S(22), W - pad * 2, Theme.S(34));
             Theme.Text(g, L.T("tour_t" + page), Theme.F(15f, FontStyle.Bold), Theme.Ink, tr, Align.Center);
             Rectangle br = new Rectangle(pad + Theme.S(10), tr.Bottom + Theme.S(8), W - pad * 2 - Theme.S(20), Theme.S(90));
-            Theme.Text(g, L.T("tour_b" + page), Theme.F(10.5f), Theme.InkSoft, br, Align.Center, false, true);
+            Theme.Text(g, L.T("tour_b" + page, DragWheel.KeyName()), Theme.F(10.5f), Theme.InkSoft, br, Align.Center, false, true);
             // page dots
             int n = Glyphs.Length, d = Theme.S(8), gap = Theme.S(8);
             int dx = W / 2 - (n * d + (n - 1) * gap + Theme.S(12)) / 2, dy = ClientSize.Height - pad - Theme.S(40) - Theme.S(30);

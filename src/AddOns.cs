@@ -37,10 +37,13 @@ namespace FileConverter
                 new AddOn { Key = "imagemagick", NameKey = "ao_im", SubKey = "ao_required", Glyph = Ico.Photo, Required = true, Where = () => DirOf(Tools.Magick) },
                 new AddOn { Key = "fonts", NameKey = "ao_fonts", Glyph = Ico.Text, Where = () => IfDir(FontPack.Dir, "fonts") },
                 new AddOn { Key = "whisper", NameKey = "ao_whisper", Glyph = "", Where = () => IfDir(Whisper.Dir, "whisper") },
-                new AddOn { Key = "bg", NameKey = "ao_bg", Glyph = Ps.Subject, Where = () => BgRemover.Ready ? BgRemover.Dir : null },
+                new AddOn { Key = "bg", NameKey = "ao_bg", Glyph = Ps.Subject, Where = () => BgRemover.Ready || Rvm.Ready || Sam.Ready ? BgRemover.Dir : null },
+                new AddOn { Key = "tts", NameKey = "ao_tts", Glyph = Ico.Volume, Where = () => IfDir(Tts.Dir, "tts") },
                 new AddOn { Key = "realesrgan", NameKey = "ao_upscale", Glyph = Ico.Upscale, Where = () => IfDir(Upscaler.Dir, "realesrgan") },
                 new AddOn { Key = "qpdf", NameKey = "ao_qpdf", Glyph = Ico.Doc, Where = () => IfDir(Qpdf.Dir, "qpdf") },
                 new AddOn { Key = "yt", NameKey = "ao_yt", Glyph = Ico.Download, Where = () => IfDir(Tools.YtDir, "yt") },
+                new AddOn { Key = "sendme", NameKey = "ft_engine_name", Glyph = Ico.Send, Where = () => IfDir(FtEngine.Dir, "sendme") },
+                new AddOn { Key = "dumbpipe", NameKey = "ft_pipe_name", Glyph = Ico.Pc, Where = () => IfDir(FtPipe.Dir, "dumbpipe") },
                 new AddOn { Key = "libreoffice", NameKey = "ao_lo", Glyph = Ico.Doc, Machine = true, Where = () => DirOf(Tools.Soffice) },
                 new AddOn { Key = "node", NameKey = "ao_node", Glyph = Ico.Code, Machine = true, Where = () => DirOf(Rea.NodeExe) },
             };
@@ -62,7 +65,7 @@ namespace FileConverter
             {
                 case "bg":
                     BgRemover.Uninstall();
-                    return BgRemover.Ready ? L.T("ao_failed", L.T(a.NameKey)) : L.T("ao_removed", L.T(a.NameKey));
+                    return BgRemover.Ready || Rvm.Ready || Sam.Ready ? L.T("ao_failed", L.T(a.NameKey)) : L.T("ao_removed", L.T(a.NameKey));
                 case "libreoffice":
                     {
                         string winget = Tools.WinGet, o;

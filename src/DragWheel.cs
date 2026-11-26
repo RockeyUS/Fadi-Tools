@@ -83,12 +83,12 @@ namespace FileConverter
         {
             switch (kind)
             {
-                case "image": return new[] { "compress", "crop", "resize", "rotate", "upscale", "nobg", "edit", "text", "info" };
-                case "video": return new[] { "compress", "trim", "edit", "info" };
-                case "audio": return new[] { "compress", "trim", "info" };
-                case "pdf": return new[] { "compress", "edit", "text", "info" };
-                case "doc": return new[] { "compress", "edit", "info" };
-                default: return new[] { "info" };
+                case "image": return new[] { "compress", "crop", "resize", "rotate", "upscale", "nobg", "edit", "text", "info", "send" };
+                case "video": return new[] { "compress", "trim", "crop", "edit", "info", "send" };
+                case "audio": return new[] { "compress", "trim", "info", "send" };
+                case "pdf": return new[] { "compress", "edit", "text", "info", "send" };
+                case "doc": return new[] { "compress", "edit", "info", "send" };
+                default: return new[] { "info", "send" };
             }
         }
 
@@ -98,11 +98,11 @@ namespace FileConverter
             switch (kind)
             {
                 case "image": return "compress,crop,resize,upscale,nobg,edit,text,info";
-                case "video": return "compress,trim,edit,info";
-                case "audio": return "compress,trim,info";
-                case "pdf": return "compress,edit,text,info";
-                case "doc": return "compress,edit,info";
-                default: return "info";
+                case "video": return "compress,trim,crop,edit,info,send";
+                case "audio": return "compress,trim,info,send";
+                case "pdf": return "compress,edit,text,info,send";
+                case "doc": return "compress,edit,info,send";
+                default: return "info,send";
             }
         }
 
@@ -151,6 +151,10 @@ namespace FileConverter
             Add("WheelMig163.rs", "image", "resize", "crop");
             Add("WheelMig163.tv", "video", "trim", "compress");
             Add("WheelMig163.ta", "audio", "trim", "compress");
+            // 1.8.3: Send to a friend (File Transfer), at the end of the ring where there's room
+            foreach (string k in new[] { "video", "audio", "pdf", "doc", "data" }) Add("WheelMig183.send." + k, k, "send", "info");
+            // 1.8.3: Crop for videos, after Trim
+            Add("WheelMig183.vcrop", "video", "crop", "trim");
         }
 
         static void Add(string flag, string kind, string action, string after)
@@ -210,6 +214,7 @@ namespace FileConverter
                 case "f_compress": return new WheelItem { Action = a, Glyph = "\uE73F", Label = () => L.T("wh_compress") };
                 case "f_rename": return new WheelItem { Action = a, Glyph = "\uE8AC", Label = () => L.T("wh_f_rename") };
                 case "f_dupes": return new WheelItem { Action = a, Glyph = Ico.Copy, Label = () => L.T("wh_f_dupes") };
+                case "send": case "f_send": return new WheelItem { Action = a, Glyph = Ico.Send, Label = () => L.T("wh_send") };
                 default: return new WheelItem { Action = "info", Glyph = Ico.Info, Label = () => L.T("wh_info") };
             }
         }
@@ -267,8 +272,110 @@ namespace FileConverter
         }
 
         static bool Down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
-        /// Shift is held right now.
-        public static bool ShiftDown { get { try { return Down(0x10); } catch { return false; } } }
+        /// The key held to open the wheel is down right now.
+        public static bool KeyHeld { get { try { return Down(KeyVk); } catch { return false; } } }
+
+        // ------------------------------------------------------------------ the key that opens it
+
+        [DllImport("user32.dll")] static extern uint MapVirtualKey(uint code, uint type);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetKeyNameText(int lParam, System.Text.StringBuilder s, int size);
+        static int vkCache = -1;
+        /// The key (or mouse side button) held while dragging to open the wheel: Shift unless changed in Settings.
+        public static int KeyVk
+        {
+            get
+            {
+                if (vkCache < 0) { int v; vkCache = int.TryParse(Settings.Get("WheelKey", "16"), out v) && Allowed(v) ? v : 0x10; }
+                return vkCache;
+            }
+            set
+            {
+                if (!Allowed(value)) return;
+                vkCache = value;
+                Settings.Set("WheelKey", value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                NotifyChanged();
+            }
+        }
+        /// Keys that can't open it: the main mouse buttons, Escape (it cancels a drag) and the Windows keys.
+        public static bool Allowed(int vk)
+        {
+            if (vk <= 0 || vk > 0xFE) return false;
+            if (vk == 0x01 || vk == 0x02 || vk == 0x03 || vk == 0x04 || vk == 0x1B || vk == 0x5B || vk == 0x5C) return false;
+            if (vk >= 0xA0 && vk <= 0xA5) return false;   // left / right Shift, Ctrl, Alt: the plain ones stand for both
+            return true;
+        }
+        /// The key's name as it's written on the keyboard.
+        public static string KeyName(int vk)
+        {
+            switch (vk)
+            {
+                case 0x10: return "Shift";
+                case 0x11: return "Ctrl";
+                case 0x12: return "Alt";
+                case 0x05: return L.T("key_mouse4");
+                case 0x06: return L.T("key_mouse5");
+                case 0x14: return "Caps Lock";
+                case 0x20: return L.T("key_space");
+                case 0x09: return "Tab";
+                case 0x0D: return "Enter";
+            }
+            try
+            {
+                if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                {
+                    uint sc = MapVirtualKey((uint)vk, 0);
+                    bool ext = (vk >= 0x21 && vk <= 0x2E) || vk == 0x5D || vk == 0x6F || vk == 0x90;
+                    System.Text.StringBuilder b = new System.Text.StringBuilder(64);
+                    if (sc != 0 && GetKeyNameText((int)((sc << 16) | (ext ? 1u << 24 : 0)), b, 64) > 0)
+                    {
+                        string n = b.ToString();
+                        return n.Length == 1 ? n.ToUpperInvariant() : System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(n.ToLowerInvariant());
+                    }
+                }
+            }
+            catch { }
+            string k = ((Keys)vk).ToString();
+            if (k.Length == 2 && k[0] == 'D' && char.IsDigit(k[1])) k = k.Substring(1);
+            return k;
+        }
+        public static string KeyName() { return KeyName(KeyVk); }
+
+        /// Waits for the next key (or mouse side button) to go down, for Settings → "Opens with". Keys already held
+        /// when it starts count only after they're let go. Escape cancels (done gets 0).
+        public static Action CaptureKey(Action<int> done)
+        {
+            bool[] was = new bool[256];
+            try { for (int v = 1; v < 256; v++) was[v] = Down(v); } catch { }
+            Timer t = new Timer { Interval = 20 };
+            bool over = false;
+            Action finish = null;
+            finish = () => { if (over) return; over = true; t.Stop(); t.Dispose(); };
+            t.Tick += (s, e) =>
+            {
+                try
+                {
+                    int found = -1;
+                    // the plain Shift / Ctrl / Alt first (Windows also reports the left or right one)
+                    int[] order = new int[256];
+                    int n = 0;
+                    order[n++] = 0x10; order[n++] = 0x11; order[n++] = 0x12;
+                    for (int v = 1; v < 256; v++) if (v != 0x10 && v != 0x11 && v != 0x12) order[n++] = v;
+                    for (int i = 0; i < n; i++)
+                    {
+                        int v = order[i];
+                        bool d = Down(v);
+                        if (d && !was[v] && (v == 0x1B || Allowed(v))) { found = v; break; }
+                        was[v] = d;
+                    }
+                    if (found < 0) return;
+                    finish();
+                    done(found == 0x1B ? 0 : found);
+                }
+                catch { finish(); done(0); }
+            };
+            t.Start();
+            return () => finish();
+        }
 
         static void Tick()
         {
@@ -281,13 +388,13 @@ namespace FileConverter
                 armed = StartsOverFileManager(p);
             }
             // Shift pressed again while still dragging (after letting go of it closed the wheel): it comes back
-            if (down && armed && shown && !refused && Down(0x10) && (win == null || win.IsDisposed || win.GoingAway)) OpenWheel(p);
+            if (down && armed && shown && !refused && Down(KeyVk) && (win == null || win.IsDisposed || win.GoingAway)) OpenWheel(p);
             if (down && armed && !shown)
             {
                 // a real drag: past the distance Windows itself waits for before a drag starts
                 int tx = Math.Max(4, GetSystemMetrics(68)), ty = Math.Max(4, GetSystemMetrics(69));
                 bool dragging = Math.Abs(p.X - downAt.X) > tx || Math.Abs(p.Y - downAt.Y) > ty;
-                if (dragging && Down(0x10))
+                if (dragging && Down(KeyVk))
                 {
                     shown = true;
                     if (hinting) { DragHint.HideNow(); hinting = false; }
@@ -363,7 +470,7 @@ namespace FileConverter
             foreach (string f in files) if (Directory.Exists(f)) folder = true;
             if (folder)
             {
-                foreach (string a in new[] { "f_convert", "f_compress", "f_rename", "f_dupes" }) actions.Add(WheelConfig.ActionItem(a));
+                foreach (string a in new[] { "f_convert", "f_compress", "f_rename", "f_dupes", "f_send" }) actions.Add(WheelConfig.ActionItem(a));
                 return;
             }
             string ext = Formats.Ext(files[0]);
@@ -767,7 +874,7 @@ namespace FileConverter
             // (a short grace, so a quick bounce of the key doesn't close it)
             if (closingAt < 0 && !dropped && releasedAt < 0)
             {
-                if (DragWheel.ShiftDown) shiftUpAt = -1;
+                if (DragWheel.KeyHeld) shiftUpAt = -1;
                 else if (shiftUpAt < 0) shiftUpAt = now;
                 else if (now - shiftUpAt > 40) { quick = true; BeginClose(); }
             }

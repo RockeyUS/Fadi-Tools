@@ -19,6 +19,108 @@ namespace FileConverter
         Bitmap Still(string file);
     }
 
+    // ====================================================================== light copies of heavy videos, for the preview
+    /// Big or hard-to-decode videos (above 720p, or VP9 / AV1 / HEVC…) get a light copy made once in the background:
+    /// 720p H.264 with a keyframe every 12 frames. The preview plays and jumps around in that copy, so a click on
+    /// the timeline starts playing at once; exporting still uses the original file.
+    public static class ProxyCache
+    {
+        public class Entry { public string File, Proxy; public volatile bool Done, Failed; }
+        static readonly Dictionary<string, Entry> map = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
+        static bool cleaned;
+        static string Dir { get { return Path.Combine(Path.GetTempPath(), "fadi_proxy"); } }
+
+        /// Whether a video is heavy enough to be worth a light copy.
+        public static bool Wanted(MediaInfo mi)
+        {
+            if (mi == null || !mi.HasVideo || mi.Duration < 2) return false;
+            string v = (mi.VCodec ?? "").ToLowerInvariant();
+            return mi.Height > 720 || mi.Width > 1280 || mi.Fps > 40 || (v != "h264" && v != "mpeg4" && v != "mjpeg" && v != "");
+        }
+
+        /// Starts the light copy of a file (once); see-through cut-outs aren't copied.
+        public static void Get(string file, MediaInfo mi)
+        {
+            if (string.IsNullOrEmpty(file) || !Wanted(mi)) return;
+            Entry e;
+            lock (map)
+            {
+                if (map.ContainsKey(file)) return;
+                e = new Entry { File = file };
+                map[file] = e;
+            }
+            new Thread(() => Make(e)) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
+        }
+
+        /// The light copy when it's ready, otherwise null (the original is used meanwhile).
+        public static string Use(string file)
+        {
+            if (string.IsNullOrEmpty(file)) return null;
+            Entry e;
+            lock (map) if (!map.TryGetValue(file, out e)) return null;
+            return e.Done && !e.Failed && File.Exists(e.Proxy) ? e.Proxy : null;
+        }
+
+        static void Clean()
+        {
+            if (cleaned) return;
+            cleaned = true;
+            try
+            {
+                if (!Directory.Exists(Dir)) return;
+                foreach (string f in Directory.GetFiles(Dir))
+                    try { if ((DateTime.Now - File.GetLastWriteTime(f)).TotalDays > 3) File.Delete(f); } catch { }
+            }
+            catch { }
+        }
+
+        static void Make(Entry e)
+        {
+            string part = null;
+            try
+            {
+                Clean();
+                Directory.CreateDirectory(Dir);
+                FileInfo fi = new FileInfo(e.File);
+                string k;
+                using (MD5 md = MD5.Create())
+                {
+                    byte[] h = md.ComputeHash(Encoding.UTF8.GetBytes(e.File.ToLowerInvariant() + "|" + fi.Length + "|" + fi.LastWriteTimeUtc.Ticks + "|p2"));
+                    StringBuilder b = new StringBuilder();
+                    for (int i = 0; i < 10; i++) b.Append(h[i].ToString("x2"));
+                    k = b.ToString();
+                }
+                string proxy = Path.Combine(Dir, k + ".mp4");
+                if (File.Exists(proxy) && new FileInfo(proxy).Length > 0)
+                {
+                    try { File.SetLastWriteTime(proxy, DateTime.Now); } catch { }
+                    e.Proxy = proxy; e.Done = true; return;
+                }
+                string ff = Tools.FFmpeg;
+                if (ff == null) { e.Failed = true; return; }
+                part = Path.Combine(Dir, k + ".part.mp4");
+                string args = "-hide_banner -loglevel error -y -i " + Tools.Quote(e.File) + " -map 0:v:0 -an -sn -dn " +
+                              "-vf \"scale=-2:'min(720,ih)':flags=bilinear,format=yuv420p\" -c:v libx264 -preset ultrafast -tune fastdecode -crf 27 " +
+                              "-g 12 -keyint_min 12 -sc_threshold 0 -movflags +faststart " + Tools.Quote(part);
+                ProcessStartInfo psi = new ProcessStartInfo(ff, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
+                using (Process p = Process.Start(psi))
+                {
+                    try { p.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+                    p.ErrorDataReceived += (s, a) => { };
+                    p.BeginErrorReadLine();
+                    while (!p.WaitForExit(250))
+                        if (Tools.ShuttingDown) { try { p.Kill(); } catch { } e.Failed = true; return; }
+                    if (p.ExitCode != 0) { e.Failed = true; return; }
+                }
+                if (File.Exists(proxy)) File.Delete(proxy);
+                File.Move(part, proxy); part = null;
+                e.Proxy = proxy; e.Done = true;
+            }
+            catch { e.Failed = true; }
+            finally { if (part != null) try { if (File.Exists(part)) File.Delete(part); } catch { } }
+        }
+    }
+
     // ====================================================================== the sound of files, decoded once
     /// Each file's sound as plain 48 kHz stereo samples in a temporary file (decoded once, in the background),
     /// so playing can start at any moment and mix any number of clips without starting FFmpeg again.
@@ -358,7 +460,7 @@ namespace FileConverter
     {
         sealed class Dec
         {
-            public string ClipId, File; public double Start, Rate; public int W, H; public bool Alpha;
+            public string ClipId, File, Src; public double Start, Rate; public int W, H; public bool Alpha;
             Process p; Thread th; volatile bool stop;
             readonly Queue<KeyValuePair<double, Bitmap>> q = new Queue<KeyValuePair<double, Bitmap>>();
             public Bitmap Cur; public double CurT = -1;
@@ -379,7 +481,7 @@ namespace FileConverter
                     string ff = Tools.FFmpeg;
                     if (ff == null) return;
                     CultureInfo ci = CultureInfo.InvariantCulture;
-                    string args = "-hide_banner -loglevel error " + (Alpha ? "-c:v libvpx-vp9 " : "") + "-ss " + Math.Max(0, Start).ToString("0.###", ci) + " -i " + Tools.Quote(File) +
+                    string args = "-hide_banner -loglevel error " + (Alpha ? "-c:v libvpx-vp9 " : "") + "-ss " + Math.Max(0, Start).ToString("0.###", ci) + " -i " + Tools.Quote(Src ?? File) +
                                   " -an -sn -dn -vf \"fps=" + Rate.ToString("0.###", ci) + ",scale=" + W + ":" + H + ",setsar=1\" -f rawvideo -pix_fmt bgra pipe:1";
                     p = Process.Start(new ProcessStartInfo(ff, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true });
                     p.ErrorDataReceived += (s, a) => { };
@@ -434,11 +536,12 @@ namespace FileConverter
 
         readonly Dictionary<string, Dec> decs = new Dictionary<string, Dec>();
         readonly IFrames stills;
+        readonly FrameCache cache;
         public int BoxW = 960, BoxH = 540;
         public double Fps = 30;
         long now;
 
-        public LiveFrames(IFrames stills) { this.stills = stills; }
+        public LiveFrames(IFrames stills) { this.stills = stills; cache = stills as FrameCache; }
 
         public Bitmap Still(string file) { return stills.Still(file); }
 
@@ -468,7 +571,7 @@ namespace FileConverter
             if (stale)
             {
                 if (d != null) d.Stop();
-                d = new Dec { ClipId = c.Id, File = c.File, Start = Math.Max(0, srcT), Rate = rate, W = w, H = h, Alpha = c.Alpha };
+                d = new Dec { ClipId = c.Id, File = c.File, Src = (c.Alpha ? null : ProxyCache.Use(c.File)) ?? c.File, Start = Math.Max(0, srcT), Rate = rate, W = w, H = h, Alpha = c.Alpha };
                 decs[c.Id] = d;
                 d.Begin();
             }
@@ -486,7 +589,8 @@ namespace FileConverter
             {
                 // its decoder is just starting: the nearest frame already at hand meanwhile (no black flash)
                 bool ex;
-                b = stills.Video(c, srcT, out ex);
+                b = cache != null && !c.Alpha ? cache.Near(c.File, srcT) : stills.Video(c, srcT, out ex);
+                if (b == null) b = stills.Video(c, srcT, out ex);
                 exact = false;
             }
             return b;
@@ -494,6 +598,33 @@ namespace FileConverter
 
         /// Starts a clip's decoder before it shows (so it's ready on time).
         public void Prepare(VClip c, double srcT) { if (c.File != null && c.Kind == VKind.Video) Ensure(c, srcT); }
+
+        /// A decoder for the clip that gives exactly the frame at srcT next: the one there is when it's already at that
+        /// spot (paused and played again), otherwise a new one started right there (no catching up after it starts).
+        public void PrepareExact(VClip c, double srcT)
+        {
+            if (c.File == null || c.Kind != VKind.Video) return;
+            Dec d;
+            decs.TryGetValue(c.Id, out d);
+            if (d != null)
+            {
+                double f = 1 / Math.Max(1, d.Rate);
+                // (starting again right there is quicker than decoding on to a spot even a second ahead)
+                bool there = d.CurT < 0 ? Math.Abs(srcT - d.Start) <= f : srcT >= d.CurT - f * 0.5 && srcT <= Math.Max(d.Newest, d.CurT) + f * 1.5;
+                if (!there) { d.Stop(); decs.Remove(c.Id); }
+            }
+            Ensure(c, srcT);
+        }
+
+        /// Whether the clip's decoder has (about) the frame at srcT.
+        public bool Ready(VClip c, double srcT)
+        {
+            Dec d;
+            if (c.File == null || c.Kind != VKind.Video) return true;
+            if (!decs.TryGetValue(c.Id, out d)) return false;
+            double f = 1 / Math.Max(1, d.Rate);
+            return d.Newest >= srcT - f * 1.5 || d.CurT >= srcT - f * 1.5;
+        }
 
         /// One frame done: decoders of clips that aren't showing any more stop.
         public void Sweep()
@@ -526,6 +657,10 @@ namespace FileConverter
         // every Start and Stop begins a new "generation": threads of an older one finish on their own (nothing waits for them)
         volatile int gen;
         volatile bool running;
+        // the clock waits at baseT (sound too) until the picture's first frames are decoded, so playing never starts
+        // with a frozen picture that then has to catch up
+        volatile bool hold;
+        int holdId;
         Timer idle;
         public volatile float Master = 1f;
         public bool Running { get { return running; } }
@@ -545,6 +680,7 @@ namespace FileConverter
             {
                 lock (mixLock)
                 {
+                    if (hold) return baseT;
                     if (wave != null) { long f = wave.Played(); if (f >= 0) return baseT + f / (double)PcmCache.Rate; }
                     return baseT + sw.Elapsed.TotalSeconds;
                 }
@@ -569,18 +705,95 @@ namespace FileConverter
                 foreach (Voice v in voices.Values) v.Dispose();
                 voices.Clear();
                 Interlocked.Exchange(ref posting, 0);
+                hold = true;
             }
             if (old != null) ThreadPool.QueueUserWorkItem(_ => { lock (stills.Gate) old.Clear(); });
             // make sure every sound is being decoded
             foreach (VTrack t in p.Tracks) foreach (VClip c in t.Clips) if (c.HasSound && c.File != null) PcmCache.Get(c.File);
             LiveFrames lf = live;
+            Prime(my, p, from, lf);
             if (wave != null) new Thread(() => MixLoop(my)) { IsBackground = true, Priority = ThreadPriority.AboveNormal }.Start();
             new Thread(() => RenderLoop(my, w, h, lf)) { IsBackground = true }.Start();
+        }
+
+        /// The video clips that show at a moment, each with the moment of its file then.
+        static List<KeyValuePair<VClip, double>> Showing(VProject p, double t)
+        {
+            List<KeyValuePair<VClip, double>> r = new List<KeyValuePair<VClip, double>>();
+            foreach (VTrack tr in p.Tracks)
+                if (!tr.Hidden && tr.Visual)
+                    foreach (VClip c in tr.Clips)
+                        if (c.Kind == VKind.Video && c.File != null && t >= c.At - 0.001 && t < c.End)
+                            r.Add(new KeyValuePair<VClip, double>(c, Math.Max(0, Math.Min(c.Out - 0.04, c.In + (t - c.At) * c.Speed))));
+            return r;
+        }
+
+        /// Starts (or reuses) the decoders for the moment t, and lets the clock run once their first frames are in
+        /// (at most about 0.8 s: a file that's slow to open doesn't hold playing back for long).
+        void Prime(int my, VProject p, double t, LiveFrames lf)
+        {
+            int id;
+            lock (mixLock) { id = ++holdId; hold = true; }
+            List<KeyValuePair<VClip, double>> want = Showing(p, t);
+            new Thread(() =>
+            {
+                try
+                {
+                    lock (stills.Gate) foreach (KeyValuePair<VClip, double> kv in want) lf.PrepareExact(kv.Key, kv.Value);
+                    Stopwatch w = Stopwatch.StartNew();
+                    while (gen == my && w.ElapsedMilliseconds < 800)
+                    {
+                        bool all = true;
+                        lock (stills.Gate) foreach (KeyValuePair<VClip, double> kv in want) if (!lf.Ready(kv.Key, kv.Value)) { all = false; break; }
+                        if (all) break;
+                        Thread.Sleep(4);
+                    }
+                }
+                catch { }
+                lock (mixLock)
+                {
+                    if (gen != my || holdId != id) return;
+                    if (wave != null) wave.Reset();
+                    mixT = baseT; sw.Restart();
+                    hold = false;
+                }
+            }) { IsBackground = true }.Start();
+        }
+
+        /// While paused: gets the decoders ready at the playhead, so pressing play starts at once.
+        public void Warm(VProject p, double t, int w, int h, double fps)
+        {
+            if (running || p == null) return;
+            w = Math.Max(64, w); h = Math.Max(64, h); fps = Math.Max(15, Math.Min(30, fps));
+            LiveFrames lf, old = null;
+            lock (mixLock)
+            {
+                if (running) return;
+                if (live == null || !live.Fits(w, h, fps)) { old = live; live = new LiveFrames(stills) { BoxW = w, BoxH = h, Fps = fps }; }
+                lf = live;
+            }
+            int g = gen;
+            List<KeyValuePair<VClip, double>> want = Showing(p, t);
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                if (old != null) lock (stills.Gate) old.Clear();
+                lock (stills.Gate)
+                {
+                    if (running || gen != g) return;
+                    foreach (KeyValuePair<VClip, double> kv in want) lf.PrepareExact(kv.Key, kv.Value);
+                    lf.Sweep();
+                }
+            });
+            // let them go again if it isn't played soon
+            Timer o = idle;
+            idle = new Timer(_ => Release(g), null, 20000, Timeout.Infinite);
+            if (o != null) o.Dispose();
         }
 
         /// Jumps while playing (sound and picture carry on from there).
         public void Seek(double t)
         {
+            int my; VProject p; LiveFrames lf;
             lock (mixLock)
             {
                 if (wave != null) wave.Reset();
@@ -588,7 +801,11 @@ namespace FileConverter
                 sw.Restart();
                 foreach (Voice v in voices.Values) v.Dispose();
                 voices.Clear();
+                hold = true;
+                my = gen; p = project; lf = live;
             }
+            if (lf != null && p != null) Prime(my, p, Math.Max(0, t), lf);
+            else lock (mixLock) hold = false;
         }
 
         /// Pauses at once (no waiting for anything). The decoders and the sound device stay ready for a few
@@ -685,7 +902,7 @@ namespace FileConverter
                     lock (mixLock)
                     {
                         if (gen != my) break;
-                        if (wave != null && wave.Free(wave.Next))
+                        if (!hold && wave != null && wave.Free(wave.Next))
                         {
                             Mix(mixT, acc, tmp, outb);
                             wave.Write(wave.Next, outb);

@@ -213,11 +213,12 @@ namespace FileConverter
             }
             // the installed copy of a new version (an update, or the file replaced by hand): refresh the shortcuts,
             // right-click menu and "Open with" once, so they match this version (e.g. no "Image Viewer" entry since 1.6.0)
-            if (!Paths.Portable && Shell.IsInstalledCopy && Settings.Get("IntegratedVersion", "") != Shell.Version)
+            // ("+send": 1.8.3 added "Send with Fadi Tools" to the menu after it first went out, so it's refreshed once more)
+            if (!Paths.Portable && Shell.IsInstalledCopy && Settings.Get("IntegratedVersion", "") != Shell.Version + "+send")
             {
                 try { Shell.Integrate(Settings.Get("IntDesktop", "1") == "1", Settings.Get("IntMenu", "1") == "1", Settings.Get("IntViewer", "1") == "1"); } catch { }
                 Shell.ApplyStartup();
-                Settings.Set("IntegratedVersion", Shell.Version);
+                Settings.Set("IntegratedVersion", Shell.Version + "+send");
             }
             Shell.SetBrowserEmulation();
             BgRemover.FinishRemoval();
