@@ -179,7 +179,7 @@ footer .test{margin-inline-start:auto;font-size:13px;border:1px dashed var(--lin
   <div class="wrap two">
     <div>
       <h2 data-t="priv_h">Your files stay on your PC</h2>
-      <p class="lead" data-t="priv_sub">Fadi Tools connects to the internet only when you ask it to: to download a video, to fetch an engine the first time, or to check for an update.</p>
+      <p class="lead" data-t="priv_sub">Fadi Tools connects to the internet only when you ask it to: to download a video, to send a file to a friend, to fetch an engine or AI model the first time, or to check for an update.</p>
     </div>
     <ul class="list" id="privlist"></ul>
   </div>
@@ -207,7 +207,10 @@ const ICON = {
   dup:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
   download:'<path d="M12 3v12m0 0-5-5m5 5 5-5M5 21h14"/>',
   inspect:'<circle cx="11" cy="11" r="7"/><path d="m21 21-5-5"/>',
-  check:'<path d="m5 12 5 5 9-10"/>'
+  check:'<path d="m5 12 5 5 9-10"/>',
+  send:'<path d="M21 3 10 14M21 3l-7 18-4-7-7-4 18-7Z"/>',
+  voice:'<path d="M4 9v6h4l5 4V5L8 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>',
+  cut:'<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.1 8.1 20 20M8.1 15.9 20 4"/>'
 };
 const svg = k => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + ICON[k] + '</svg>';
 
@@ -223,7 +226,7 @@ const T = {
   exe_tag:"Small download",exe_p:"Just the app. The first time it opens, it downloads the engines it needs (like FFmpeg) and asks before anything big.",exe_btn:"Get the exe",
   smart:"<b>Windows protected your PC?</b> Fadi Tools isn't code-signed yet, so Windows may warn about it. Click More info, then Run anyway. Every release is built and tested by GitHub Actions from the public code.",
   req1a:"Needs",req1b:"Windows 10 or 11 (64-bit)",req2a:"Price",req2b:"Free, no account, no ads",req3a:"Updates",req3b:"The app updates itself when a new version is out",
-  priv_h:"Your files stay on your PC",priv_sub:"Fadi Tools connects to the internet only when you ask it to: to download a video, to fetch an engine the first time, or to check for an update.",
+  priv_h:"Your files stay on your PC",priv_sub:"Fadi Tools connects to the internet only when you ask it to: to download a video, to send a file to a friend, to fetch an engine or AI model the first time, or to check for an update.",
   foot:"Fadi Tools · open source under the MIT License",foot_src:"Source code",foot_rel:"All releases",foot_priv:"Privacy and builds",test:"Test site",
   prev:"Previous",next:"Next",lang:"العربية",alt:"The {0} page of Fadi Tools"},
  ar:{name:"أدوات فادي",nav_features:"ماذا يفعل",nav_screens:"لقطات الشاشة",nav_download:"التنزيل",
@@ -237,18 +240,21 @@ const T = {
   exe_tag:"تنزيل صغير",exe_p:"التطبيق وحده. في أول مرة يُفتح، ينزّل المحركات التي يحتاجها (مثل FFmpeg) ويسأل قبل أي تنزيل كبير.",exe_btn:"تنزيل ملف exe",
   smart:"<b>ظهرت رسالة «حمى Windows جهازك»؟</b> أدوات فادي غير موقّع رقمياً بعد، لذلك قد يحذّر منه ويندوز. انقر «مزيد من المعلومات» ثم «التشغيل على أي حال». كل إصدار يُبنى ويُختبر عبر GitHub Actions من الكود المنشور.",
   req1a:"يحتاج",req1b:"ويندوز 10 أو 11 (64 بت)",req2a:"السعر",req2b:"مجاني، بلا حساب ولا إعلانات",req3a:"التحديثات",req3b:"يحدّث التطبيق نفسه عند صدور نسخة جديدة",
-  priv_h:"ملفاتك تبقى على جهازك",priv_sub:"لا يتصل أدوات فادي بالإنترنت إلا عندما تطلب ذلك: لتنزيل فيديو، أو لجلب محرك في المرة الأولى، أو للتحقق من التحديثات.",
+  priv_h:"ملفاتك تبقى على جهازك",priv_sub:"لا يتصل أدوات فادي بالإنترنت إلا عندما تطلب ذلك: لتنزيل فيديو، أو لإرسال ملف إلى صديق، أو لجلب محرك أو نموذج ذكاء اصطناعي في المرة الأولى، أو للتحقق من التحديثات.",
   foot:"أدوات فادي · مفتوح المصدر برخصة MIT",foot_src:"الكود المصدري",foot_rel:"كل الإصدارات",foot_priv:"الخصوصية وطريقة البناء",test:"موقع تجريبي",
   prev:"السابق",next:"التالي",lang:"English",alt:"صفحة {0} في أدوات فادي"}
 };
 const FEATS = [
  ["convert",{en:["Convert","Pictures, audio, video, documents and data files, from one format to another."],ar:["التحويل","الصور والصوت والفيديو والمستندات وملفات البيانات، من صيغة إلى أخرى."]}],
  ["compress",{en:["Compress","Smaller videos and pictures, with one-click sizes for Discord, email and profile pictures."],ar:["الضغط","فيديوهات وصور أصغر، مع أحجام بنقرة واحدة لديسكورد والبريد وصور الملف الشخصي."]}],
- ["studio",{en:["Studio","Edit photos and videos: text, photos on top, remove backgrounds, trim, transitions, music and auto captions. Edit PDFs: add text, combine, reorder, sign, number, watermark, lock and split."],ar:["الاستوديو","عدّل الصور والفيديو: نصوص، وصور فوقها، وإزالة الخلفيات، والقص، والانتقالات، والموسيقى، والترجمة التلقائية. وعدّل ملفات PDF: أضف نصاً، وادمج، وأعد الترتيب، ووقّع، ورقّم، وضع علامة مائية، واقفل، وقسّم."]}],
+ ["studio",{en:["Studio","Edit photos and videos: text, photos on top, trim, transitions, music and auto captions. Edit PDFs: add text, combine, reorder, sign, number, watermark, lock and split."],ar:["الاستوديو","عدّل الصور والفيديو: نصوص، وصور فوقها، والقص، والانتقالات، والموسيقى، والترجمة التلقائية. وعدّل ملفات PDF: أضف نصاً، وادمج، وأعد الترتيب، ووقّع، ورقّم، وضع علامة مائية، واقفل، وقسّم."]}],
+ ["cut",{en:["AI cut-outs","Remove a video's background with an AI made for video, so hair and edges stay steady. Or just click the person or thing to keep, in a photo or a video."],ar:["القص بالذكاء الاصطناعي","أزل خلفية الفيديو بذكاء اصطناعي مصمم للفيديو، فيبقى الشعر والحواف ثابتة. أو انقر فقط على الشخص أو الشيء الذي تريد إبقاءه، في صورة أو فيديو."]}],
+ ["voice",{en:["Read aloud","Type a text, or use your captions, and a natural voice reads it in English or Arabic, straight onto your video."],ar:["القراءة بصوت عالٍ","اكتب نصاً أو استخدم ترجمتك، وسيقرؤه صوت طبيعي بالإنجليزية أو العربية مباشرة على الفيديو."]}],
+ ["send",{en:["File Transfer","Send big files and folders straight to a friend's PC: encrypted, checked, and it picks up where it left off. Friends and PCs on your network are one drop away."],ar:["نقل الملفات","أرسل الملفات والمجلدات الكبيرة مباشرة إلى جهاز صديقك: مشفّرة ومُتحقَّق منها، وتكمل من حيث توقفت. الأصدقاء والأجهزة على شبكتك على بُعد سحبة واحدة."]}],
  ["text",{en:["Copy text from pictures","Copy text out of screenshots and photos, and make scanned PDFs searchable, in Arabic and English."],ar:["نسخ النص من الصور","انسخ النص من لقطات الشاشة والصور، واجعل ملفات PDF الممسوحة قابلة للبحث، بالعربية والإنجليزية."]}],
  ["rename",{en:["Rename","Many files at once: numbered, find and replace, or by the date a photo was taken and a song's tags. With undo."],ar:["إعادة التسمية","ملفات كثيرة دفعة واحدة: بالترقيم، أو البحث والاستبدال، أو بتاريخ التقاط الصورة ووسوم الأغنية. مع إمكانية التراجع."]}],
  ["dup",{en:["Find duplicates","Finds files that are exact copies and moves the extra ones to the Recycle Bin."],ar:["البحث عن المكرر","يجد الملفات المتطابقة وينقل النسخ الزائدة إلى سلة المحذوفات."]}],
- ["download",{en:["Download","From YouTube and over a thousand sites. Copy a link and it offers to download it."],ar:["التنزيل","من يوتيوب وأكثر من ألف موقع. انسخ رابطاً وسيعرض تنزيله."]}],
+ ["download",{en:["Download","From YouTube and over a thousand sites, as MP4, MOV or MKV. Copy a link and it offers to download it."],ar:["التنزيل","من يوتيوب وأكثر من ألف موقع، بصيغة MP4 أو MOV أو MKV. انسخ رابطاً وسيعرض تنزيله."]}],
  ["inspect",{en:["File inspector","See what's really inside a file, with Reverse engineer for the curious."],ar:["فاحص الملفات","اعرف ما بداخل الملف حقاً، مع «الهندسة العكسية» للفضوليين."]}]
 ];
 const PRIV = {
@@ -258,7 +264,7 @@ const PRIV = {
 const PAGES = [
  ["convert",{en:"Convert",ar:"التحويل"}],["studio",{en:"Studio",ar:"الاستوديو"}],["compress",{en:"Compress",ar:"الضغط"}],
  ["rename",{en:"Rename",ar:"إعادة التسمية"}],["duplicates",{en:"Duplicates",ar:"المكررات"}],["inspector",{en:"File inspector",ar:"فاحص الملفات"}],
- ["download",{en:"Download",ar:"التنزيل"}],["settings",{en:"Settings",ar:"الإعدادات"}]
+ ["download",{en:"Download",ar:"التنزيل"}],["transfer",{en:"File Transfer",ar:"نقل الملفات"}],["settings",{en:"Settings",ar:"الإعدادات"}]
 ];
 
 let lang = "en";

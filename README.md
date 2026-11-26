@@ -19,10 +19,13 @@ If Windows says "Windows protected your PC", It's due to Unsigned code, click **
 - **Convert** pictures, audio, video, documents and data files
 - **Compress** videos and pictures, with one-click sizes for Discord, Email and profile pictures
 - **Studio** — edit photos and videos (text, photos on top, rotate, remove backgrounds, trim, transitions, music, auto captions) and PDFs (add text and pictures, combine, reorder, rotate, sign, number, watermark, lock, split, save pages as pictures)
+- **AI cut-outs** — remove a video's background with an AI made for video (hair and edges stay steady), or click the person or thing to keep, in a photo or a video
+- **Read aloud** — a natural voice reads your text or captions in English or Arabic, straight onto the video
+- **File Transfer** — send big files and folders straight to a friend's PC: encrypted, checked, picks up where it left off; friends and PCs on your network are one drop away
 - **Copy text from pictures** and **make scanned PDFs searchable** (Arabic and English)
 - **Rename** many files at once — numbered, find & replace, or by the date a photo was taken and a song's tags — with undo
 - **Find duplicate files** and move the extra copies to the Recycle Bin
-- **Download** from YouTube and 1,000+ sites — or just copy a link and it offers to
+- **Download** from YouTube and 1,000+ sites as MP4, MOV or MKV — or just copy a link and it offers to
 - **File inspector**, with **Reverse engineer** inside it, for the curious
 - Keeps working by the clock when you close the window mid-job, works with the keyboard and screen readers, and stays sharp on every screen
 
@@ -35,6 +38,11 @@ Windows 10 or 11. The app updates itself when a new version comes out.
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/RockeyUS/Fadi-Tools/main/screenshots/studio-dark-en.png">
   <img alt="Studio" src="screenshots/studio-light-en.png" width="1220">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/RockeyUS/Fadi-Tools/main/screenshots/transfer-dark-en.png">
+  <img alt="File Transfer" src="screenshots/transfer-light-en.png" width="1220">
 </picture>
 
 <picture>
